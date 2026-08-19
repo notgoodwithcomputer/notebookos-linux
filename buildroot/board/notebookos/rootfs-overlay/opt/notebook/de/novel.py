@@ -21,8 +21,10 @@ gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gtk, Gdk, Pango, PangoCairo, GLib  # noqa: E402
 
 import os
+import re
 import json
 import time
+import copy
 
 import nbapp
 import nbi18n
@@ -51,6 +53,7 @@ PARA_GAP = 6                         # vertical gap between body paragraphs
 COL_MAX = 620
 COL_MIN = 360
 COL_PAD = 48
+MAX_MANUSCRIPT_BYTES = 64 * 1024 * 1024
 
 # Bundled families only (Liberation / DejaVu / Nimbus Sans) so nothing renders as
 # tofu on real hardware — no exotic face is ever pinned.
@@ -92,6 +95,15 @@ C_MUT = "#777777"
 # opening a colour cartridge for.
 C_RULE = "#000000"
 
+
+def read_manuscript_json(path, limit=MAX_MANUSCRIPT_BYTES):
+    """Decode a selected manuscript without an unbounded UI-thread read."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("manuscript is too large")
+    return json.loads(raw.decode("utf-8-sig"))
+
 # Session recovery: the full manuscript (title, every chapter, the active
 # index, the bound file path) is written to $NB_HOME/.config/notebook/novel.json
 # so the active model survives closing the app or rebooting the machine. The
@@ -115,8 +127,17 @@ NOVEL_FORMAT_VERSION = 2
 
 
 def _count_body_words(text):
-    """Count prose only. Chapter titles live outside the body in format 2."""
-    return len(text.split())
+    """Count prose only. Chapter titles live outside the body in format 2.
+
+    A token is a word only when it carries a letter or a digit. The editor puts
+    marks of its OWN into the buffer — Insert ▸ Bullet List writes a literal
+    "• " at the head of the line, and the smart-typography pass turns a typed
+    "--" into a standalone " — " (see _on_insert_before) — so a plain split
+    counted the app's own glyphs as words the writer never wrote: "one — two"
+    read as three words, and every bullet added one more to the chapter and to
+    the manuscript total."""
+    return sum(1 for token in text.split()
+               if any(c.isalnum() for c in token))
 
 
 def placeholder_offsets(left_margin, top_margin, body_ascent, ghost_ascent):
@@ -175,6 +196,9 @@ class Novel(nbapp.AppWindow):
         # instead of re-summing every chapter on each keystroke.
         self._total_words = 0
         self._save_timer = None
+        # A pending "put the caret back on screen" idle (see _keep_caret_in_view).
+        self._caret_scroll_idle = None
+        self._closed = False
         # Does the model on screen still differ from the copy in the
         # session-recovery file? Set the moment an edit is made and cleared
         # only by a write that actually reached the disk, so the close guard
@@ -217,6 +241,7 @@ class Novel(nbapp.AppWindow):
         # across EVERY chapter, not just the open one.
         self._find_hits = []
         self._find_i = -1
+        self._find_chapters = 0    # chapters the current hits are spread over
         # Read any persisted manuscript up front (plain data; no widgets yet).
         saved = self._load_state()
 
@@ -295,10 +320,14 @@ class Novel(nbapp.AppWindow):
                     ("New Part…", lambda: self._on_new_part()),
                     # Guarded so one chapter / one part always remains: a lone
                     # chapter or the sole part renders the item disabled.
-                    ("Delete Chapter…",
+                    # No ellipsis: both act at once and are reversed from
+                    # Edit ▸ Undo (the OS-wide decision that retired the
+                    # confirmation here). An ellipsis promises a question that
+                    # is no longer asked — see docs/MENU-CONVENTIONS.md rule 1.
+                    ("Delete Chapter",
                      (lambda: self._on_delete_chapter())
                      if len(self.chapters) > 1 else None),
-                    ("Delete Part…",
+                    ("Delete Part",
                      (lambda: self._on_delete_part())
                      if len(self.parts) > 1 else None),
                     nbapp.SEP,
@@ -519,9 +548,10 @@ class Novel(nbapp.AppWindow):
         # right cluster: word count + save state
         self.save_lbl = Gtk.Label()
         self.save_lbl.get_style_context().add_class("nvsave")
-        self.save_lbl.set_markup(
-            '<span foreground="#7FA98C">● </span>Saved %s'
-            % time.strftime("%H:%M"))
+        # A session that will never write (the store could not be read and was
+        # kept aside) must not open under a green "Saved": nothing has been
+        # saved and nothing will be.
+        self._show_save_state(not getattr(self, "_store_read_only", False))
         fbar.pack_end(self.save_lbl, False, False, 0)
         fbar.pack_end(self._sep(), False, False, 16)
         self.count_lbl = Gtk.Label(label=_t("0 words"))
@@ -567,6 +597,15 @@ class Novel(nbapp.AppWindow):
         self.chapter_title.set_has_frame(False)
         self.chapter_title.set_placeholder_text(_t("Chapter title"))
         self.chapter_title.connect("changed", self._on_title_change)
+        # The one other place in the canvas that takes the keyboard. The body
+        # follows its caret (see _keep_caret_in_view); the title sits at the top
+        # of the page, so bringing the top back is what showing it means.
+        # notify::is-focus, not focus-in-event: the second only arrives once the
+        # WINDOW is the active one, so a title reached while another window had
+        # focus would be typed into off-screen.
+        self.chapter_title.connect(
+            "notify::is-focus",
+            lambda entry, _p: entry.is_focus() and self._show_page_top())
         page.pack_start(self.chapter_title, False, False, 0)
 
         self.view = Gtk.TextView()
@@ -602,23 +641,125 @@ class Novel(nbapp.AppWindow):
         page.pack_start(overlay, True, True, 0)
 
         scroll.add(page)
+        self._canvas = scroll
         # Track the viewport (not the scroller — its width includes the
         # scrollbar) so the column always matches the space actually available.
         vp = scroll.get_child()
         if vp is not None:
             vp.connect("size-allocate", self._fit_page)
+            # THE PAGE MUST NOT MOVE BECAUSE SOMETHING TOOK FOCUS. The writing
+            # surface is a page-tall widget inside this viewport, so GTK's
+            # focus-vadjustment clamped its top to the top of the canvas the
+            # instant the writer clicked into the body: the chapter eyebrow and
+            # title scrolled out of sight before a single word was typed, and
+            # stayed hidden for the whole of writing. Point that clamp at an
+            # adjustment nothing is watching (GTK refuses None here), and let
+            # _keep_caret_in_view below do the only scrolling this canvas needs.
+            vp.set_focus_vadjustment(Gtk.Adjustment())
         col.pack_start(scroll, True, True, 0)
         return col
 
+    def _show_page_top(self):
+        """Put the top of the page — eyebrow, chapter title — back on screen."""
+        scroll = getattr(self, "_canvas", None)
+        if scroll is not None:
+            scroll.get_vadjustment().set_value(0)
+        return False
+
+    # Breathing room kept above/below the caret when the canvas follows it.
+    CARET_PAD = 24
+
+    def _keep_caret_in_view(self):
+        """Follow the caret, once the layout it will be measured against has
+        settled.
+
+        Deferred to idle for the same reason the caret placement above is: the
+        text that moved the caret has not been laid out yet when the cursor
+        signal arrives, so the canvas would be sized and clamped against the
+        page as it was BEFORE the edit — measurable as a paste that lands the
+        caret off the bottom of the screen. Coalesced: a burst of typing asks
+        many times and scrolls once."""
+        if self._closed or self._caret_scroll_idle is not None:
+            return
+        self._caret_scroll_idle = GLib.idle_add(self._scroll_to_caret)
+
+    def _scroll_to_caret(self):
+        """Scroll the canvas the smallest amount that keeps the caret visible.
+
+        The TextView is NOT the scrolled window's own child — the page box
+        (eyebrow, chapter title, body) is — so the view is always allocated its
+        full height and its own scroll_to_mark moves an adjustment nobody is
+        looking at. Nothing followed the caret: past the first screenful the
+        writer typed into a line they could not see, and a find hit deep in a
+        chapter was selected off-screen. Drive the CANVAS adjustment from the
+        caret's position instead, and only when the caret has actually left the
+        visible band, so ordinary typing never jumps the page."""
+        self._caret_scroll_idle = None
+        if self._closed:
+            return False
+        scroll = getattr(self, "_canvas", None)
+        if scroll is None or not self.view.get_realized():
+            return False
+        adj = scroll.get_vadjustment()
+        visible = adj.get_page_size()
+        if visible <= 0:
+            return False
+        buf = self.view.get_buffer()
+        try:
+            rect = self.view.get_iter_location(
+                buf.get_iter_at_mark(buf.get_insert()))
+            _wx, wy = self.view.buffer_to_window_coords(
+                Gtk.TextWindowType.WIDGET, rect.x, rect.y)
+            here = self.view.translate_coordinates(self.page, 0, wy)
+        except Exception:                                     # noqa: BLE001
+            return False
+        if here is None:
+            return False
+        top = here[1] - self.CARET_PAD
+        bottom = here[1] + rect.height + self.CARET_PAD
+        value = adj.get_value()
+        if bottom > value + visible:
+            value = bottom - visible
+        if top < value:
+            value = top
+        value = max(adj.get_lower(),
+                    min(value,
+                        max(adj.get_lower(), adj.get_upper() - visible)))
+        # Compare against the value actually on the adjustment rather than
+        # trusting a flag: set_value re-enters GTK's layout, and a scroll that
+        # is already where it wants to be must not ask for another one.
+        if abs(value - adj.get_value()) > 0.5:
+            adj.set_value(value)
+        return False
+
     def _sync_placeholder_position(self):
-        """Align the ghost prompt's baseline with the first body character."""
+        """Align the ghost prompt's baseline with the first body character.
+
+        THE FONT MUST COME FROM THE PANGO CONTEXT, NEVER FROM THE STYLE
+        CONTEXT. `style_context.get_property("font", state)` hands back a
+        PangoFontDescription that is not safe to touch on the stack the image
+        ships: on the guest's Pango 1.50 merely calling .to_string() on it --
+        let alone passing it to get_metrics() -- is an immediate
+        `Segmentation fault`, no traceback, no window. The host builds against
+        1.56, where the same call is harmless, so EVERY host-side gate stayed
+        green while Novel would not open at all on the real machine. Measured
+        on target: the style-context description crashes, and
+        `pango_context.get_font_description()` returns "Sans 10" and metrics
+        of 10240 quite happily. The Pango context is also the font GTK will
+        actually render with, so this is the more correct source anyway.
+
+        The language argument is explicit for the same family of reason: 1.50
+        carries no (nullable) annotation on it, so a None becomes a NULL the C
+        function dereferences."""
         context = self.view.get_pango_context()
-        body_font = self.view.get_style_context().get_property(
-            "font", Gtk.StateFlags.NORMAL)
-        ghost_font = self.placeholder.get_style_context().get_property(
-            "font", Gtk.StateFlags.NORMAL)
-        body = context.get_metrics(body_font, None)
-        ghost = context.get_metrics(ghost_font, None)
+        ghost_context = self.placeholder.get_pango_context()
+        body_font = context.get_font_description()
+        ghost_font = ghost_context.get_font_description()
+        if body_font is None or ghost_font is None:
+            return                      # no resolved font yet: nothing to align
+        lang = context.get_language() or Pango.Language.get_default()
+        body = context.get_metrics(body_font, lang)
+        ghost = ghost_context.get_metrics(ghost_font, lang)
         scale = Pango.SCALE
         left, top = placeholder_offsets(
             self.view.get_left_margin(), self.view.get_top_margin(),
@@ -704,13 +845,14 @@ class Novel(nbapp.AppWindow):
                 self._find_hits.append((ci, i, i + len(needle)))
                 i = hay.find(needle, i + len(needle))
         n = len(self._find_hits)
+        # How many chapters the hits are spread over, for the count label. It
+        # used to be written straight into that label here and then overwritten
+        # by _find_step's "k of n" inside this very call, so the writer never
+        # saw it; _find_step now carries it.
+        self._find_chapters = chapters
         if not n:
             self.find_count.set_text(_t("No matches"))
             return
-        self.find_count.set_text(
-            (_t("1 match") if n == 1 else _t("%d matches") % n)
-            + (" " + (_t("in 1 chapter") if chapters == 1
-                      else _t("in %d chapters") % chapters)))
         self._find_step(1)
 
     def _find_step(self, direction):
@@ -746,8 +888,10 @@ class Novel(nbapp.AppWindow):
         # the jump still lands even when the target line has not been measured
         # yet (a chapter opened a moment ago).
         self.view.scroll_to_mark(buf.get_insert(), 0.25, False, 0, 0)
-        self.find_count.set_text(
-            _t("%d of %d") % (self._find_i + 1, len(self._find_hits)))
+        label = _t("%d of %d") % (self._find_i + 1, len(self._find_hits))
+        if getattr(self, "_find_chapters", 0) > 1:
+            label += " · " + _t("in %d chapters") % self._find_chapters
+        self.find_count.set_text(label)
 
     def _fit_page(self, _w, alloc):
         """Size the writing column to the canvas: the design's measure where it
@@ -838,7 +982,7 @@ class Novel(nbapp.AppWindow):
         self._total_words += ch["wc"]
         if select:
             self.active = len(self.chapters) - 1
-            self._show_chapter_title(ch["title"])
+            self._show_chapter_title(self._display_chapter_title(ch))
             self._show_buffer(buf)
             self._place_cursor_body(buf)
 
@@ -857,7 +1001,11 @@ class Novel(nbapp.AppWindow):
         ch["title"] = entry.get_text()
         label = ch.get("_row_title")
         if label is not None:
-            nbi18n.set_verbatim(label, ch["title"])
+            # The same fallback the entry placeholder, the eyebrow, the
+            # Contents and the printed opener use: clearing a title left the
+            # sidebar row blank until something rebuilt the list, and only then
+            # did it read "Chapter 3".
+            nbi18n.set_verbatim(label, self._display_chapter_title(ch))
         # Same debounced UndoHistory checkpoint used by prose typing.
         self._trigger_save()
 
@@ -866,13 +1014,18 @@ class Novel(nbapp.AppWindow):
         self._new_chapter(select=True)
         self._refresh_chapter_list()
         self._recount()
+        # A blank chapter is still authored structure.  Mark it recoverable
+        # immediately; otherwise closing before typing relied on the
+        # irreversible destroy-time flush and a failed write lost the chapter
+        # without ever engaging the close veto.
+        self._trigger_save()
         self.undo.commit()
 
     def _select_chapter(self, i):
         if i == self.active:
             return
         self.active = i
-        self._show_chapter_title(self.chapters[i]["title"])
+        self._show_chapter_title(self._display_chapter_title(self.chapters[i]))
         self._show_buffer(self.chapters[i]["buffer"])
         self._place_cursor_body(self.chapters[i]["buffer"])
         self._refresh_chapter_list()
@@ -917,9 +1070,17 @@ class Novel(nbapp.AppWindow):
     def _part_label(self, pi):
         """The visible label for part `pi`: "PART TWO — THE LONG WINTER",
         or just "PART TWO" when the part has no name yet."""
-        ordw = self._ordinal(pi)
+        prefix = (_t("Part %s") % (pi + 1)).upper()
         name = self.parts[pi]["name"].strip() if 0 <= pi < len(self.parts) else ""
-        return "PART {} — {}".format(ordw, name) if name else "PART {}".format(ordw)
+        return prefix + " — " + name if name else prefix
+
+    def _display_chapter_title(self, chapter):
+        """Translate only the generated default; user titles stay verbatim."""
+        num = str(chapter.get("num", ""))
+        title = str(chapter.get("title", "") or "").strip()
+        if not title or title == "Chapter " + num:
+            return _t("Chapter %s") % num
+        return title
 
     def _part_header(self, pi):
         ev = Gtk.Button()
@@ -941,7 +1102,7 @@ class Novel(nbapp.AppWindow):
         ev.get_style_context().add_class("nvflatbtn")
         ev.get_style_context().add_class("nvrowhit")
         ev.set_tooltip_text(_t("Open chapter %s: %s") %
-                            (ch["num"], ch["title"]))
+                            (ch["num"], self._display_chapter_title(ch)))
         ev.connect("clicked", lambda *_a, idx=i: self._select_chapter(idx))
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=13)
         # .nvrow lives on the BOX, not on the EventBox: a GtkEventBox paints a
@@ -965,7 +1126,13 @@ class Novel(nbapp.AppWindow):
 
         txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         txt.set_valign(Gtk.Align.CENTER)
-        t = Gtk.Label(label=ch["title"], xalign=0)
+        # Every REBUILD comes through here — launch, Open, New Chapter,
+        # Delete, restore — and rebuilds this row from the constructor, which
+        # the set_verbatim on the typing path (_on_title_change) never sees.
+        # A chapter called "Notes" was right while it was being typed and wrong
+        # the moment the list was rebuilt.
+        t = Gtk.Label(xalign=0)
+        nbi18n.set_verbatim(t, self._display_chapter_title(ch))
         t.get_style_context().add_class("nvrowtitle")
         t.set_ellipsize(Pango.EllipsizeMode.END)
         # Read the cached count (kept current by _init_counts / _on_change);
@@ -1031,13 +1198,13 @@ class Novel(nbapp.AppWindow):
         # label only once parts are actually in play (see _parts_visible), and
         # the chapter's start page in the paginated book when it is known.
         if self._parts_visible():
-            eb = "CHAPTER {} · {}".format(
-                ch["num"], self._part_label(ch.get("part", 0)))
+            eb = (_t("Chapter %s") % ch["num"]).upper() + " · " + \
+                self._part_label(ch.get("part", 0))
         else:
-            eb = "CHAPTER {}".format(ch["num"])
+            eb = (_t("Chapter %s") % ch["num"]).upper()
         startp = self._chapter_pages.get(self.active)
         if startp and total:          # see the page-count note above
-            eb += " · PAGE {}".format(startp)
+            eb += " · " + (_t("Page %d") % startp).upper()
         self.eyebrow.set_text(eb)
         # ghost prompt only while this chapter's body is still empty
         self.placeholder.set_visible(cur == 0)
@@ -1088,17 +1255,27 @@ class Novel(nbapp.AppWindow):
             GLib.source_remove(self._page_timer)
             self._page_timer = None
 
-    def _mark_saved(self):
-        # The debounce has fired: perform the REAL disk write, and only claim
-        # "Saved" once the bytes have actually reached the file.
-        if self._save_state():
+    def _show_save_state(self, saved):
+        """Put the manuscript's real save state in the chip.
+
+        Every route that writes the recovery store says what happened through
+        HERE, so the chip can never be left describing an older manuscript than
+        the one on screen."""
+        if saved:
             self.save_lbl.set_markup(
                 '<span foreground="#7FA98C">● </span>Saved %s'
                 % time.strftime("%H:%M"))
         else:
             self.save_lbl.set_markup(
                 '<span foreground="#C8341E">● </span>Not saved')
+
+    def _mark_saved(self):
+        # The debounce has fired: perform the REAL disk write, and only claim
+        # "Saved" once the bytes have actually reached the file.
         self._save_timer = None
+        if self._closed:
+            return False
+        self._show_save_state(self._save_state())
         # Typing has settled, so line the page total up again — on its own,
         # longer debounce (see _arm_pagestat), never here. Re-laying the whole
         # book out takes about a second on a finished novel, and doing it 900ms
@@ -1121,6 +1298,8 @@ class Novel(nbapp.AppWindow):
 
     def _pagestat_tick(self):
         self._page_timer = None
+        if self._closed:
+            return False
         self._refresh_pagestat()
         return False
 
@@ -1174,7 +1353,7 @@ class Novel(nbapp.AppWindow):
             for span in spans:
                 try:
                     s, e = int(span[0]), int(span[1])
-                except (TypeError, ValueError, IndexError):
+                except (TypeError, ValueError, OverflowError, IndexError):
                     continue
                 s = max(0, min(s, n))
                 e = max(0, min(e, n))
@@ -1230,7 +1409,10 @@ class Novel(nbapp.AppWindow):
         if isinstance(raw_parts, list):
             for p in raw_parts:
                 if isinstance(p, dict):
-                    parts.append({"name": str(p.get("name", "")).strip()})
+                    part = {k: copy.deepcopy(v) for k, v in p.items()
+                            if k != "name"}
+                    part["name"] = str(p.get("name", "")).strip()
+                    parts.append(part)
         if not parts:
             parts = [{"name": ""}]
         chapters = []
@@ -1240,24 +1422,34 @@ class Novel(nbapp.AppWindow):
             n = str(len(chapters) + 1)
             raw_ranges = ch.get("ranges")
             pt = ch.get("part", 0)
-            if not isinstance(pt, int) or not (0 <= pt < len(parts)):
+            # bool is an int subclass in Python, but JSON true is not a valid
+            # part index. Accepting it silently filed the chapter under part 2
+            # and the next autosave made that accidental move permanent.
+            if isinstance(pt, bool) or not isinstance(pt, int) \
+                    or not (0 <= pt < len(parts)):
                 pt = 0
             title = str(ch.get("title", "Chapter " + n))
             body = str(ch.get("body", ""))
             ranges = raw_ranges if isinstance(raw_ranges, dict) else {}
             if legacy:
                 body, ranges = Novel._migrate_legacy_body(title, body, ranges)
-            chapters.append({
+            known_chapter = {"num", "title", "body", "ranges", "part"}
+            chapter = {k: copy.deepcopy(v) for k, v in ch.items()
+                       if k not in known_chapter}
+            chapter.update({
                 "num": str(ch.get("num", n)),
                 "title": title,
                 "body": body,
                 "ranges": ranges,
                 "part": pt,
             })
+            chapters.append(chapter)
         if not chapters:
             return None
         active = data.get("active", 0)
-        if not isinstance(active, int) or not (0 <= active < len(chapters)):
+        # Likewise, JSON true must not mean chapter index 1.
+        if isinstance(active, bool) or not isinstance(active, int) \
+                or not (0 <= active < len(chapters)):
             active = 0
         dp = data.get("doc_path")
         if not isinstance(dp, str) or not dp:
@@ -1270,7 +1462,11 @@ class Novel(nbapp.AppWindow):
         # copy on disk was gone one debounce later. (The undo path already
         # worked, because it restores a _serialize() dict directly.)
         au = data.get("author", "")
-        return {"title": str(data.get("title", _untitled())),
+        known_top = {"format_version", "title", "author", "parts", "chapters",
+                     "active", "doc_path"}
+        return {"_extra": {k: copy.deepcopy(v) for k, v in data.items()
+                            if k not in known_top},
+                "title": str(data.get("title", _untitled())),
                 "author": au if isinstance(au, str) else "",
                 "parts": parts, "chapters": chapters, "active": active,
                 "doc_path": dp, "format_version": NOVEL_FORMAT_VERSION}
@@ -1290,7 +1486,7 @@ class Novel(nbapp.AppWindow):
             for span in spans:
                 try:
                     start, end = int(span[0]), int(span[1])
-                except (TypeError, ValueError, IndexError):
+                except (TypeError, ValueError, OverflowError, IndexError):
                     continue
                 start, end = max(start, cut) - cut, end - cut
                 if end > start:
@@ -1302,19 +1498,27 @@ class Novel(nbapp.AppWindow):
     def _serialize(self):
         """The full editable model as a JSON-serializable dict. Shared by the
         session-recovery writer and the File ▸ Save / Save As writers."""
-        return {
+        out = copy.deepcopy(getattr(self, "_extra", {}))
+        out.update({
             "format_version": NOVEL_FORMAT_VERSION,
             "title": self._title,
             "author": self._author,
             "active": self.active,
             "doc_path": self.doc_path,
-            "parts": [{"name": p.get("name", "")} for p in self.parts],
-            "chapters": [{"num": c["num"], "title": c["title"],
-                          "body": self._buffer_text(c["buffer"]),
-                          "ranges": self._buffer_ranges(c["buffer"]),
-                          "part": c.get("part", 0)}
+            "parts": [dict({k: copy.deepcopy(v) for k, v in p.items()
+                            if k != "name"}, name=p.get("name", ""))
+                      for p in self.parts],
+            "chapters": [dict(
+                          {k: copy.deepcopy(v) for k, v in c.items()
+                           if k not in {"num", "title", "buffer", "part"}
+                           and not k.startswith("_")},
+                          num=c["num"], title=c["title"],
+                          body=self._buffer_text(c["buffer"]),
+                          ranges=self._buffer_ranges(c["buffer"]),
+                          part=c.get("part", 0))
                          for c in self.chapters],
-        }
+        })
+        return out
 
     def _save_state(self):
         """Persist the whole editable model to the session-recovery file.
@@ -1350,16 +1554,36 @@ class Novel(nbapp.AppWindow):
         return snap
 
     def _undo_restore(self, state):
+        before = self._undo_snapshot()
         self._restore(state)
         self._init_counts()
         self._refresh_chapter_list()
         self._recount()
         buf = self.view.get_buffer()
         caret = min(max(0, state.get("_caret", 0)), buf.get_char_count())
+        if not self._save_state():
+            error = self._save_error
+            self._restore(before)
+            self._init_counts()
+            self._refresh_chapter_list()
+            self._recount()
+            old_buf = self.view.get_buffer()
+            old_caret = min(max(0, before.get("_caret", 0)),
+                            old_buf.get_char_count())
+            self._place_caret_deferred(old_buf, old_caret)
+            # Repair best-effort if a writer failed after publishing. Retain
+            # the original failure flags: the manuscript is safe only when the
+            # requested operation itself reached disk.
+            self._save_state()
+            self._save_error = error
+            self._recovery_dirty = True
+            self._arm_pagestat()
+            self._focus_editor()
+            return False
         self._place_caret_deferred(buf, caret)
-        self._save_state()
         self._arm_pagestat()
         self._focus_editor()
+        return True
 
     def _place_caret_deferred(self, buf, offset):
         """place_cursor, one idle later.
@@ -1410,20 +1634,26 @@ class Novel(nbapp.AppWindow):
         self._set_title(state["title"])
         _a = state.get("author", "")
         self._author = _a if isinstance(_a, str) else ""
+        self._extra = copy.deepcopy(state.get("_extra", {}))
         # Copied, not adopted: an undo snapshot is restored through here too, and
         # the live self.parts is later appended to and renamed in place — which
         # would edit the stored history out from under itself.
-        self.parts = [dict(p) for p in state["parts"]]
+        self.parts = copy.deepcopy(state["parts"])
         self.doc_path = state.get("doc_path")
         for ch in state["chapters"]:
             buf = self._make_buffer(ch["num"], body=ch["body"],
                                     ranges=ch["ranges"])
-            self.chapters.append({"num": ch["num"], "title": ch["title"],
-                                  "buffer": buf, "part": ch.get("part", 0)})
+            known = {"num", "title", "body", "ranges", "part"}
+            live = {k: copy.deepcopy(v) for k, v in ch.items()
+                    if k not in known}
+            live.update({"num": ch["num"], "title": ch["title"],
+                         "buffer": buf, "part": ch.get("part", 0)})
+            self.chapters.append(live)
         self.active = (state["active"]
                        if state["active"] < len(self.chapters) else 0)
         self._show_buffer(self.chapters[self.active]["buffer"])
-        self._show_chapter_title(self.chapters[self.active]["title"])
+        self._show_chapter_title(
+            self._display_chapter_title(self.chapters[self.active]))
         self._place_cursor_body(self.chapters[self.active]["buffer"])
         del outgoing
 
@@ -1445,6 +1675,9 @@ class Novel(nbapp.AppWindow):
         the order GTK expects."""
         keep = self.view.get_buffer()      # noqa: F841 — held across the swap
         self.view.set_buffer(buf)
+        # A chapter opens at its opening: the eyebrow, the title and the first
+        # words, not wherever the previous chapter happened to be scrolled to.
+        self._show_page_top()
 
     def _on_delete(self, *_a):
         """Close guard: never destroy this window while it is the only place
@@ -1473,11 +1706,23 @@ class Novel(nbapp.AppWindow):
         if (self._closeprompt is not None
                 and self._closeprompt is getattr(self, "_prompt_layer", None)):
             return True
+        if getattr(self, "_store_read_only", False):
+            # NOT A DISK PROBLEM, so do not send the writer to clear space and
+            # try again — this session deliberately refuses to write over the
+            # manuscript it could not read, and closing again can never save.
+            # Say the two things that are true instead.
+            message = (_t("Your writing was kept, and nothing typed here will "
+                          "be saved over it.")
+                       + " " + _t("Closing now loses what was typed here."))
+        else:
+            message = (_t(nbapp.save_failure_reason(self._save_error,
+                                                    NOVEL_FILE))
+                       + " "
+                       + _t("Closing now loses the writing since the last "
+                            "save. Make room and close again to try once "
+                            "more."))
         self._confirm(
-            _t("Not saved"),
-            _t(nbapp.save_failure_reason(self._save_error, NOVEL_FILE))
-            + " " + _t("Closing now loses the writing since the last save. "
-                       "Make room and close again to try once more."),
+            _t("Not saved"), message,
             _t("Close Without Saving"), self._discard_and_close)
         self._closeprompt = getattr(self, "_prompt_layer", None)
         return True
@@ -1492,7 +1737,7 @@ class Novel(nbapp.AppWindow):
             _t("This manuscript could not be read"),
             _t("Your writing was kept, and nothing typed here will be saved "
                "over it."),
-            _t("Continue"), lambda: None)
+            _t("Continue"), lambda: None, cancel=False, danger=False)
         return False
 
     def _discard_and_close(self):
@@ -1508,9 +1753,12 @@ class Novel(nbapp.AppWindow):
         # the guard above: a vetoed close leaves the window alive and still
         # typing, and an editor whose autosave timer had been cancelled out
         # from under it would stop saving entirely.
+        if self._closed:
+            return False
+        self._closed = True
         self.undo.cancel()
         self._cancel_caret_idle()
-        for attr in ("_save_timer", "_page_timer"):
+        for attr in ("_save_timer", "_page_timer", "_caret_scroll_idle"):
             tid = getattr(self, attr, None)
             if tid:
                 try:
@@ -1526,29 +1774,107 @@ class Novel(nbapp.AppWindow):
 
     # ============================ FILE MENU ============================
     def _on_file_new(self):
-        """File ▸ New — discard the current model and start a blank manuscript:
-        one empty Chapter 1, one unnamed part, no bound file.
-
-        Data-loss guard: a manuscript that holds content but has never been
-        written to a user file exists ONLY in the session-recovery file, which
-        the blank below immediately overwrites. In that case confirm before
-        discarding; a manuscript that is empty, or already bound to a user
-        file, is discarded without prompting."""
+        """Start a blank manuscript as one full, reversible undo step."""
         self._close_style()
         self._close_prompt()
         self._do_file_new()
 
+    def _keep_outgoing(self):
+        """Put an unsaved, unbound manuscript somewhere it survives, and say so.
+
+        THE HOLE THIS FILLS. New and Open replace the model AND the recovery
+        store, and the campaign retired the "discard?" question in favour of
+        undo (8ddfd945; confirm_undo_adversarial_selftest FORBIDS a confirm
+        here). But undo only lives as long as the window: press New by
+        mistake, close the app, and an afternoon's writing is gone with no
+        question asked and nothing on disk to go back to. The drive found it
+        (novel F3) and an independent verifier confirmed it as DATA LOSS.
+        So the answer is not a question, it is a floor: write the outgoing
+        book into Documents as a real manuscript, under its own title, and
+        name the file on the way past. Undo still puts it back on screen; the
+        file is what makes closing survivable.
+
+        A BOUND MANUSCRIPT IS NOT AUTOMATICALLY SAFE. "It has a file, so it
+        is already on disk" was wrong the moment the writer typed one more
+        sentence after Save: File > New then replaced the model AND the
+        recovery store, and the words written since the last save existed
+        nowhere. So the test is not whether a file EXISTS, it is whether that
+        file already holds what is on screen — asked by reading it back, not
+        by trusting a flag that can drift.
+
+        Only for a manuscript that holds something and is not already on disk
+        byte for byte. Returns the basename kept, or None when there was
+        nothing to keep."""
+        if not self._has_content():
+            return None
+        if self.doc_path and not self._file_behind():
+            return None
+        try:
+            os.makedirs(DOCS_DIR, exist_ok=True)
+            stem = (self._title or "").strip() or _untitled()
+            stem = re.sub(r"[^\w \-.]", "", stem).strip() or "Manuscript"
+            base = "%s %s" % (stem, time.strftime("%Y-%m-%d %H%M"))
+            path = os.path.join(DOCS_DIR, base + ".json")
+            n = 2
+            while os.path.exists(path):
+                path = os.path.join(DOCS_DIR, "%s (%d).json" % (base, n))
+                n += 1
+            nbapp.atomic_write_json(path, self._serialize())
+            return os.path.basename(path)
+        except Exception:                                         # noqa: BLE001
+            # A floor that cannot be laid must not stop the action the person
+            # asked for; undo still holds the book for this session.
+            return None
+
+    def _file_behind(self):
+        """True when the bound file does not already hold what is on screen.
+
+        Compared on the CONTENT the serializer writes, with the two view-state
+        keys dropped: `active` is which chapter is selected and `doc_path` is
+        where the file lives, and neither is anything a person would mourn.
+        Any problem reading the file counts as behind — a floor errs toward
+        keeping a copy, never toward assuming the disk is fine."""
+        try:
+            with open(self.doc_path, encoding="utf-8") as fh:
+                on_disk = json.load(fh)
+        except Exception:                                         # noqa: BLE001
+            return True
+        if not isinstance(on_disk, dict):
+            return True
+        drop = ("active", "doc_path")
+        live = {k: v for k, v in self._serialize().items() if k not in drop}
+        kept = {k: v for k, v in on_disk.items() if k not in drop}
+        return live != kept
+
+    def _say_kept(self, kept):
+        """Name the file the outgoing manuscript went into — where it will
+        still be read later.
+
+        NOT the save chip. Two reasons, both measured: the chip is rewritten
+        by the very next autosave ("Kept as …" became "Saved 14:25" within a
+        second), and — the stronger one — the chip describes THE MANUSCRIPT ON
+        SCREEN. Putting the outgoing book's fate there recreates the exact
+        confusion novel_realuse_selftest pins ("a new manuscript carries its
+        own save state, not the last one's"), which is a fix worth keeping.
+        The notification centre is the OS's channel for something that
+        happened while attention was elsewhere, and it is the one that is
+        still there when the writer looks up."""
+        if not kept:
+            return
+        text = _t("Kept as %s in Documents") % kept
+        try:
+            import nbnotify                                       # noqa: PLC0415
+            nbnotify.post(_t("Manuscript kept"), text,
+                          app="novel", app_name=_t("Novel"))
+        except Exception:                                         # noqa: BLE001
+            pass
+
     def _do_file_new(self):
-        """Blank the model to the empty single-chapter default and overwrite
-        session recovery. Reached only once File ▸ New has cleared its
-        data-loss guard."""
-        # Undoable: the confirm only catches the manuscript the guard thinks is
-        # worth keeping, and blanking overwrites the recovery file that is the
-        # ONLY copy of an unsaved book.
+        """Blank the model and persist it, retaining the prior book in undo."""
+        kept = self._keep_outgoing()
         self.undo.checkpoint("New Manuscript")
         self.doc_path = None
         self.parts = [{"name": ""}]
-        outgoing = self.chapters                         # noqa: F841
         self.chapters = []
         self._total_words = 0
         self.active = 0
@@ -1557,9 +1883,12 @@ class Novel(nbapp.AppWindow):
         self._init_counts()
         self._refresh_chapter_list()
         self._recount()
-        self._save_state()
+        # Say what happened to THIS manuscript: the chip used to keep whatever
+        # the last book left behind, so a brand-new blank one opened under an
+        # "Exported 13:51" from the book that had just been replaced.
+        self._show_save_state(self._save_state())
+        self._say_kept(kept)
         self.undo.commit()
-        del outgoing
 
     def _has_content(self):
         """True when the manuscript holds anything worth preserving: body text,
@@ -1601,12 +1930,10 @@ class Novel(nbapp.AppWindow):
         self._open_path(path)
 
     def _open_path(self, path):
-        """Load a manuscript JSON file, confirming first when doing so would
-        discard an unsaved, unbound manuscript (whose only copy is the
-        session-recovery file that opening overwrites)."""
+        """Load a manuscript JSON file as one full, reversible undo step."""
         self._do_open_path(path)
 
-    def _do_open_path(self, path):
+    def _do_open_path(self, path, confirmed=False):
         """Load a manuscript JSON file from disk and make it the active
         document (bound for subsequent File ▸ Save).
 
@@ -1616,8 +1943,7 @@ class Novel(nbapp.AppWindow):
         or trigger a recovery write. On any mismatch we flash and change
         nothing."""
         try:
-            with open(path) as fh:
-                data = json.load(fh)
+            data = read_manuscript_json(path)
         except Exception:
             self._set_save_error("Open failed")
             return
@@ -1630,13 +1956,17 @@ class Novel(nbapp.AppWindow):
             return
         state["doc_path"] = path
         # Same reason as File ▸ New: opening replaces the manuscript AND the
-        # recovery snapshot, so the book that was on screen must be recoverable.
+        # recovery snapshot, so the book that was on screen must be
+        # recoverable — on screen through undo, and after a close through the
+        # file _keep_outgoing lays down.
+        kept = self._keep_outgoing()
         self.undo.checkpoint("Open Manuscript")
         self._restore(state)
         self._init_counts()
         self._refresh_chapter_list()
         self._recount()
-        self._save_state()
+        self._show_save_state(self._save_state())
+        self._say_kept(kept)
         self.undo.commit()
 
     def _is_manuscript_document(self, data):
@@ -1701,8 +2031,20 @@ class Novel(nbapp.AppWindow):
 
     def _finish_save_as(self, path):
         if self._write_document(path):
+            # WHICH FILE THE MANUSCRIPT IS BOUND TO RIDES IN THE SNAPSHOT undo
+            # restores (it has to — the recovery store has to remember the
+            # binding across a restart), so re-binding without a checkpoint
+            # folded it into whichever typing step happened to be open. One
+            # Ctrl+Z, labelled "Undo Typing", then bound the book back to the
+            # file it had been saved as BEFORE while leaving every visible word
+            # alone, and the next Ctrl+S wrote over that older file — the one
+            # the writer had just named stayed as it was. Its own step names
+            # itself in the Edit menu, so the binding only ever moves when the
+            # menu says it did.
+            self.undo.checkpoint("Save As…")
             self.doc_path = path
             self._save_state()
+            self.undo.commit()
 
     def _write_document(self, path):
         """Serialize the whole model to `path` as JSON and reflect the outcome
@@ -1767,15 +2109,24 @@ class Novel(nbapp.AppWindow):
         return "".join(out)
 
     def _chapter_paras(self, ch):
-        """The chapter's body as a list of (style, markup) paragraphs — every
-        line below the heading line, tagged 'quote'/'subhead'/'body'. The
-        heading line itself is excluded; it is rendered as the chapter opener."""
+        """The chapter's body as a list of (style, markup) paragraphs — EVERY
+        line of the buffer, tagged 'quote'/'subhead'/'body'.
+
+        Line 0 is prose like any other. It was skipped here, which was right in
+        format 1, where the chapter heading WAS the buffer's first line. In
+        format 2 the heading is a field of its own (self.chapter_title) and the
+        buffer holds body text alone, so the skip silently dropped the opening
+        paragraph of every chapter out of both publish routes — a chapter with
+        one paragraph exported as a heading above an empty page. A legacy file
+        has its mirrored first line lifted into the title field as it loads
+        (_migrate_legacy_body), so nothing reaches here with a heading still in
+        its body."""
         buf = ch["buffer"]
         tbl = buf.get_tag_table()
         thead, tquote = tbl.lookup("heading"), tbl.lookup("quote")
         paras = []
         n = buf.get_line_count()
-        for ln in range(1, n):            # skip line 0 (the chapter heading)
+        for ln in range(n):
             ls = buf.get_iter_at_line(ln)
             le = ls.copy()
             le.forward_to_line_end()
@@ -1951,8 +2302,7 @@ class Novel(nbapp.AppWindow):
             if show_parts and pi != last_part:
                 toc_rows.append(("part", self._part_label(pi), pi))
                 last_part = pi
-            title_txt = (ch.get("title", "").strip()
-                         or ("Chapter " + str(ch["num"])))
+            title_txt = self._display_chapter_title(ch)
             toc_rows.append(("chapter", title_txt, ci))
 
         # lay ToC rows out into page slots (positions only; numbers fill later)
@@ -1989,8 +2339,7 @@ class Novel(nbapp.AppWindow):
                 ("text", roman(ch["num"]), F_CHNUM, MARGIN_X,
                  top, COL_W, "l", C_SEC))
             top += 18
-            ctitle = (ch.get("title", "").strip()
-                      or ("Chapter " + str(ch["num"])))
+            ctitle = self._display_chapter_title(ch)
             clay = self._mk_layout(mcr, self._esc(ctitle), F_CHTITLE, COL_W)
             _cw, chh = clay.get_pixel_size()
             pg["items"].append(
@@ -2180,6 +2529,16 @@ class Novel(nbapp.AppWindow):
         except Exception:
             self._set_save_error("Export failed")
             return
+        # "Exported" replaces the save state in the one place that states it, so
+        # it may only be said when the manuscript itself IS safe. A book whose
+        # recovery store could not be written — a quarantined store, a full disk
+        # — used to have its red "Not saved" replaced by a green "Exported" the
+        # moment a PDF was written, which is the one moment the writer most
+        # needs to be told the book is not saved.
+        if (self._save_error is not None
+                or getattr(self, "_store_read_only", False)):
+            self._show_save_state(False)
+            return
         self.save_lbl.set_markup(
             '<span foreground="#7FA98C">● </span>Exported %s'
             % time.strftime("%H:%M"))
@@ -2294,8 +2653,12 @@ class Novel(nbapp.AppWindow):
         except Exception:
             self._set_style_pill("Body")
 
-    def _on_cursor_moved(self, _buf, _pspec):
+    def _on_cursor_moved(self, buf, _pspec):
         self._update_style_pill()
+        # Only the chapter on screen: a restore rebuilds every buffer, and a
+        # caret settling in one the writer cannot see must not move the page.
+        if buf is self.view.get_buffer():
+            self._keep_caret_in_view()
 
     def _place_cursor_body(self, buf):
         """Drop the caret at the start of the body when a chapter is
@@ -2324,17 +2687,22 @@ class Novel(nbapp.AppWindow):
         menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         menu.get_style_context().add_class("nvstylemenu")
         current = self._current_para_style(self.view.get_buffer())
+        items = []
+        active_item = None
         for style in ("Body", "Heading", "Quote"):
             item = Gtk.Button()
             item.set_relief(Gtk.ReliefStyle.NONE)
             item.get_style_context().add_class("nvstyleitem")
             if style == current:
                 item.get_style_context().add_class("active")
+                active_item = item
             lab = Gtk.Label(label=style, xalign=0)
             lab.get_style_context().add_class("nvstyleitemlab")
             item.add(lab)
             item.connect("clicked", self._on_style_pick, style)
+            item.connect("key-press-event", self._on_style_item_key)
             menu.pack_start(item, False, False, 0)
+            items.append(item)
 
         try:
             xy = btn.translate_coordinates(self._overlay, 0, 0)
@@ -2348,6 +2716,24 @@ class Novel(nbapp.AppWindow):
         self._overlay.add_overlay(layer)
         layer.show_all()
         self._style_layer = layer
+        self._style_items = items
+        (active_item or items[0]).grab_focus()
+
+    def _on_style_item_key(self, item, ev):
+        items = list(getattr(self, "_style_items", []))
+        if not items or item not in items:
+            return False
+        if ev.keyval == Gdk.KEY_ISO_Left_Tab:
+            step = -1
+        elif ev.keyval in (Gdk.KEY_Down, Gdk.KEY_Right, Gdk.KEY_Tab):
+            step = -1 if (ev.keyval == Gdk.KEY_Tab and
+                          ev.state & Gdk.ModifierType.SHIFT_MASK) else 1
+        elif ev.keyval in (Gdk.KEY_Up, Gdk.KEY_Left):
+            step = -1
+        else:
+            return False
+        items[(items.index(item) + step) % len(items)].grab_focus()
+        return True
 
     def _on_style_pick(self, _btn, style):
         self._close_style()
@@ -2361,6 +2747,7 @@ class Novel(nbapp.AppWindow):
             except Exception:
                 pass
             self._style_layer = None
+            self._style_items = []
             return True
         return False
 
@@ -2425,15 +2812,15 @@ class Novel(nbapp.AppWindow):
 
     # ---- chapters / parts: delete ----
     def _on_delete_chapter(self):
-        """Delete the active chapter after a confirm. The last remaining chapter
-        is guarded (the menu item is already disabled at one chapter) so the
-        manuscript always holds at least one."""
+        """Delete the active chapter, reversibly. Edit ▸ Undo brings it and its
+        words back; nothing is asked first (the OS-wide decision that retired
+        this confirmation), which is why the menu item carries no ellipsis. The
+        last remaining chapter is guarded (the menu item is already disabled at
+        one chapter) so the manuscript always holds at least one."""
         if len(self.chapters) <= 1:
             return
         idx = self.active
-        ch = self.chapters[idx]
-        title = ch.get("title", "").strip() or ("Chapter " + str(ch["num"]))
-        self._delete_chapter(idx, ch)
+        self._delete_chapter(idx, self.chapters[idx])
 
     def _delete_chapter(self, i, expected_chapter=None):
         """Remove chapter `i`, drop its words from the running total, keep the
@@ -2443,7 +2830,8 @@ class Novel(nbapp.AppWindow):
                 or (expected_chapter is not None
                     and self.chapters[i] is not expected_chapter)):
             return
-        self.undo.checkpoint("Delete Chapter…")
+        before = self._undo_snapshot()
+        self.undo.checkpoint("Delete Chapter")
         self._total_words -= self.chapters[i].get("wc", 0)
         # Hold the removed chapter until the editor has been re-pointed: if it
         # was the one on screen, dropping it here frees the buffer the TextView
@@ -2461,7 +2849,16 @@ class Novel(nbapp.AppWindow):
         self._place_cursor_body(self.chapters[self.active]["buffer"])
         self._refresh_chapter_list()
         self._recount()
-        self._save_state()
+        if not self._save_state():
+            # Renumbering may have changed surviving headings and their text
+            # buffers, so restoring only the removed list item is insufficient.
+            # Rebuild from the exact serialized manuscript held before delete.
+            self._restore(before)
+            self._init_counts()
+            self._refresh_chapter_list()
+            self._recount()
+            self.undo.commit()  # clear the pending label; state is unchanged
+            return
         self.undo.commit()
         del removed
 
@@ -2487,8 +2884,9 @@ class Novel(nbapp.AppWindow):
             self._show_chapter_title(text)
 
     def _on_delete_part(self):
-        """Delete the part that contains the active chapter after a confirm.
-        Its chapters are reassigned to a neighbouring part (as Cookbook moves a
+        """Delete the part that contains the active chapter, reversibly (Edit ▸
+        Undo restores it), which is why the menu item carries no ellipsis. Its
+        chapters are reassigned to a neighbouring part (as Cookbook moves a
         removed category's recipes) — no chapters are deleted — and the sole
         part is guarded so the model always keeps one."""
         if len(self.parts) <= 1:
@@ -2496,8 +2894,6 @@ class Novel(nbapp.AppWindow):
         pi = self.chapters[self.active].get("part", 0)
         if not (0 <= pi < len(self.parts)):
             return
-        n = sum(1 for c in self.chapters if c.get("part", 0) == pi)
-        target = pi - 1 if pi > 0 else 1
         self._remove_part(pi)
 
     def _remove_part(self, pi):
@@ -2505,7 +2901,8 @@ class Novel(nbapp.AppWindow):
         part so nothing is lost, then compact the remaining part indices."""
         if not (0 <= pi < len(self.parts)) or len(self.parts) <= 1:
             return
-        self.undo.checkpoint("Delete Part…")
+        before = self._undo_snapshot()
+        self.undo.checkpoint("Delete Part")
         target = pi - 1 if pi > 0 else 1
         for c in self.chapters:
             cp = c.get("part", 0)
@@ -2517,7 +2914,15 @@ class Novel(nbapp.AppWindow):
         del self.parts[pi]
         self._refresh_chapter_list()
         self._recount()
-        self._save_state()
+        if not self._save_state():
+            self._restore(before)
+            self._init_counts()
+            self._refresh_chapter_list()
+            self._recount()
+            # The restored state equals the checkpoint, so this clears the
+            # pending label without creating a phantom undo step.
+            self.undo.commit()
+            return
         self.undo.commit()
 
     def _prompt_text(self, title, initial, placeholder, ok_label, on_ok):
@@ -2602,11 +3007,18 @@ class Novel(nbapp.AppWindow):
             return True
         return False
 
-    def _confirm(self, title, message, ok_label, on_ok):
+    def _confirm(self, title, message, ok_label, on_ok, cancel=True,
+                 danger=True):
         """A small in-window confirmation card for a destructive action.
         `on_ok` runs only when the user accepts; cancel / scrim / Esc dismiss
         it and change nothing. Shares _prompt_text's overlay idiom and the
-        _prompt_layer / _close_prompt lifecycle (no popup window)."""
+        _prompt_layer / _close_prompt lifecycle (no popup window).
+
+        `cancel=False, danger=False` makes the same card an acknowledgement:
+        one plain button that only dismisses it. A card that merely TELLS the
+        writer something must not offer a choice between two buttons that do
+        the same nothing, still less paint one of them the red of a
+        destructive action."""
         return_focus = self.get_focus()
         self._close_style()
         self._close_prompt()
@@ -2642,16 +3054,19 @@ class Novel(nbapp.AppWindow):
 
         btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btnrow.set_halign(Gtk.Align.END)
-        cancel = Gtk.Button(label=_t("Cancel"))
-        cancel.set_relief(Gtk.ReliefStyle.NONE)
-        cancel.get_style_context().add_class("nvpromptcancel")
-        cancel.connect("clicked", lambda *_: self._close_prompt())
+        cancel_btn = None
+        if cancel:
+            cancel_btn = Gtk.Button(label=_t("Cancel"))
+            cancel_btn.set_relief(Gtk.ReliefStyle.NONE)
+            cancel_btn.get_style_context().add_class("nvpromptcancel")
+            cancel_btn.connect("clicked", lambda *_: self._close_prompt())
+            btnrow.pack_start(cancel_btn, False, False, 0)
         ok = Gtk.Button(label=ok_label)
         ok.set_relief(Gtk.ReliefStyle.NONE)
         ok.get_style_context().add_class("nvpromptok")
-        ok.get_style_context().add_class("danger")
+        if danger:
+            ok.get_style_context().add_class("danger")
         ok.connect("clicked", _accept)
-        btnrow.pack_start(cancel, False, False, 0)
         btnrow.pack_start(ok, False, False, 0)
         card.pack_start(btnrow, False, False, 0)
 
@@ -2662,8 +3077,9 @@ class Novel(nbapp.AppWindow):
         layer.show_all()
         self._center_card(layer, card_win, W, H)
         # Rest focus on Cancel: a destructive card must never let a stray
-        # Space/Enter fire the destructive button by default.
-        cancel.grab_focus()
+        # Space/Enter fire the destructive button by default. An
+        # acknowledgement has only the one button, which is safe to rest on.
+        (cancel_btn or ok).grab_focus()
         self._prompt_layer = layer
 
     def _on_key(self, w, ev):
@@ -2749,7 +3165,7 @@ class Novel(nbapp.AppWindow):
            below the sidebar's beige header. Name the viewport node itself. */
         .nvsidescroll, .nvsidescroll viewport { background: #F1EEE6; }
         .nvhead { padding: 26px 26px 22px; border-bottom: 1px solid #D7D2C5; }
-        .nveyebrow { font-size: 11px; letter-spacing: 2px; color: #9A9484;
+        .nveyebrow { font-size: 11px; letter-spacing: 2px; color: #6E695E;
                      font-weight: 700; margin-bottom: 10px; }
         .nvtitle { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 24px; color: #1A1916; margin-bottom: 14px; }
@@ -2761,15 +3177,21 @@ class Novel(nbapp.AppWindow):
         .nvtotal { font-size: 13px; color: #6E695E; }
 
         .nvchaplist { padding: 18px 14px; }
-        .nvpart { font-size: 11px; letter-spacing: 1.7px; color: #9A9484;
+        .nvpart { font-size: 11px; letter-spacing: 1.7px; color: #6E695E;
                   font-weight: 700; padding: 0 10px; margin: 6px 0 10px; }
         .nvparthdr { margin: 4px 0 2px; }
-        .nvparthdr:hover { background: #EAE3D2; border-radius: 6px; }
+        .nvparthdr:hover { background: #F0EADC; border-radius: 6px; }
         .nvrow { padding: 11px 10px; border-radius: 6px; margin-bottom: 2px;
                  border-left: 3px solid transparent; }
-        .nvrowhit:hover { background: #EAE3D2; border-radius: 6px; }
+        .nvrowhit:hover { background: #F0EADC; border-radius: 6px; }
         .nvrow.active { background: #EAE3D2; border-left: 3px solid #C8341E; }
-        .nvnum { font-size: 13px; color: #9A9484; border: 1px solid #D7D2C5;
+        /* muted, not muted-2. The row is a BUTTON and its fill deepens to
+           @select on hover / when active, so muted-2 measured 2.61:1 on the
+           sidebar ground and 2.36:1 under the pointer -- the number went
+           faintest exactly when you reached for it. muted holds 4.71:1 and
+           4.27:1, and is already what .nvtotal uses. The active disc below
+           still inverts to ink. */
+        .nvnum { font-size: 13px; color: #6E695E; border: 1px solid #D7D2C5;
                  border-radius: 50%; }
         /* Active chapter marker: a soft warm disc (the OS's selected-control
            tone), not a black slab. The row already signals "active" with its
@@ -2778,7 +3200,12 @@ class Novel(nbapp.AppWindow):
         .nvnum.active { background: #DED4C2; color: #1A1916; font-weight: 600;
                         border: 1px solid #B3AD9E; }
         .nvrowtitle { font-size: 15px; color: #1A1916; font-weight: 500; }
-        .nvrowwords { font-size: 12px; color: #9A9484; margin-top: 2px; }
+        .nvrowwords { font-size: 12px; color: #6E695E; margin-top: 2px; }
+        /* The ACTIVE row keeps the @select fill, where @muted is 4.27:1.
+           The word count steps to @ink-3 on that one row -- still a clear
+           step below the title's @ink, and readable on the chapter you are
+           actually in. */
+        .nvrow.active .nvrowwords { color: #3A362E; }
 
         .nvfoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
         .nvnewbtn { min-height: 40px; border: 1px solid #C9C4B6;
@@ -2840,7 +3267,7 @@ class Novel(nbapp.AppWindow):
                           border: 1px solid #C9C4B6; border-radius: 8px;
                           background: #FCFBF8; box-shadow: none; font-size: 14px; }
         .nvpromptcancel:hover { background: #F1EEE6; }
-        .nvpromptempty { font-size: 13px; color: #9A9484; }
+        .nvpromptempty { font-size: 13px; color: #6E695E; }
         .nvfileitem { padding: 8px 12px; background: transparent; border: none;
                       box-shadow: none; border-radius: 6px; }
         .nvfileitem:hover { background: #EAE3D2; }
@@ -2868,17 +3295,17 @@ class Novel(nbapp.AppWindow):
                      box-shadow: none; }
         .nvfindbtn:hover { background: #F1EEE6; }
         .nvfindcount { font-size: 13px; color: #6E695E; }
-        .nvcount { font-size: 13px; color: #8A857A; }
-        .nvsave { font-size: 13px; color: #8A857A; }
+        .nvcount { font-size: 13px; color: #6E695E; }
+        .nvsave { font-size: 13px; color: #6E695E; }
 
         .nvcanvas { background: #FCFBF8; }
         .nvpage { padding: 80px 24px 160px; }
-        .nvcaneyebrow { font-size: 12px; letter-spacing: 2px; color: #9A9484;
+        .nvcaneyebrow { font-size: 12px; letter-spacing: 2px; color: #6E695E;
                         font-weight: 700; margin-bottom: 24px; }
         .nvchaptertitle { font-family: "Newsreader","Liberation Serif",serif;
                           font-size: 32pt; font-weight: 500; color: #2A2620;
                           background: transparent; border: none;
-                          border-bottom: 2px solid #1A1916; border-radius: 0;
+                          border-radius: 0;
                           box-shadow: none; padding: 0 0 12px; margin: 0 0 22px; }
         .nvbody { font-family: "Newsreader","Liberation Serif",serif;
                   font-size: 20px; color: #2A2620; background: #FCFBF8;
@@ -2886,7 +3313,7 @@ class Novel(nbapp.AppWindow):
         .nvbody text { background: #FCFBF8; }
         .nvbody text selection { background-color: #EAE3D2; color: #1A1916; }
         .nvplaceholder { font-family: "Newsreader","Liberation Serif",serif;
-                         font-size: 20px; font-style: italic; color: #9A9484; }
+                         font-size: 20px; font-style: italic; color: #8A857A; }
         """
         prov = Gtk.CssProvider()
         try:

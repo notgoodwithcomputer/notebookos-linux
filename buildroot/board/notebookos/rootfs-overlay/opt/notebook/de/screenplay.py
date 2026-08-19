@@ -23,6 +23,7 @@ import time
 import os
 import sys
 import json
+import copy
 
 import nbapp
 import nbicons
@@ -88,6 +89,25 @@ CONTD_MARK = "(CONT'D)"
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 DOC_FILE = os.path.join(CFG_DIR, "screenplay.json")
+MAX_SCRIPT_BYTES = 64 * 1024 * 1024
+
+
+def _read_script_bytes(path, limit=MAX_SCRIPT_BYTES):
+    """Read a selected script without unbounded UI-thread allocation."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("script is too large")
+    return raw
+
+
+def _read_plain_text(path):
+    """Return recovered text and whether UTF-8 decoding was lossy."""
+    raw = _read_script_bytes(path)
+    try:
+        return raw.decode("utf-8"), False
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace"), True
 # User files (File ▸ Open/Save) live under Documents; the session-recovery
 # snapshot stays in CFG_DIR/screenplay.json and is independent of the user file.
 DOCS_DIR = os.path.join(HOME, "Documents")
@@ -250,6 +270,12 @@ class Screenplay(nbapp.AppWindow):
         self._active = 0
         self._save_timer = None
         self._count_timer = None          # debounced word / page totals
+        self._notice_timer = None         # puts the save chip back after a notice
+        self._caret_idle = None           # coalesced "bring the caret on screen"
+        self._caret_goal = "caret"
+        self._caret_armed = None          # a caret scroll the desk was too short for
+        self._focus_seen = None           # the widget on the paper that has focus
+        self._closed = False
         self._find_hits = []              # (start_off, end_off) of find hits
         self._find_i = -1
         # True when there are edits not yet written to the bound user file (the
@@ -276,12 +302,13 @@ class Screenplay(nbapp.AppWindow):
         fbar.pack_start(elabel, False, False, 0)
 
         for i, name in enumerate(ELEMENTS):
-            b = Gtk.Button(label=name)
+            b = Gtk.ToggleButton(label=name)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("elbtn")
             b.set_tooltip_text("%s element  (Ctrl+%d)" % (name, i + 1))
             if i == 0:
                 b.get_style_context().add_class("active")
+                b.set_active(True)
             b.connect("clicked", self._on_element, i)
             self._elbtns.append(b)
             fbar.pack_start(b, False, False, 4)
@@ -314,6 +341,9 @@ class Screenplay(nbapp.AppWindow):
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.get_style_context().add_class("desk")
+        # The desk is the only thing in this app that scrolls; every "bring
+        # that on screen" goes through its adjustment (see _scroll_to_caret).
+        self._scroll = scroll
 
         centering = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         centering.set_halign(Gtk.Align.CENTER)
@@ -397,7 +427,12 @@ class Screenplay(nbapp.AppWindow):
 
         # editable body
         self.body = Gtk.TextView()
-        self.body.set_wrap_mode(Gtk.WrapMode.WORD)
+        # WORD_CHAR, not WORD: the page is a fixed measure, and a word longer
+        # than the measure (a URL, a long compound) has to break inside itself
+        # or it runs off the paper with no way to scroll to it. The exported
+        # page breaks over-long words the same way (see _wrap_text), so the
+        # screen keeps agreeing with the print.
+        self.body.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.body.get_style_context().add_class("scriptbody")
         self.body.set_pixels_below_lines(8)
         self.body.set_pixels_inside_wrap(8)
@@ -417,7 +452,34 @@ class Screenplay(nbapp.AppWindow):
 
         col.pack_start(overlay, False, False, 0)
         centering.pack_start(col, False, False, 0)
-        scroll.add(centering)
+        scroll.add(centering)           # GTK wraps this in a Viewport
+        # The paper sheet, its title block and the page number sit AROUND the
+        # body, so the TextView is not the ScrolledWindow's scrollable child:
+        # GTK allocates it its whole content height, its own adjustment has
+        # nothing left to move (upper == page size), and body.scroll_to_mark
+        # is therefore inert. _scroll_to_caret drives the desk instead.
+        #
+        # That viewport also carries a FOCUS adjustment, which scrolls the page
+        # to whatever child takes focus — and for a TextView taller than the
+        # canvas the clamp lands on the TextView's TOP, so clicking back into
+        # the script after editing the title threw a scrolled script back to
+        # its first line. Focus never moves the page here. (The binding refuses
+        # None, so point the clamp at an adjustment nothing scrolls by — the
+        # same fix journal.py carries.)
+        vp = scroll.get_child()
+        if vp is not None:
+            vp.set_focus_vadjustment(Gtk.Adjustment())
+            vp.set_focus_hadjustment(Gtk.Adjustment())
+        # GTK measures a page of text AFTER the edit that made it, so a scroll
+        # to the caret can run while the desk still holds the old script's
+        # height and stop at the old bottom (an undo that puts a long script
+        # back landed a page short). Finish the job when the measurement lands.
+        scroll.get_vadjustment().connect("changed", self._on_desk_measured)
+        # The title and byline sit above the script and can be reached from the
+        # keyboard, so scroll to THEM when they take focus — they are small, so
+        # clamping the page to their allocation is right for them.
+        for widget in (self.scripttitle, self.scriptsubtitle, self.body):
+            widget.connect("focus-in-event", self._on_desk_focus)
         self.content.pack_start(scroll, True, True, 0)
 
         # seeding complete — real edits now autosave, and a final flush on
@@ -538,9 +600,12 @@ class Screenplay(nbapp.AppWindow):
         s = buf.get_iter_at_offset(max(0, min(s_off, n)))
         e = buf.get_iter_at_offset(max(0, min(e_off, n)))
         buf.select_range(s, e)
-        # scroll_to_mark, not scroll_to_iter: a mark survives the layout pass, so
-        # the jump lands even on a line GTK has not measured yet.
-        self.body.scroll_to_mark(buf.get_insert(), 0.25, False, 0, 0)
+        # The match is now the selection and its start is the caret, so putting
+        # the caret on screen puts the match on screen. It is the DESK that
+        # scrolls, never the TextView (see _scroll_to_caret) — a match below
+        # the fold used to be selected and counted while the page stayed on the
+        # title page.
+        self._queue_caret_scroll("find")
         self.find_count.set_text(
             _t("%d of %d") % (self._find_i + 1, len(self._find_hits)))
 
@@ -608,10 +673,15 @@ class Screenplay(nbapp.AppWindow):
 
     def _set_active_button(self, idx):
         """Move the active-element highlight to button `idx` (no text change)."""
-        if not (0 <= idx < len(self._elbtns)) or idx == self._active:
+        if not (0 <= idx < len(self._elbtns)):
             return
-        self._elbtns[self._active].get_style_context().remove_class("active")
-        self._elbtns[idx].get_style_context().add_class("active")
+        # The row is toggle buttons so the chosen element is readable to
+        # assistive technology, and set_active on a toggle emits "clicked" —
+        # restating the row from inside _on_element re-entered _on_element for
+        # every button until the stack blew (a Codex accessibility pass turned
+        # the plain buttons into toggles and kept the plain-button setter).
+        # choose_segment lights the row with every handler blocked.
+        nbapp.choose_segment(enumerate(self._elbtns), idx, "active")
         self._active = idx
 
     def _on_element(self, btn, idx):
@@ -649,10 +719,114 @@ class Screenplay(nbapp.AppWindow):
             buf.end_user_action()
             if not soft:
                 self._set_active_button(FLOW.get(self._active, 1))
-            self.body.scroll_to_mark(buf.get_insert(), 0.08, False, 0, 0)
+            self._queue_caret_scroll()
         except Exception:
             pass
         return True
+
+    # -- keeping the caret on screen ---------------------------------------
+    # The body is not the scrollable child of anything (see _build), so the
+    # TextView's own scroll_to_mark has no adjustment left to move. Everything
+    # that moves the caret — typing, Enter, the arrow keys, Find, Go to End —
+    # ends up here, and here scrolls the DESK.
+    #
+    # How much of the page to keep around the caret, per kind of move: a
+    # keystroke only has to stay clear of the window edge, while a jump to a
+    # match lands somewhere the writer has not been reading and needs the lines
+    # around it to make sense of.
+    CARET_MARGIN = {"caret": 40, "find": 150}
+
+    def _queue_caret_scroll(self, goal="caret"):
+        """Bring the caret into view once GTK has laid the new text out.
+
+        Deferred to an idle, which runs after the resize that the new text
+        causes: measuring the caret before that reads the OLD layout."""
+        self._caret_goal = goal
+        if self._closed or self._caret_idle is not None:
+            return
+        self._caret_idle = GLib.idle_add(self._caret_tick)
+
+    def _caret_tick(self):
+        self._caret_idle = None
+        goal, self._caret_goal = self._caret_goal, "caret"
+        if self._closed:
+            return False
+        if goal == "top":
+            self._caret_armed = None
+            try:
+                self._scroll.get_vadjustment().set_value(0)
+            except Exception:
+                pass
+        else:
+            self._scroll_to_caret(goal)
+        return False
+
+    def _desk_y(self, widget, y, height):
+        """(top, height) of a widget-relative y in the desk's scroll
+        coordinates — what the vertical adjustment measures — or None."""
+        vp = self._scroll.get_child()
+        if vp is None:
+            return None
+        pos = widget.translate_coordinates(vp, 0, y)
+        if pos is None:
+            return None
+        # translate_coordinates answers in the viewport's VISIBLE coordinates,
+        # which the current scroll offset has already moved; adding the offset
+        # back gives the position in the scrolled content.
+        return (pos[1] + self._scroll.get_vadjustment().get_value(), height)
+
+    def _scroll_to_caret(self, goal="caret"):
+        """Scroll the desk the least it takes to show the caret. Crash-safe."""
+        margin = self.CARET_MARGIN.get(goal, 40)
+        try:
+            buf = self.body.get_buffer()
+            it = buf.get_iter_at_mark(buf.get_insert())
+            rect = self.body.get_iter_location(it)
+            _wx, wy = self.body.buffer_to_window_coords(
+                Gtk.TextWindowType.WIDGET, rect.x, rect.y)
+            spot = self._desk_y(self.body, wy, rect.height)
+            if spot is None:
+                return
+            y, h = spot
+            adj = self._scroll.get_vadjustment()
+            adj.clamp_page(max(0, y - margin), y + h + margin)
+            # Did the caret actually land on the page? It cannot when the desk
+            # has not been measured for this text yet, so remember the job and
+            # let _on_desk_measured finish it.
+            top = adj.get_value()
+            landed = top <= y and y + h <= top + adj.get_page_size()
+            self._caret_armed = None if landed else goal
+        except Exception:
+            pass
+
+    def _on_desk_measured(self, _adj):
+        """The desk's content height changed (GTK laid the script out). If a
+        caret scroll stopped short against the old height, finish it now."""
+        if self._caret_armed and not self._closed:
+            self._queue_caret_scroll(self._caret_armed)
+
+    def _on_desk_focus(self, widget, _ev=None):
+        """Focus arrived somewhere on the paper. The desk does not scroll to a
+        focused child by itself any more (see _build) — that is what keeps a
+        click into the script from throwing a scrolled page back to line 1 —
+        but the title and the byline are small and can be reached from the
+        keyboard while they are off the top, so bring THOSE into view.
+
+        Only on a real move: coming back to the window from another app hands
+        the same widget focus again, and that must not move the page.
+        Crash-safe."""
+        moved, self._focus_seen = self._focus_seen is not widget, widget
+        if widget is self.body or not moved:
+            return False
+        try:
+            spot = self._desk_y(widget, 0, widget.get_allocation().height)
+            if spot is not None:
+                y, h = spot
+                self._scroll.get_vadjustment().clamp_page(
+                    max(0, y - 24), y + h + 24)
+        except Exception:
+            pass
+        return False
 
     def _on_mark_set(self, buf, _it, mark):
         """Caret moved / selection changed → point the element bar at the caret
@@ -662,6 +836,11 @@ class Screenplay(nbapp.AppWindow):
         try:
             if mark is buf.get_insert() or mark is buf.get_selection_bound():
                 self._sync_element_bar(buf)
+            if mark is buf.get_insert() and self.body.has_focus():
+                # Arrow keys, Page Down, a selection dragged past the bottom
+                # edge: the caret moves with no edit, and the desk is what has
+                # to follow it (see _scroll_to_caret).
+                self._queue_caret_scroll()
         except Exception:
             pass
 
@@ -703,9 +882,14 @@ class Screenplay(nbapp.AppWindow):
         # formatting. Re-tagging just the one caret line each keystroke is cheap.
         self._retag_current_line()
         self._touch()
+        # Typing at the bottom of the window used to run off it: the caret
+        # went on down the page while the desk stayed where it was.
+        self._queue_caret_scroll()
 
     def _count_tick(self):
         self._count_timer = None
+        if self._closed:
+            return False
         self._refresh_counts()
         return False
 
@@ -790,6 +974,8 @@ class Screenplay(nbapp.AppWindow):
         """Debounce fired: persist to disk, and only then flip the chip to a
         REAL 'Saved HH:MM' — the indicator now reflects an actual write."""
         self._save_timer = None
+        if self._closed:
+            return False
         if self._save_doc():
             self._set_saved()
         else:
@@ -815,6 +1001,9 @@ class Screenplay(nbapp.AppWindow):
         + current file path), or fall back to the blank page. Malformed/foreign
         data is ignored (→ blank) and never crashes the app."""
         self._recovery_store_writable = not os.path.exists(DOC_FILE)
+        # Reset before every load so reusing an instance cannot carry extension
+        # metadata from an earlier recovery document into a different one.
+        self._replace_recovery_extra()
         try:
             with open(DOC_FILE) as fh:
                 data = json.load(fh)
@@ -834,6 +1023,11 @@ class Screenplay(nbapp.AppWindow):
                         "title": DEFAULT_TITLE, "subtitle": "", "path": None}
             if isinstance(data, dict):
                 self._recovery_store_writable = True
+                known = {"title", "subtitle", "body", "body_tags", "path"}
+                self._replace_recovery_extra({
+                    key: copy.deepcopy(value) for key, value in data.items()
+                    if key not in known
+                })
                 doc = {"body": str(data.get("body", ""))}
                 tags = data.get("body_tags")
                 doc["body_tags"] = tags if isinstance(tags, list) else []
@@ -853,15 +1047,22 @@ class Screenplay(nbapp.AppWindow):
     def _prepare_recovery_write(self):
         """Allow recovery writes after a real edit replaces unreadable bytes."""
         if getattr(self, "_recovery_store_writable", True):
-            return
-        nbapp.quarantine_unrecognized(DOC_FILE)
-        self._recovery_store_writable = True
+            return True
+        moved = nbapp.quarantine_unrecognized(DOC_FILE)
+        # A failed rename must never turn the guard off: the file may be the
+        # user's only surviving copy in a schema this version cannot read.
+        self._recovery_store_writable = bool(moved) or not os.path.exists(DOC_FILE)
+        return self._recovery_store_writable
 
     def _collect_doc(self):
         """Snapshot the script (title + body + per-line element formatting + the
         current file path) from the widgets, ready to serialise."""
         buf = self.body.get_buffer()
-        return {
+        # Valid recovery files may contain fields owned by a newer Notebook OS
+        # version. Preserve those across autosave/open-close, then let current
+        # widget state authoritatively replace the fields this version owns.
+        doc = copy.deepcopy(getattr(self, "_recovery_extra", {}))
+        doc.update({
             "title": self.scripttitle.get_text(),
             "subtitle": self.scriptsubtitle.get_text(),
             "body": buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False),
@@ -870,7 +1071,12 @@ class Screenplay(nbapp.AppWindow):
             "body_tags": self._serialize_body_tags(buf),
             # remember which user file this maps to so Save targets it after a boot
             "path": self._path,
-        }
+        })
+        return doc
+
+    def _replace_recovery_extra(self, extra=None):
+        """Replace metadata belonging to the current recovery document."""
+        self._recovery_extra = copy.deepcopy(extra) if isinstance(extra, dict) else {}
 
     def _serialize_body_tags(self, buf):
         """Capture the body buffer's element formatting as a list of
@@ -934,9 +1140,12 @@ class Screenplay(nbapp.AppWindow):
         return doc
 
     def _undo_restore(self, doc):
+        known = {"title", "subtitle", "body", "body_tags", "path"}
+        extras = {key: value for key, value in doc.items()
+                  if key not in known and not key.startswith("_")}
         self._set_document(doc.get("title", ""), doc.get("body", ""),
                            doc.get("body_tags"), doc.get("path"),
-                           doc.get("subtitle", ""))
+                           doc.get("subtitle", ""), extras)
         # _set_document declares the script clean (it is used by New / Open);
         # an undo puts back a state that may well differ from the file on disk.
         self._file_dirty = doc.get("_file_dirty", False)
@@ -945,6 +1154,8 @@ class Screenplay(nbapp.AppWindow):
         buf.place_cursor(buf.get_iter_at_offset(caret))
         self._sync_element_bar(buf)
         self.body.grab_focus()
+        # Undo put a caret back somewhere the reader may not be looking.
+        self._queue_caret_scroll()
 
     def _save_doc(self):
         """Write the script to disk. Returns True on success (crash-safe).
@@ -980,13 +1191,23 @@ class Screenplay(nbapp.AppWindow):
         True keeps the window (and the work) on screen; False lets it close."""
         if not getattr(self, "_recovery_dirty", False):
             return False              # already durable: close, no questions
+        if getattr(self, "_path", None) and not getattr(self, "_file_dirty", True):
+            # The authored script itself is current. A failed auxiliary
+            # recovery/session write may lose caret placement on restart, but
+            # it cannot honestly be described as losing the writing or require
+            # a destructive-close confirmation.
+            return False
         if self._save_doc():          # one retry, silent when it works
             return False
         if getattr(self, "_save_error", None) is None:
             # The store is held read-only because its bytes were not ours to
-            # replace, not because the disk refused us. A card offering to
-            # "make room" would be about the wrong problem.
-            return False
+            # replace. That is not a disk-full error, but the edited script is
+            # still only in memory: closing silently here loses it. Use the
+            # generic already-translated explanation rather than falsely
+            # advising the writer to make room.
+            return not self._confirm(
+                _t("Not saved"), _t("This could not be saved."),
+                _t("Close Without Saving"))
         return not self._confirm(
             _t("Not saved"),
             _t(nbapp.save_failure_reason(self._save_error, DOC_FILE))
@@ -996,8 +1217,12 @@ class Screenplay(nbapp.AppWindow):
 
     def _on_destroy(self, *_):
         """Flush a final synchronous save on close so the last edit survives."""
+        if self._closed:
+            return False
+        self._closed = True
         self.undo.cancel()
-        for attr in ("_save_timer", "_count_timer"):
+        for attr in ("_save_timer", "_count_timer", "_notice_timer",
+                     "_caret_idle"):
             tid = getattr(self, attr, None)
             if tid is not None:
                 try:
@@ -1006,6 +1231,7 @@ class Screenplay(nbapp.AppWindow):
                     pass
                 setattr(self, attr, None)
         self._save_doc()
+        return False
 
     # ---- File menu: user files under $NB_HOME/Documents ----
     def _fmt_of(self, path):
@@ -1036,10 +1262,16 @@ class Screenplay(nbapp.AppWindow):
         except Exception:
             pass
 
-    def _set_document(self, title, body, tags, path, subtitle=""):
+    def _set_document(self, title, body, tags, path, subtitle="",
+                      recovery_extra=None):
         """Replace the whole script (used by New and Open). Seeds under the
         _loading guard so it doesn't trip the autosave path, then marks a clean
         state and refreshes the status line and counts."""
+        # New/Open start a different document and must not inherit opaque
+        # metadata from the recovery document they replace. Undo explicitly
+        # passes the prior document's extras so restoring A still restores all
+        # of A, while opening B cannot acquire A's future-version state.
+        self._replace_recovery_extra(recovery_extra)
         self._loading = True
         try:
             self.scripttitle.set_text(title or DEFAULT_TITLE)
@@ -1059,8 +1291,79 @@ class Screenplay(nbapp.AppWindow):
         self._file_dirty = False            # fresh script matches its file / blank
         self._update_status()
         self._prepare_recovery_write()
-        self._save_doc()                    # snapshot recovery (incl. new path)
-        self._set_saved()
+        if self._save_doc():                # snapshot recovery (incl. new path)
+            self._set_saved()
+            return True
+        # New/Open may still remain safely alive in this window (the close guard
+        # sees _recovery_dirty), but a failed write must never be painted as the
+        # same green Saved timestamp as a durable recovery snapshot.
+        try:
+            self.saved.set_markup(
+                '<span foreground="#C8341E">● </span>' + _t("Not saved"))
+        except Exception:
+            pass
+        return False
+
+    def _keep_outgoing(self):
+        """Put an unsaved, unbound script somewhere it survives, and say so.
+
+        Novel's floor, in the app with the same exposure. New and Open replace
+        the script AND screenplay.json (its only copy when no file has been
+        chosen), and the campaign retired the "discard?" question in favour of
+        undo — which lives only as long as the window. Press New by mistake,
+        close, reopen, and the pages are gone. So: write the outgoing script
+        into Documents as a real screenplay under its own title before
+        replacing it, and post a notification naming the file. Undo still puts
+        it back on screen; the file is what makes closing survivable.
+
+        A SCRIPT WITH A FILE IS NOT AUTOMATICALLY SAFE. "It is already on
+        disk" holds only until the writer types one more line after Save:
+        New then replaced the script AND screenplay.json, and the pages
+        written since the last write existed nowhere. `_file_dirty` is
+        maintained by `_touch` (the single entry point for every content
+        change, tag-only retags included) and cleared only by a real write,
+        so it is the honest answer to "does the file already hold this?".
+
+        Returns the basename kept, or None when there was nothing to keep (an
+        empty script holds nothing; a bound one already in sync with its file
+        is already on disk)."""
+        if self._is_empty():
+            return None
+        if self._path and not getattr(self, "_file_dirty", True):
+            return None
+        try:
+            os.makedirs(DOCS_DIR, exist_ok=True)
+            stem = (self.scripttitle.get_text() or "").strip() or DEFAULT_TITLE
+            stem = "".join(c for c in stem if c.isalnum() or c in " -_.").strip()
+            base = "%s %s" % (stem or "Screenplay",
+                              time.strftime("%Y-%m-%d %H%M"))
+            path = os.path.join(DOCS_DIR, base + ".json")
+            n = 2
+            while os.path.exists(path):
+                path = os.path.join(DOCS_DIR, "%s (%d).json" % (base, n))
+                n += 1
+            if not self._write_file(path):
+                return None
+            return os.path.basename(path)
+        except Exception:                                         # noqa: BLE001
+            # A floor that cannot be laid must not stop the action asked for.
+            return None
+
+    def _say_kept(self, kept):
+        """Name the file the outgoing script went into.
+
+        The notification centre, not the status line: the status line
+        describes the script ON SCREEN, and the next save rewrites it anyway.
+        (Novel learned both halves the hard way — see its _say_kept.)"""
+        if not kept:
+            return
+        try:
+            import nbnotify                                       # noqa: PLC0415
+            nbnotify.post(_t("Script kept"),
+                          _t("Kept as %s in Documents") % kept,
+                          app="screenplay", app_name=_t("Screenplay"))
+        except Exception:                                         # noqa: BLE001
+            pass
 
     def _file_new(self):
         """Blank UNTITLED page (no file). The old file is left on disk untouched.
@@ -1070,12 +1373,20 @@ class Screenplay(nbapp.AppWindow):
         when that would discard real work — an unsaved no-file script (recovery
         is its only copy), or a file-bound script with edits since its last Save
         — and if the user cancels, change nothing (no blank, no overwrite)."""
-        # Undoable: the confirm only fires when the guard judges there is work
-        # to lose, and blanking overwrites the recovery snapshot as well.
+        # Undoable, and NOT confirmed: the campaign retired the "discard
+        # unsaved changes?" card (8ddfd945 -- destruction gets undo, never a
+        # confirmation), and Edit > Undo brings the whole script back.
+        # Blanking overwrites the recovery snapshot as well, so the checkpoint
+        # is what makes that reversible.
+        kept = self._keep_outgoing()
         self.undo.checkpoint("New Script")
         self._set_document(DEFAULT_TITLE, "", [], None)
+        self._say_kept(kept)
         self.undo.commit()
         self.body.grab_focus()
+        # A different script is on the desk now, so show it from the top —
+        # its title page — however far down the last one the reader was.
+        self._queue_caret_scroll("top")
 
     def _dirty_to_lose(self):
         """True when replacing the script would discard work: an unsaved no-file
@@ -1097,8 +1408,8 @@ class Screenplay(nbapp.AppWindow):
             return True
         return self._confirm(
             title,
-            "The current script has unsaved changes. Discard them?",
-            "Discard")
+            _t("The current script has unsaved changes. Discard them?"),
+            _t("Discard"))
 
     def _is_empty(self):
         """True when the script has no body text and no custom title (still the
@@ -1164,10 +1475,11 @@ class Screenplay(nbapp.AppWindow):
 
     def _open_file(self, path):
         """Load a user file into the script. Returns True on success."""
+        recovery_extra = None
+        plain_decode_failed = False
         try:
             if self._fmt_of(path) == "json":
-                with open(path, encoding="utf-8") as fh:
-                    data = json.load(fh)
+                data = json.loads(_read_script_bytes(path).decode("utf-8-sig"))
                 # Every app saves into the shared Documents folder, so validate
                 # this is a Screenplay document BEFORE touching any state: a
                 # foreign JSON (a ledger, a calendar, contacts, …) that lacks a
@@ -1188,12 +1500,18 @@ class Screenplay(nbapp.AppWindow):
                 title = str(data.get("title", "")) or self._title_from_path(path)
                 sub = data.get("subtitle")
                 subtitle = str(sub) if isinstance(sub, str) else ""
+                known = {"title", "subtitle", "body", "body_tags", "path"}
+                recovery_extra = {
+                    key: copy.deepcopy(value) for key, value in data.items()
+                    if key not in known}
             else:
-                with open(path, encoding="utf-8", errors="replace") as fh:
-                    body = fh.read()
-                # for plain text the filename is the script's identity
-                title = self._title_from_path(path)
-                subtitle = ""
+                body, plain_decode_failed = _read_plain_text(path)
+                # A plain script may open with Fountain's title page — this app
+                # writes one there — so the title and byline come off it, and
+                # the file name is the script's identity only when it does not.
+                title, subtitle, body = self._split_title_page(body)
+                if not title:
+                    title = self._title_from_path(path)
                 # A .fountain/.txt script carries its layout in convention, not
                 # markup. Recover the elements from those conventions, or every
                 # line would land on the Action margin and a real script would
@@ -1203,13 +1521,27 @@ class Screenplay(nbapp.AppWindow):
             self._flash("Open failed")
             return False
         # Same reason as New: opening replaces the script AND its recovery
-        # snapshot, so the script that was on screen must be recoverable.
+        # snapshot, so the script that was on screen must be recoverable --
+        # through Undo, not a confirmation card (see _file_new).
+        kept = self._keep_outgoing()
         self.undo.checkpoint("Open Script")
-        self._set_document(title, body, tags, path, subtitle)
+        # Lossy replacement characters may be useful for recovery, but binding
+        # them to the original would let Ctrl+S destroy its undecodable bytes.
+        # Treat the recovered script as a new unsaved document instead.
+        bound_path = None if plain_decode_failed else path
+        self._set_document(title, body, tags, bound_path, subtitle, recovery_extra)
+        self._say_kept(kept)
         self.undo.commit()
+        self._queue_caret_scroll("top")     # the script opens at its title page
         # What is on screen is exactly what is in the file just opened, so this
         # is the point undo/redo can return to without anything being at risk.
-        self.undo.mark_saved()
+        if plain_decode_failed:
+            self._file_dirty = True
+            self._update_status()
+            self._flash(_t("Some text could not be decoded. Use Save As to "
+                           "preserve the original file."))
+        else:
+            self.undo.mark_saved()
         return True
 
     # Screenplay text conventions used to recognise elements in a plain script.
@@ -1258,9 +1590,61 @@ class Screenplay(nbapp.AppWindow):
             off += len(raw) + 1
         return spans
 
+    # Fountain's title page: a block of "Key: value" lines at the very top of
+    # the file, closed by a blank line. Only these keys make one — a script
+    # that opens "FADE IN:" must not lose its first line to a key-shaped guess.
+    TITLE_KEYS = ("title", "credit", "author", "authors", "source", "date",
+                  "draft date", "contact", "copyright", "notes", "revision")
+
+    def _title_page_text(self):
+        """This script's Fountain title-page block, or "" when the title page
+        is still empty. The byline is the credit line of a title page, which is
+        what Fountain's Credit key holds."""
+        title = self.scripttitle.get_text().strip()
+        byline = self.scriptsubtitle.get_text().strip()
+        lines = []
+        if title and title != DEFAULT_TITLE:
+            lines.append("Title: " + title)
+        if byline:
+            lines.append("Credit: " + byline)
+        return "\n".join(lines) + "\n\n" if lines else ""
+
+    def _split_title_page(self, text):
+        """Split a plain script into (title, byline, body).
+
+        A leading block of Fountain title-page keys closed by a blank line is
+        the title page; anything else is script from its first character. The
+        block has to be keys ALL THROUGH or it is not a title page at all, so
+        an ordinary script can never lose its opening lines to this."""
+        lines = text.split("\n")
+        end = 0
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        if end == 0 or end >= len(lines):
+            return "", "", text     # no leading block, or nothing closing it
+        keys, last = {}, None
+        for raw in lines[:end]:
+            if last is not None and raw[:1].isspace():
+                keys[last] = (keys[last] + " " + raw.strip()).strip()
+                continue
+            head, sep, value = raw.partition(":")
+            key = head.strip().lower()
+            if not sep or key not in self.TITLE_KEYS:
+                return "", "", text                  # script, not a title page
+            keys[key] = value.strip()
+            last = key
+        # A title page prints its credit line and its author as one line; this
+        # app has one byline entry, so join them the way the page reads.
+        byline = " ".join(part for part in (
+            keys.get("credit", ""),
+            keys.get("author", "") or keys.get("authors", "")) if part)
+        return keys.get("title", ""), byline.strip(), "\n".join(lines[end + 1:])
+
     def _write_file(self, path):
-        """Serialise the script to `path`. .json keeps the title and element
-        spans; .fountain/.txt write the body text only. Returns True on success."""
+        """Serialise the script to `path`. .json keeps the title page and the
+        element spans; .fountain/.txt keep the title page in Fountain's own
+        title-page keys and the body text, and leave the element spans to be
+        read back from the page conventions. Returns True on success."""
         try:
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             buf = self.body.get_buffer()
@@ -1280,7 +1664,11 @@ class Screenplay(nbapp.AppWindow):
                 # stick pulled mid-write) destroyed the previous draft and left
                 # a stump in its place. Temp + fsync + rename leaves either the
                 # old script or the new one, never a ruined one.
-                nbapp.atomic_write_text(path, body)
+                # Plain text used to be the body ALONE: the chip said
+                # Saved, and the script came back from that file untitled and
+                # with no byline. Fountain has title-page keys; use them (see
+                # _title_page_text / _split_title_page).
+                nbapp.atomic_write_text(path, self._title_page_text() + body)
             return True
         except Exception as exc:
             self._last_file_save_error = exc
@@ -1307,9 +1695,9 @@ class Screenplay(nbapp.AppWindow):
         """Pick a path and write the script there, then adopt it. A bare name
         defaults to Screenplay .json because it preserves the title and element
         formatting; plain-text (.fountain/.txt) export still works if explicitly
-        typed (it drops the title and every element span, so it must not be
-        default). The title page takes the chosen filename so it always reflects
-        the open file."""
+        typed (it keeps the title page but not the element spans, so it
+        must not be default). An UNTITLED script takes its title from the chosen
+        file name; a title the writer typed is kept."""
         path = self._choose_file(save=True)
         if not path:
             return
@@ -1327,7 +1715,17 @@ class Screenplay(nbapp.AppWindow):
         prev_path = self._path
         prev_title = self.scripttitle.get_text()
         prev_dirty = self._file_dirty
-        self._set_identity(path, self._title_from_path(path))
+        # The title page belongs to the writer; Save As names a FILE. This used
+        # to overwrite the title with the file's stem, upper-cased with its
+        # punctuation collapsed to spaces — so saving "Don't Look Up!" under
+        # the app's OWN suggested name retitled the script "DON T LOOK UP", on
+        # the page and in the file. Deriving the title from the name is right
+        # only while the page is still untitled (it dates from the title being
+        # a fixed label; see the title block in _build).
+        typed = self.scripttitle.get_text().strip()
+        self._set_identity(path, self.scripttitle.get_text()
+                           if typed and typed != DEFAULT_TITLE
+                           else self._title_from_path(path))
         if not self._write_file(path):
             self._set_identity(prev_path, prev_title)
             self._file_dirty = prev_dirty
@@ -1397,6 +1795,52 @@ class Screenplay(nbapp.AppWindow):
                 '<span foreground="#C8341E">● </span>%s' % text)
         except Exception:
             pass
+
+    NOTICE_MARKUP = '<span foreground="#7FA98C">● </span>%s'
+
+    def _notice(self, text):
+        """Report a FINISHED action in the save chip, then put the save state
+        back a few seconds later.
+
+        Red is this app's failure colour (see _flash), so "Exported PDF" went
+        up in the same red as "Not saved" — and sat on top of the save state
+        until the next edit, so the writer could no longer see whether the
+        script itself was saved. Crash-safe."""
+        # Compare against what the widget ENDED UP holding, not against the
+        # English constant: set_markup is one of the setters nbi18n rewrites,
+        # so on every non-English install the chip held the translated notice
+        # while _notice_done tested it against `NOTICE_MARKUP % text` in
+        # English. That test never matched, the restore never ran, and the
+        # green "Exported PDF" sat on top of the save state for good — exactly
+        # the stuck chip this method exists to prevent.
+        try:
+            previous = self.saved.get_label()
+            self.saved.set_markup(self.NOTICE_MARKUP % text)
+            self._notice_shown = self.saved.get_label()
+        except Exception:
+            return
+        if self._notice_timer:
+            try:
+                GLib.source_remove(self._notice_timer)
+            except Exception:
+                pass
+        self._notice_timer = GLib.timeout_add(
+            3000, self._notice_done, previous, text)
+
+    def _notice_done(self, previous, text):
+        """Restore the save state the notice covered — unless an edit or a save
+        has claimed the chip since, in which case that is the truer message."""
+        self._notice_timer = None
+        if self._closed:
+            return False
+        try:
+            # Anything that has claimed the chip since (an edit, a save) left
+            # different markup on it, and that is the truer message.
+            if self.saved.get_label() == getattr(self, "_notice_shown", None):
+                self.saved.set_markup(previous)
+        except Exception:
+            pass
+        return False
 
     # ---- PDF / printing (monospace screenplay pages) ----
     def _script_elements(self):
@@ -1576,7 +2020,7 @@ class Screenplay(nbapp.AppWindow):
         try:
             page_count, draw = self._build_pages()
             nbprint.simple_pdf(path, page_count, draw)
-            self._flash("Exported PDF")
+            self._notice("Exported PDF")
         except Exception:
             self._flash("Export failed")
 
@@ -1611,24 +2055,20 @@ class Screenplay(nbapp.AppWindow):
         except Exception:
             pass
 
-    def _toggle_wrap(self):
-        """Flip the script body between word-wrap and no-wrap. Crash-safe."""
-        try:
-            cur = self.body.get_wrap_mode()
-            self.body.set_wrap_mode(
-                Gtk.WrapMode.NONE if cur != Gtk.WrapMode.NONE
-                else Gtk.WrapMode.WORD)
-        except Exception:
-            pass
-
     def _goto(self, where):
-        """Move the cursor to the start/end of the script and scroll to it."""
+        """Move the cursor to the start/end of the script and scroll to it.
+
+        Through the desk's adjustment, not the TextView's (see
+        _scroll_to_caret): Go to End used to move the caret to the last line
+        and leave the window on the title page. Go to Start goes all the way
+        to the top so the title page is what the start of the script shows,
+        rather than the minimum move that puts the first line on screen."""
         try:
             buf = self.body.get_buffer()
             it = buf.get_start_iter() if where == "start" else buf.get_end_iter()
             buf.place_cursor(it)
-            self.body.scroll_to_mark(buf.get_insert(), 0.0, True, 0, 0)
             self.body.grab_focus()
+            self._queue_caret_scroll("top" if where == "start" else "caret")
         except Exception:
             pass
 
@@ -1672,24 +2112,23 @@ class Screenplay(nbapp.AppWindow):
                 ("The End", lambda: self._insert_snippet("THE END", 5)),
             ]
         if name == "View":
-            # Show the toggle's state in words rather than a checkmark glyph
-            # (U+2713 is absent from the bundled fonts and would render as tofu).
-            state = "on" if self._wrap_is_on() else "off"
+            # There is no word-wrap toggle. A screenplay is a fixed sixty-column
+            # measure — the page on screen, the PDF and the printer all wrap at
+            # it — and switching the body to WrapMode.NONE simply grew the paper
+            # to the longest line in the script: the sheet filled the window
+            # edge to edge, the desk disappeared, the ends of long lines and the
+            # right-aligned transitions fell off the right of the window with no
+            # horizontal scrollbar to reach them, and turning wrap back on left
+            # the page at its blown width (a TextView's requested width follows
+            # its last layout). Long words break inside themselves instead, on
+            # screen and in the export alike (see the body's WORD_CHAR wrap).
             return [
                 ("Find in Script    Ctrl+F", lambda: self._toggle_find(True)),
-                nbapp.SEP,
-                ("Word Wrap    (%s)" % state, self._toggle_wrap),
                 nbapp.SEP,
                 ("Go to Start", lambda: self._goto("start")),
                 ("Go to End", lambda: self._goto("end")),
             ]
         return super().menu_items(name)
-
-    def _wrap_is_on(self):
-        try:
-            return self.body.get_wrap_mode() != Gtk.WrapMode.NONE
-        except Exception:
-            return True
 
     def _on_key(self, w, ev):
         """The shortcuts a screenwriter reaches for: Ctrl+S save, Ctrl+Shift+S
@@ -1758,7 +2197,7 @@ class Screenplay(nbapp.AppWindow):
         .formatbar { background: #F4F2EC; border-bottom: 1px solid #D7D2C5;
                      padding: 0 36px; min-height: 54px; }
         .formatbar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .elementlabel { font-size: 11px; letter-spacing: 0.12em; color: #9A9484;
+        .elementlabel { font-size: 11px; letter-spacing: 0.12em; color: #6E695E;
                         font-weight: 700; }
         .elbtn { min-height: 30px; padding: 0 13px; font-size: 13px;
                  font-weight: 500; color: #1A1916; background: #FCFBF8;
@@ -1794,7 +2233,7 @@ class Screenplay(nbapp.AppWindow):
         .page { background: #FCFBF8; border: 1px solid #D7D2C5;
                 box-shadow: 2px 3px 0 rgba(26,25,22,0.10); }
         .pageno { font-family: "Courier New","Liberation Mono",monospace; font-size: 15px;
-                  color: #9A9484; }
+                  color: #3A362E; }
         .scripttitle { font-family: "Courier New","Liberation Mono",monospace; font-size: 17px;
                        font-weight: 700; letter-spacing: 0.04em; color: #1A1916; }
         .scripttitle { background: transparent; border: none; box-shadow: none;

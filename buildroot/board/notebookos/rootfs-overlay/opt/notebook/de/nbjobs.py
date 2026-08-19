@@ -232,7 +232,11 @@ class JobError:
         except Exception:                                         # noqa: BLE001
             detail = ""
         kind = type(exc).__name__
-        return cls(kind, str(exc) or kind, detail)
+        try:
+            message = str(exc) or kind
+        except Exception:                                         # noqa: BLE001
+            message = kind
+        return cls(kind, message, detail)
 
     def __repr__(self):
         return "JobError(%s: %s)" % (self.kind, self.message)
@@ -271,7 +275,15 @@ class Job:
         return self.token.cancelled
 
     def cancel(self):
-        self.token.cancel()
+        return self.request_cancel()
+
+    def request_cancel(self):
+        """Atomically choose cancellation unless completion already won."""
+        with self._lock:
+            if self._delivered:
+                return False
+            self.token.cancel()
+            return True
 
     def checkpoint(self):
         self.token.checkpoint()
@@ -288,7 +300,13 @@ class Job:
         with self._lock:
             if self._delivered:
                 return
-        self.owner._dispatch(self, self._on_progress, fraction, phase)
+            # Queue while holding the same lock _finish uses to mark delivery.
+            # This makes check+enqueue atomic: completion either wins and this
+            # tick is dropped, or the tick is queued before the terminal
+            # callback. Merely checking here and dispatching after unlock left
+            # a race where done could be queued first.
+            self.owner._dispatch(self, self._on_progress, fraction, phase,
+                                 _drop_if_cancelled=True)
 
     # -- state --------------------------------------------------------------
     @property
@@ -446,17 +464,12 @@ class JobOwner:
         asked for, unlike being superseded. True if there was one to cancel."""
         with self._lock:
             job = self._jobs.get(key)
-        if job is None or job.finished:
-            return False
-        job.token.cancel()
-        return True
+        return job.request_cancel() if job is not None else False
 
     def cancel_all(self):
         with self._lock:
             jobs = list(self._jobs.values())
-        for job in jobs:
-            job.token.cancel()
-        return len(jobs)
+        return sum(1 for job in jobs if job.request_cancel())
 
     # -- inspection ---------------------------------------------------------
     def is_running(self, key):
@@ -487,9 +500,10 @@ class JobOwner:
             if self._jobs.get(job.key) is job:
                 del self._jobs[job.key]
 
-    def _dispatch(self, job, fn, *args):
+    def _dispatch(self, job, fn, *args, _drop_if_cancelled=False):
         """The single gate every callback passes through."""
-        if self._closed or job.superseded:
+        if (self._closed or job.superseded
+                or (_drop_if_cancelled and job.cancelled)):
             return                       # never even queue it
         owner = self
 
@@ -497,7 +511,8 @@ class JobOwner:
             # Checked AGAIN here: the window may have closed, or a newer request
             # arrived, between queueing this and the main loop reaching it. That
             # gap is the whole bug this module exists to close.
-            if owner._closed or job.superseded:
+            if (owner._closed or job.superseded
+                    or (_drop_if_cancelled and job.cancelled)):
                 return
             try:
                 fn(*args)

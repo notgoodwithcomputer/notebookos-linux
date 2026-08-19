@@ -51,6 +51,7 @@ class PinyinIME:
         self.buffer = ""
         self.cands = []
         self.page = 0
+        self._composition_target = None
         self.popup = None
         self._pop_label = None
         # key-press on the toplevel is delivered before the focus widget, so a
@@ -90,7 +91,20 @@ class PinyinIME:
     # ---- key handling -----------------------------------------------------
     def _focus_text(self):
         w = self.win.get_focus()
-        if isinstance(w, (Gtk.Editable, Gtk.TextView)):
+        if isinstance(w, Gtk.TextView):
+            return w if w.get_editable() else None
+        if isinstance(w, Gtk.Editable):
+            if isinstance(w, Gtk.SpinButton):
+                return None
+            try:
+                # Candidate text must never reveal a masked composition, and
+                # programmatic insertion must respect a read-only field.
+                if hasattr(w, "get_visibility") and not w.get_visibility():
+                    return None
+                if not w.get_editable():
+                    return None
+            except Exception:
+                return None
             return w
         return None
 
@@ -106,10 +120,21 @@ class PinyinIME:
         tgt = self._focus_text()
         if tgt is None:
             return False
+        if self.buffer and tgt is not self._composition_target:
+            # Composition belongs to the field where its first letter was
+            # swallowed. Never redirect its eventual commit after Tab/click.
+            self._reset()
+            return False
         kv = ev.keyval
         ch = ev.string or ""
 
         if self.buffer:
+            super_mod = ev.state & Gdk.ModifierType.SUPER_MASK
+            if ctrl or alt or super_mod:
+                # Accelerators belong to the app. Do not turn Ctrl+C/Ctrl+Z or
+                # an Alt/Super shortcut into an unexpected Hanzi insertion.
+                self._reset()
+                return False
             if kv == Gdk.KEY_Escape:
                 self._reset()
                 return True
@@ -151,11 +176,15 @@ class PinyinIME:
             if self.cands:
                 self._commit(tgt, self.cands[self.page * PAGE])
             else:
-                self._reset()
+                # Unknown/typo compositions are still authored text.  Space
+                # and Return already preserve the raw buffer; punctuation
+                # must do the same before GTK inserts the punctuation itself.
+                self._commit(tgt, self.buffer)
             return False
         else:
             # not buffering: a bare lowercase letter starts a pinyin run
             if _pinyin_letter(ch) and not ctrl and not alt:
+                self._composition_target = tgt
                 self.buffer = ch.lower()
                 self._update()
                 return True
@@ -192,6 +221,7 @@ class PinyinIME:
         self.buffer = ""
         self.cands = []
         self.page = 0
+        self._composition_target = None
         if self.popup:
             self.popup.hide()
 
@@ -254,7 +284,9 @@ class PinyinIME:
             self.popup.hide()
 
     def _place(self):
-        # position just under the focused widget
+        # Position at the caret for long-form editors, then keep the candidate
+        # window inside the active monitor.  Anchoring below an entire
+        # full-height TextView puts the popup beyond the bottom of the screen.
         tgt = self._focus_text()
         if tgt is None:
             return
@@ -270,6 +302,35 @@ class PinyinIME:
         if gdkwin is None:
             return
         res = gdkwin.get_origin()          # (x, y) or (ok, x, y) across bindings
-        x, y = res[-2], res[-1]
-        alloc = tgt.get_allocation()
-        self.popup.move(x + 6, y + alloc.height + 2)
+        root_x, root_y = res[-2], res[-1]
+        if isinstance(tgt, Gtk.TextView):
+            buf = tgt.get_buffer()
+            it = buf.get_iter_at_mark(buf.get_insert())
+            caret = tgt.get_iter_location(it)
+            wx, wy = tgt.buffer_to_window_coords(
+                Gtk.TextWindowType.WIDGET, caret.x, caret.y)
+            x = root_x + wx
+            above_y = root_y + wy
+            y = above_y + caret.height + 2
+        else:
+            alloc = tgt.get_allocation()
+            x = root_x
+            above_y = root_y
+            y = root_y + alloc.height + 2
+
+        _minimum, natural = self.popup.get_preferred_size()
+        width = max(natural.width, 1)
+        height = max(natural.height, 1)
+        display = Gdk.Display.get_default()
+        monitor = display.get_monitor_at_window(gdkwin) if display else None
+        if monitor is not None:
+            work = monitor.get_workarea()
+            x = min(max(x + 6, work.x),
+                    max(work.x + work.width - width, work.x))
+            if y + height > work.y + work.height:
+                y = above_y - height - 2
+            y = min(max(y, work.y),
+                    max(work.y + work.height - height, work.y))
+        else:
+            x += 6
+        self.popup.move(int(x), int(y))

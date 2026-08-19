@@ -3,9 +3,18 @@ ENTRY(_start)
 
 MEMORY {
 	rom   : ORIGIN = 0x08000000, LENGTH = 32M
-	iwram : ORIGIN = 0x03000000, LENGTH = 32K
+	/* 0x03007B00..0x03007EFF is the 1 KiB system stack;
+	 * 0x03007F00..0x03007F9F is the IRQ stack. The final 96 bytes are
+	 * reserved by the platform. ARM stacks descend, so merely stopping at the
+	 * initial SP (0x7F00) would still let .bss occupy live stack memory. */
+	iwram : ORIGIN = 0x03000000, LENGTH = 0x7B00
 	ewram : ORIGIN = 0x02000000, LENGTH = 256K
 }
+
+__sp_sys = 0x03007F00;
+__sp_irq = 0x03007FA0;
+ASSERT(__bss_end <= ORIGIN(iwram) + LENGTH(iwram),
+       "IWRAM data overlaps the reserved stacks")
 
 SECTIONS {
 	.gbaheader : { KEEP(*(.gbaheader)) } > rom

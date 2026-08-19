@@ -15,11 +15,14 @@ Images are decoded with GdkPixbuf (always available) and the toolbar is live:
   • Previous/Next  — walk the sibling image files in the same folder
   • Slideshow      — a GLib.timeout that advances Next, with a start/stop toggle
                      (the button shows a signage-red active state while running)
-The live zoom percentage doubles as a Fit-to-window button. Keyboard shortcuts
-mirror the toolbar: ← / → (or PageUp/PageDown) step through the folder's images,
-+ / − zoom, 0 fits the image to the window, and Ctrl+O opens a file. Manual
-navigation (a keypress, a Previous/Next click, or a filmstrip pick) ends a
-running slideshow.
+The live zoom percentage doubles as a Fit-to-window button, and a zoom keeps
+the point under the middle of the stage (the pointer, for Ctrl+wheel) still.
+Keyboard shortcuts mirror the toolbar: ← / → (or PageUp/PageDown) step through
+the folder's images, + / − zoom, 0 fits the image to the window, F / F11 fill
+the screen with the picture (Esc leaves), Delete moves the file on screen to the
+Trash and Ctrl+Z puts it back, and Ctrl+O opens a file. Manual navigation (a
+keypress, a Previous/Next click, or a filmstrip pick) ends a running slideshow;
+a slideshow itself runs fullscreen.
 The filmstrip beneath the stage holds a thumbnail of every image in the folder;
 the current one is selected in signage-red and a click jumps straight to it.
 Thumbnails decode lazily off the main loop, so opening a large folder never
@@ -50,12 +53,45 @@ import sys
 import time
 
 import nbapp
+import nbcommands
 import nbjobs
 import nbpicker
 import nbicons
 import nbmotion
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
+
+
+def _set_user_tooltip(widget, text):
+    """A filename in hover text. set_tooltip_text is patched by nbi18n;
+    set_tooltip_markup is not and renders the same once escaped."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+def _process_token(pid=None):
+    """PID plus Linux birth time, so PID reuse cannot inherit ownership."""
+    pid = str(os.getpid() if pid is None else pid)
+    try:
+        with open("/proc/%s/stat" % pid) as fh:
+            tail = fh.read().rsplit(") ", 1)[1].split()
+        return "%s %s" % (pid, tail[19])
+    except (OSError, IndexError):
+        return ""
 
 # ---- optional video engine (guarded) --------------------------------------
 # GStreamer decodes and plays video; it is only *guaranteed* on the built guest.
@@ -84,6 +120,9 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 # is in the image; the Finder still shows the files.
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tiff", ".tif",
               ".ico", ".svg")
+# How long a decode may take before the stage says "Opening…" instead of
+# holding the previous picture (see _decode_in_background).
+NOTICE_AFTER_MS = 220
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v")
 KIND = {
     ".png": "PNG image", ".jpg": "JPEG image", ".jpeg": "JPEG image",
@@ -104,6 +143,13 @@ MAX_PIX = nbapp.DECODE_MAX_SIDE
 # through, which is ~256MB once GdkPixbuf holds it as RGBA. Counted in pixels
 # so it means the same thing on every format and every decoder path.
 MAX_AREA = nbapp.DECODE_MAX_AREA
+# A scaled pixbuf of up to this many pixels is produced on the GTK thread. That
+# scale costs single-digit milliseconds, and doing it inline keeps a fit image —
+# and every ordinary step through a folder — free of a blank frame. Anything
+# larger is only ever a deep manual zoom, and a bilinear scale out to MAX_PIX
+# wide froze the window for the better part of a second per click on the
+# software path, so those go to the same worker the decode already uses.
+SYNC_SCALE_PIXELS = 4000000
 # slideshow dwell (ms) before advancing to the next image
 SLIDESHOW_MS = 3500
 # toolbar icon tone (faint ink, matching the design language)
@@ -198,8 +244,12 @@ def _fit_budget(width, height):
     return nbapp.decode_budget(width, height)
 
 
-def _bounded_pixbuf(path):
+def _bounded_pixbuf(path, real=None):
     """Decode without allocating a source-sized pixbuf.
+
+    `real`, when a list is passed, receives the file's OWN [width, height] as
+    the loader reports them, before any budget scaling. The working pixbuf may
+    legitimately be smaller than the file; the Info panel describes the FILE.
 
     THE CAP USED TO BE SKIPPED ENTIRELY WHEN THE DIMENSIONS WERE UNKNOWN. A
     failed get_file_info() became 0x0, 0 failed the `width > 0` test, and the
@@ -212,6 +262,8 @@ def _bounded_pixbuf(path):
     loader = GdkPixbuf.PixbufLoader()
 
     def size_prepared(ldr, width, height):
+        if real is not None and width > 0 and height > 0:
+            real[:] = [width, height]
         want = _fit_budget(width, height)
         if want != (width, height):
             ldr.set_size(want[0], want[1])
@@ -237,18 +289,46 @@ def _bounded_pixbuf(path):
     return pixbuf
 
 
-def _pixbuf_any(path):
+def _same_turn(raw, turned, real):
+    """Keep a recorded file size in the same orientation as the picture.
+
+    apply_embedded_orientation can transpose the decode, and a portrait
+    photograph whose header says 4000x3000 is shown 3000x4000 — printing the
+    header's figures would describe a picture nobody is looking at."""
+    if real and len(real) == 2:
+        if (raw.get_width() == turned.get_height()
+                and raw.get_height() == turned.get_width()
+                and raw.get_width() != raw.get_height()):
+            real[:] = [real[1], real[0]]
+    return turned
+
+
+def _pixbuf_any(path, real=None):
     """A GdkPixbuf for `path`. GdkPixbuf's own loaders (PNG/JPEG/GIF/TIFF/BMP/...)
     are tried first; formats it lacks a loader for (WebP, SVG) fall
-    back to an ffmpeg/rsvg transcode. Raises if nothing can decode it."""
+    back to an ffmpeg/rsvg transcode. Raises if nothing can decode it.
+
+    `real`, when a list is passed, receives the file's own [width, height],
+    turned the way the picture is shown (see _bounded_pixbuf/_same_turn)."""
     try:
-        return _oriented(_bounded_pixbuf(path))
+        raw = _bounded_pixbuf(path, real)
+        return _same_turn(raw, _oriented(raw), real)
     except Exception:
         tmp = _decode_to_png(path)
         if tmp is None:
             raise
         try:
-            return _oriented(_bounded_pixbuf(tmp))
+            # the transcode bounded the picture on its way out, so the original
+            # file's header is the only place its own size still survives
+            if real is not None:
+                try:
+                    _fmt, fw, fh = GdkPixbuf.Pixbuf.get_file_info(path)
+                    if fw and fh:
+                        real[:] = [fw, fh]
+                except Exception:
+                    pass
+            raw = _bounded_pixbuf(tmp)
+            return _same_turn(raw, _oriented(raw), real)
         finally:
             try:
                 os.unlink(tmp)
@@ -312,10 +392,12 @@ def human(n):
 
 class MediaViewer(nbapp.AppWindow):
     app_name = "Media Viewer"
-    # A pure viewer with no editable text surface, so no Edit menu (Cut/Copy/
-    # Paste/Select All would be permanently inert here). File carries Open and
-    # Close; View toggles the Info panel and the filmstrip.
-    menus = ("File", "View")
+    # No clipboard group: there is no editable surface here, so Cut/Copy/Paste/
+    # Select All would be permanently inert. Edit exists for the one real
+    # history this viewer has — Move to Trash is a move, and Undo puts it back.
+    # File carries Open, Move to Trash and Close; View toggles the Info panel
+    # and the filmstrip.
+    menus = ("File", "Edit", "View")
 
     # "Photo" is the file's place in its folder ("12 of 400") — looking through
     # a folder you want to know how far in you are, and the filmstrip only shows
@@ -329,6 +411,13 @@ class MediaViewer(nbapp.AppWindow):
 
         # -- loaded-media state --
         self._media_path = None        # path of the currently displayed file
+        # The file the WINDOW IS DESCRIBING right now — stage, Info panel and
+        # filmstrip all agree with it. _media_path is set the instant a step is
+        # asked for, while the picture only changes when its decode lands, so
+        # the two differ for as long as that decode takes. Delete acts on this
+        # one (see _on_trash).
+        self._shown_path = None
+        self._file_dims = None         # (path, width, height) of the FILE itself
         self._orig_pixbuf = None       # working full-res pixbuf (rotated), or None
         self._last_alloc = (0, 0)      # last stage size a fit was computed for
         self._info_vals = {}           # Info field name -> value Gtk.Label
@@ -342,6 +431,10 @@ class MediaViewer(nbapp.AppWindow):
         self._confirm_layer = None     # the in-window confirm overlay, if open
         self._surface_name = "empty"  # the one stage surface currently shown
         self._surface_gen = 0          # drops stale crossfade midpoints
+        self._render_gen = 0           # drops a scale that a newer one replaced
+        self._anchor_handler = 0       # pending post-render re-centre, or 0
+        self._undo_trash = None        # (in-trash, origin, sidecar, identity)
+        self._flash_id = 0             # timer clearing the transient status line
 
         # -- filmstrip state --
         self._strip_sig = None         # (paths,) the strip was last built for
@@ -366,6 +459,7 @@ class MediaViewer(nbapp.AppWindow):
         self._v_playing = False        # transport play/pause toggle
         self._v_path = None            # the clip the pipeline is loaded with
         self._closed = False           # True once the window is being destroyed
+        self._startup_id = 0           # deferred Finder-open source, if pending
         self._v_poll_id = 0            # GLib source polling video progress, or 0
         self._v_duration_ns = 0        # cached clip duration in ns
         self._v_user_seeking = False   # True while the user drags the seek bar
@@ -434,11 +528,24 @@ class MediaViewer(nbapp.AppWindow):
         body.pack_start(self._info_w, False, False, 0)
         self.content.pack_start(body, True, True, 0)
 
+        # --- transient status line ---
+        # Moving a picture to the Trash simply showed the next one, which reads
+        # exactly like a key that did nothing. This is where the window says
+        # what an action did and how to take it back.
+        self._flash_lbl = Gtk.Label(label="", xalign=0)
+        self._flash_lbl.get_style_context().add_class("flashband")
+        self._flash_lbl.set_ellipsize(3)   # PANGO_ELLIPSIZE_END
+        self._flash_lbl.set_no_show_all(True)   # so run()'s show_all leaves it
+        self.content.pack_start(self._flash_lbl, False, False, 0)
+
         # --- filmstrip ---
         self._film_w = self._filmstrip()
         self.content.pack_start(self._film_w, False, False, 0)
 
-        self._vfull = False   # video-fullscreen (chrome hidden, video edge-to-edge)
+        self._stage_full = False   # fullscreen (chrome hidden, picture edge-to-edge)
+        self._full_surface = None   # which stage surface fullscreen belongs to
+        self._slide_full = False    # fullscreen was entered BY the slideshow
+        self._fs_user_hidden = None  # View-menu surfaces already off when it began
 
         # settle the toolbar on the empty state (everything inert until a file is
         # opened) and stop the engine cleanly on close.
@@ -450,7 +557,15 @@ class MediaViewer(nbapp.AppWindow):
         # Deferred to idle so it survives the run() show_all.
         if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
             arg = sys.argv[1]
-            GLib.idle_add(lambda: (self._display(arg), False)[1])
+            self._startup_id = GLib.idle_add(self._display_startup, arg)
+
+    def _display_startup(self, path):
+        """Show Finder's initial file only while this window still exists."""
+        self._startup_id = 0
+        if self._closed:
+            return False
+        self._display(path)
+        return False
 
     # -- empty / notice surfaces --
     def _empty_state(self):
@@ -523,6 +638,7 @@ class MediaViewer(nbapp.AppWindow):
             Gtk.Orientation.HORIZONTAL, 0, 1000, 1)
         self._v_seek.set_draw_value(False)
         self._v_seek.set_hexpand(True)
+        self._v_seek.get_accessible().set_name(_t("Video position"))
         self._v_seek.connect("button-press-event", self._on_vseek_press)
         self._v_seek.connect("button-release-event", self._on_vseek_release)
         self._v_seek.connect("change-value", self._on_vseek)
@@ -538,7 +654,7 @@ class MediaViewer(nbapp.AppWindow):
         self._v_full_btn.set_relief(Gtk.ReliefStyle.NONE)
         self._v_full_btn.get_style_context().add_class("toolbtn")
         self._v_full_btn.set_tooltip_text(_t("Fullscreen video (F)"))
-        self._v_full_btn.connect("clicked", lambda *_: self._toggle_video_fullscreen())
+        self._v_full_btn.connect("clicked", lambda *_: self._toggle_stage_fullscreen())
         ctl.pack_start(self._v_full_btn, False, False, 0)
         box.pack_start(ctl, False, False, 0)
 
@@ -552,14 +668,17 @@ class MediaViewer(nbapp.AppWindow):
         'notice'; the others are hidden. User-requested swaps crossfade; a
         telemetry/timer caller can pass ``animate=False`` for an instant end
         state."""
-        # Video-fullscreen belongs to the video stage and nothing else. Leaving
-        # that stage while it is on — Ctrl+O opening a picture mid-film (the
-        # toolbar is hidden, but the shortcut still works), a clip that fails to
-        # decode, trashing the last file — left the window with no menu bar, no
-        # toolbar, no filmstrip and the desktop panel still stood down, over a
-        # surface that has no Fullscreen button to press to get any of it back.
-        if which != "video" and getattr(self, "_vfull", False):
-            self._exit_video_fullscreen()
+        # Fullscreen belongs to the ONE stage that entered it and nothing else.
+        # Leaving that stage while it is on — Ctrl+O opening a picture mid-film
+        # (the toolbar is hidden, but the shortcut still works), a clip that
+        # fails to decode, trashing the last file — left the window with no menu
+        # bar, no toolbar, no filmstrip and the desktop panel still stood down,
+        # over a surface that has no Fullscreen button to press to get any of it
+        # back. Stepping to the next PHOTOGRAPH is not leaving: the image stage
+        # is still the one on screen, so a fullscreen slideshow stays full.
+        if (getattr(self, "_stage_full", False)
+                and which != getattr(self, "_full_surface", "video")):
+            self._exit_stage_fullscreen()
         surfaces = {"empty": self._empty, "image": self._scroll,
                     "video": self._video, "notice": self._notice}
         if which not in surfaces:
@@ -594,6 +713,17 @@ class MediaViewer(nbapp.AppWindow):
             _land()
             return
 
+        # HALF THE TOKEN PER HALF OF THE SWAP, and the arithmetic is the point:
+        # a duration token is the length of the WHOLE transition, so a depart
+        # and an arrive that each ran for PAGE made one surface swap take 400ms
+        # -- twice the page budget, and twice as slow as every other content
+        # replacement in the OS. This is the same split nbtransitions.replace
+        # makes (`half = int(duration) // 2`), which is what this path would use
+        # if the stage exchanged CHILDREN instead of toggling visibility on four
+        # sibling surfaces. Measured, not assumed: tools/transition_pacing_probe.py
+        # drives _show_surface and reads the drained frame trace.
+        half = nbmotion.PAGE // 2
+
         def _swap(completed):
             if gen != self._surface_gen:
                 return
@@ -608,15 +738,13 @@ class MediaViewer(nbapp.AppWindow):
                 stage.set_opacity(0.0)
             except Exception:
                 pass
-            nbmotion.fade_to(stage, 1.0, nbmotion.PAGE,
-                             nbmotion.EASE_OUT)
+            nbmotion.fade_to(stage, 1.0, half, nbmotion.EASE_OUT)
 
         # A whole document surface is replaced: depart, swap while invisible,
         # then arrive. nbmotion's policy makes this synchronous and equivalent
         # under Reduced Motion or when no frame clock is available.
         try:
-            nbmotion.fade_to(stage, 0.0, nbmotion.PAGE,
-                             nbmotion.EASE_IN, _swap)
+            nbmotion.fade_to(stage, 0.0, half, nbmotion.EASE_IN, _swap)
         except Exception:
             _land()                    # motion must never gate visible content
             try:
@@ -723,21 +851,30 @@ class MediaViewer(nbapp.AppWindow):
         once the folder holds more than one image."""
         has_img = self._orig_pixbuf is not None
         multi = len(self._siblings) > 1
+        # A video is its own standalone list of one, so Previous/Next are off —
+        # but saying "there are no other images in this folder" over a folder
+        # full of them was simply untrue. The filmstrip lists them; say so.
+        ext = os.path.splitext(self._media_path or "")[1].lower()
+        if ext in VIDEO_EXTS and self._strip_entries():
+            step_off = _t("Pick an image in the filmstrip to open it.")
+        else:
+            step_off = _t("There are no other images in this folder.")
         self._set_sensitive("zoomin", has_img)
         self._set_sensitive("zoomout", has_img)
         self._set_sensitive("rotate", has_img)
         self._set_sensitive("prev", multi)
         self._set_sensitive("next", multi)
         self._set_sensitive("play", multi)
-        self._set_sensitive("trash", bool(self._media_path))
+        shown = bool(getattr(self, "_shown_path", None))
+        self._set_sensitive("trash", shown)
         for name, enabled, normal, reason in (
                 ("zoomin", has_img, _t("Zoom in  (+)"), _t("No image is open.")),
                 ("zoomout", has_img, _t("Zoom out  (-)"), _t("No image is open.")),
                 ("rotate", has_img, _t("Rotate right (not saved to the file)"), _t("No image is open.")),
-                ("prev", multi, _t("Previous image  (←)"), _t("There are no other images in this folder.")),
-                ("next", multi, _t("Next image  (→)"), _t("There are no other images in this folder.")),
+                ("prev", multi, _t("Previous image  (←)"), step_off),
+                ("next", multi, _t("Next image  (→)"), step_off),
                 ("play", multi, _t("Start slideshow"), _t("A slideshow needs at least two images in the folder.")),
-                ("trash", bool(self._media_path), _t("Move to Trash  (Delete)"), _t("No file is open."))):
+                ("trash", shown, _t("Move to Trash  (Delete)"), _t("No file is open."))):
             button = self._btn.get(name)
             if button is not None:
                 button.set_tooltip_text(normal if enabled else reason)
@@ -774,7 +911,11 @@ class MediaViewer(nbapp.AppWindow):
         for name in self.INFO_FIELDS:
             val = self._info_vals.get(name)
             if val is not None:
-                val.set_text(mapping.get(name, "—"))
+                if name == "Name":
+                    # the file's own name, which need not carry an extension
+                    nbi18n.set_verbatim(val, mapping.get(name, "\u2014"))
+                else:
+                    val.set_text(mapping.get(name, "\u2014"))
 
     def _fill_info(self, path, pixbuf):
         try:
@@ -786,16 +927,30 @@ class MediaViewer(nbapp.AppWindow):
             "Name": os.path.basename(path),
             "Kind": KIND.get(ext, "File"),
         }
-        if len(self._siblings) > 1:
-            info["Photo"] = _t("%d of %d") % (self._sib_idx + 1,
+        # Counted from where the file actually stands in the folder. A file
+        # that has gone (stepped onto after being moved away) is no longer in
+        # the list at all, and printing a position for it named someone else's
+        # place in the folder.
+        if len(self._siblings) > 1 and path in self._siblings:
+            info["Photo"] = _t("%d of %d") % (self._siblings.index(path) + 1,
                                               len(self._siblings))
-        if pixbuf is not None:
-            info["Dimensions"] = "%d × %d px" % (
-                pixbuf.get_width(), pixbuf.get_height())
+        # The FILE's own size, not the working pixbuf's. A photograph over the
+        # decode budget is held smaller on purpose (_bounded_pixbuf), and Rotate
+        # turns the picture on screen without touching the file — reporting
+        # either as "Dimensions" described a file that does not exist.
+        recorded = getattr(self, "_file_dims", None)
+        dims = (recorded[1], recorded[2]) if (recorded and recorded[0] == path) \
+            else None
+        if dims is None and pixbuf is not None:
+            dims = (pixbuf.get_width(), pixbuf.get_height())
+        if dims is not None:
+            info["Dimensions"] = "%d × %d px" % dims
         if st is not None:
             info["File size"] = human(st.st_size)
-            info["Modified"] = time.strftime(
-                "%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+            # One date phrase across the OS: the same one the Finder's Get Info
+            # prints, through the same catalog lookup.
+            info["Modified"] = _t(time.strftime(
+                "%d %b %Y, %H:%M", time.localtime(st.st_mtime)))
         self._set_info(info)
 
     def _set_zoom(self, scale):
@@ -836,13 +991,52 @@ class MediaViewer(nbapp.AppWindow):
         strip.pack_start(scroll, True, True, 0)
         self._strip_scroll = scroll
         self._strip_row = row
+        # A narrower window is a shorter strip, and the cell that had been
+        # centred goes off the end of it: shrink the viewer while looking at
+        # photograph 7 of 8 and the strip stayed parked where it was, showing
+        # 1 to 6 and no sign of where you actually were. Re-centre whenever the
+        # visible width changes — and ONLY then, so nothing else here re-runs
+        # on the allocations a scroll or a rebuild produces.
+        self._strip_page = -1.0
+        scroll.connect("size-allocate", self._on_strip_alloc)
         return strip
 
+    def _on_strip_alloc(self, _w, _alloc):
+        adj = self._strip_scroll.get_hadjustment()
+        page = adj.get_page_size() if adj is not None else 0.0
+        if page == getattr(self, "_strip_page", -1.0):
+            return
+        self._strip_page = page
+        self._scroll_strip_to(self._shown_path or self._media_path, late=False)
+
     def _strip_entries(self):
-        """The image files the filmstrip represents: the image siblings in the
-        current folder (empty for a video or when nothing is open)."""
+        """The image files the filmstrip represents: the images in the folder
+        the current file is in (empty when nothing is open).
+
+        Scanned for a video too. _siblings makes a non-image a standalone list
+        of one — Previous/Next step through IMAGES and a clip is not one — and
+        deriving the strip from that list made the band under a film say "No
+        other images in this folder" about a folder that was full of them."""
+        current = self._media_path
+        if current and os.path.splitext(current)[1].lower() not in IMAGE_EXTS:
+            return self._folder_images(os.path.dirname(current) or ".")
         return [p for p in self._siblings
                 if os.path.splitext(p)[1].lower() in IMAGE_EXTS]
+
+    @staticmethod
+    def _folder_images(folder):
+        """The image files in `folder`, name-sorted, full paths.
+
+        ONE reading of "what images this folder holds", because two of them
+        drifted: the filmstrip scanned the folder while Move to Trash asked
+        _siblings, which for a video is a standalone list of one."""
+        try:
+            names = sorted(os.listdir(folder), key=str.lower)
+        except OSError:
+            return []
+        return [os.path.join(folder, name) for name in names
+                if os.path.splitext(name)[1].lower() in IMAGE_EXTS
+                and os.path.isfile(os.path.join(folder, name))]
 
     def _rebuild_strip(self, animate_new=True):
         """Rebuild the filmstrip for the current folder, but only when the set of
@@ -872,8 +1066,14 @@ class MediaViewer(nbapp.AppWindow):
             # what the user is looking at, so say what the strip is missing.
             # Both branches go through _t — the second used to be a bare
             # English literal, so it stayed English in all 16 other languages.
+            # "No OTHER images" only makes sense when the thing on screen is
+            # itself one of the folder's images; over a video it quietly
+            # claimed the clip was a photograph.
+            current = self._media_path
+            other = bool(current) and os.path.splitext(
+                current)[1].lower() in IMAGE_EXTS
             self._strip_empty.set_text(
-                _t("No other images in this folder") if self._media_path
+                _t("No other images in this folder") if other
                 else _t("No images"))
             self._strip_scroll.hide()
             self._strip_empty.show()
@@ -922,7 +1122,7 @@ class MediaViewer(nbapp.AppWindow):
         btn = Gtk.Button()
         btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.get_style_context().add_class("filmcell")
-        btn.set_tooltip_text(os.path.basename(path))
+        _set_user_tooltip(btn, os.path.basename(path))
         img = Gtk.Image()
         img.set_halign(Gtk.Align.CENTER)
         img.set_valign(Gtk.Align.CENTER)
@@ -951,6 +1151,14 @@ class MediaViewer(nbapp.AppWindow):
         one must not run here: a 25-second ffmpeg cap is not something an idle
         callback may spend, and a folder of them spent it once per cell. Those
         are collected and decoded together in a worker instead."""
+        # source_remove prevents a future dispatch, but cannot retract an idle
+        # callback already entered by the main loop while destroy is running.
+        # Do not decode another user file or touch torn-down filmstrip widgets.
+        if getattr(self, "_closed", False):
+            self._thumb_idle_id = 0
+            self._thumb_queue = []
+            self._thumb_slow = []
+            return False
         if not self._thumb_queue:
             self._thumb_idle_id = 0
             return False
@@ -1040,7 +1248,7 @@ class MediaViewer(nbapp.AppWindow):
             else:
                 ctx.remove_class("filmsel")
 
-    def _scroll_strip_to(self, path):
+    def _scroll_strip_to(self, path, late=True):
         """Bring the selected thumbnail into view (deferred to idle so the cell
         has been allocated a position first)."""
         btn = self._strip_btns.get(path)
@@ -1062,14 +1270,37 @@ class MediaViewer(nbapp.AppWindow):
                 adj = self._strip_scroll.get_hadjustment()
                 if adj is not None:
                     a = btn.get_allocation()
+                    # WHERE IN THE ROW, not where in its own parent. Every cell
+                    # of a newly opened folder is wrapped in a Gtk.Revealer,
+                    # which owns a GdkWindow of its own, so the button's
+                    # allocation reads x=0 for all of them and the strip stayed
+                    # parked on the first thumbnail however far you walked.
+                    x = a.x
+                    try:
+                        # PyGObject answers (x, y) here, and (ok, x, y) on the
+                        # older binding; None when the two widgets share no
+                        # ancestor. Read the x out of whichever shape arrives.
+                        got = btn.translate_coordinates(self._strip_row, 0, 0)
+                        if got and len(got) >= 2 and (len(got) == 2 or got[0]):
+                            x = got[-2]
+                    except Exception:
+                        pass
                     page = adj.get_page_size()
-                    target = a.x + a.width / 2.0 - page / 2.0
+                    target = x + a.width / 2.0 - page / 2.0
                     hi = max(adj.get_lower(), adj.get_upper() - page)
                     adj.set_value(min(max(adj.get_lower(), target), hi))
             except Exception:
                 pass
             return False
         GLib.idle_add(_do)
+        if not late:
+            return
+        # A revealer only reaches its final width when its reveal has landed,
+        # and the cell measured before that is measured in the wrong place.
+        # One late repeat costs nothing and is what puts an opening folder's
+        # selected thumbnail on screen. A resize needs no such repeat — no cell
+        # is arriving — and a drag would queue one of these per frame.
+        GLib.timeout_add(nbmotion.SURFACE_IN + 60, _do)
 
     def _on_strip_click(self, _b, path):
         if path == self._media_path or not os.path.isfile(path):
@@ -1130,6 +1361,8 @@ class MediaViewer(nbapp.AppWindow):
             # video is standalone: reset image state and hand off to the engine
             self._stop_slideshow()
             self._orig_pixbuf = None
+            self._shown_path = path
+            self._file_dims = None
             self._zoom = None
             self._set_zoom(None)
             self._show_video(path)
@@ -1141,25 +1374,23 @@ class MediaViewer(nbapp.AppWindow):
         # image path — never needs the video engine
         self._stop_video()
         self._decode_gen += 1
-        try:
-            pixbuf = _oriented(_bounded_pixbuf(path))
-        except Exception:                                         # noqa: BLE001
-            # Nothing in GdkPixbuf reads this one, so it needs the CLI
-            # fallback — rsvg-convert or ffmpeg, a whole transcode, capped at
-            # 25 seconds. That ran HERE, on the GTK thread: one click on a WebP
-            # or an SVG and the window stopped repainting, stopped scrolling
-            # and could not be closed until the transcode finished or the cap
-            # expired. The formats a person is least likely to expect trouble
-            # from were the ones that froze the viewer.
-            self._decode_in_background(path, user_caused)
-            return
+        # PNG/JPEG decode can be just as expensive as the CLI fallback: a small
+        # compressed photograph may expand to tens of millions of pixels. Doing
+        # the "fast" GdkPixbuf path here still froze repaint/close on the GTK
+        # thread. The existing replaceable worker handles both paths safely and
+        # drops stale results when browsing moves on.
+        self._decode_in_background(path, user_caused)
+        return
 
-        self._present_image(path, pixbuf, user_caused)
-
-    def _present_image(self, path, pixbuf, user_caused):
+    def _present_image(self, path, pixbuf, user_caused, file_dims=None):
         """Put a decoded image on the stage. Split out of _show so the slow
         decode path can reach the same ending from a worker's callback."""
         self._orig_pixbuf = pixbuf
+        # From here the whole window is describing THIS file.
+        self._shown_path = path
+        if not file_dims and pixbuf is not None:
+            file_dims = (pixbuf.get_width(), pixbuf.get_height())
+        self._file_dims = ((path,) + tuple(file_dims)) if file_dims else None
         self._fit_mode = True           # a freshly opened image fits the stage
         self._last_alloc = (0, 0)       # force a re-fit for the new image
         self._show_surface("image", animate=user_caused)
@@ -1169,19 +1400,43 @@ class MediaViewer(nbapp.AppWindow):
         self._rebuild_strip() if user_caused else self._rebuild_strip(False)
 
     def _image_failed(self, path, user_caused):
-        """Nothing on this machine could decode `path`."""
+        """`path` cannot be shown: nothing on this machine can decode it, or it
+        is not there any more."""
         self._orig_pixbuf = None
         self._zoom = None
+        self._shown_path = path
+        self._file_dims = None
         self._stop_slideshow()
-        # same voice as the video failure below: what happened, then a way on
-        self._show_notice(
-            "This file cannot be opened",
-            "The file may be damaged, or saved in a format Notebook OS "
-            "does not read. Try another file.")
+        if not os.path.exists(path):
+            # A file moved or deleted behind the viewer used to be reported as
+            # damaged or saved in an unreadable format — a diagnosis of a file
+            # that is simply gone, over a strip cell and a count that both went
+            # on offering it. Say what happened and take it out of the folder.
+            self._drop_sibling(path)
+            self._show_notice(
+                _t("This file is no longer here"),
+                _t("It was moved or deleted since this folder was opened. "
+                   "Try another file."))
+        else:
+            # same voice as the video failure below: what happened, then a way on
+            self._show_notice(
+                "This file cannot be opened",
+                "The file may be damaged, or saved in a format Notebook OS "
+                "does not read. Try another file.")
         self._fill_info(path, None)
         self._set_zoom(None)
         self._update_controls()
         self._rebuild_strip() if user_caused else self._rebuild_strip(False)
+
+    def _drop_sibling(self, path):
+        """Take a file that is no longer on disk out of the folder list, so the
+        count, the filmstrip and Previous/Next stop offering it."""
+        if path not in self._siblings:
+            return
+        where = self._siblings.index(path)
+        self._siblings = [p for p in self._siblings if p != path]
+        self._sib_idx = min(where, max(len(self._siblings) - 1, 0))
+        self._thumb_cache.pop(path, None)
 
     def _decode_in_background(self, path, user_caused):
         """Transcode and decode `path` off the GTK thread, then show it.
@@ -1191,25 +1446,57 @@ class MediaViewer(nbapp.AppWindow):
         pointless. Queueing them would make the viewer lag further behind the
         person the longer they browsed."""
         generation = self._decode_gen
-        self._show_notice(_t("Opening %s") % os.path.basename(path), "")
+
+        # The picture on the stage stays up until the next one is READY. An
+        # "Opening…" card the instant a key goes down made every step through
+        # a folder of ordinary photographs flash grey between pictures (twice
+        # the paint on the software path, and a card nobody had time to
+        # read). The card is for a decode that is actually taking a while, so
+        # it waits NOTICE_AFTER_MS and is cancelled by whichever finishes
+        # first: the decode, the failure, or a newer request.
+        def show_notice():
+            self._notice_source = 0
+            if self._closed or generation != self._decode_gen:
+                return False
+            # The card names the file it is opening, so from this moment that
+            # is the file the window is describing — Delete included.
+            self._shown_path = path
+            self._show_notice(_t("Opening %s") % os.path.basename(path), "")
+            return False
+
+        self._cancel_notice_timer()
+        self._notice_source = GLib.timeout_add(NOTICE_AFTER_MS, show_notice)
 
         def work(_job):
-            return _pixbuf_any(path)
+            real = []
+            pixbuf = _pixbuf_any(path, real)
+            return (pixbuf, tuple(real) if len(real) == 2 else None)
 
-        def done(pixbuf):
+        def done(result):
             # Two ways to be stale: the window is gone, or the person has
             # already asked for a different picture.
             if self._closed or generation != self._decode_gen:
                 return
-            self._present_image(path, pixbuf, user_caused)
+            self._cancel_notice_timer()
+            pixbuf, file_dims = result
+            self._present_image(path, pixbuf, user_caused, file_dims)
 
         def failed(_error):
             if self._closed or generation != self._decode_gen:
                 return
+            self._cancel_notice_timer()
             self._image_failed(path, user_caused)
 
         self.jobs.start("decode", work, on_done=done, on_error=failed,
                         policy=nbjobs.REPLACE)
+
+    def _cancel_notice_timer(self):
+        source, self._notice_source = getattr(self, "_notice_source", 0), 0
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:                                     # noqa: BLE001
+                pass
 
     def _show_notice(self, title, sub):
         self._notice_title.set_text(title)
@@ -1226,11 +1513,23 @@ class MediaViewer(nbapp.AppWindow):
         No confirmation: on this OS destruction is reversible instead of
         interrogated. (The docstring here used to say "after confirming" and
         the File menu printed an ellipsis promising a card — neither was true
-        since the confirm was retired; see _confirm, which nothing calls.)"""
-        path = self._media_path
-        if not (path and os.path.isfile(path)):
-            return
+        since the confirm was retired; see _confirm, which nothing calls.)
+
+        THE FILE ON SCREEN, not self._media_path. Stepping to the next picture
+        names it immediately while its decode is still running, and for as long
+        as that took — seconds for a big photograph on the software path — the
+        stage, the Info panel and the filmstrip all still said the previous
+        one. Delete was reading the name nothing on screen showed, so it took
+        a picture the person had never seen."""
+        path = getattr(self, "_shown_path", None)
+        if not path:
+            return          # nothing on the stage yet, so nothing to remove
         self._stop_slideshow()      # taking manual control ends a slideshow
+        if not os.path.isfile(path):
+            # Gone behind the viewer. Returning in silence read as a dead key;
+            # say what happened, exactly as stepping onto it does.
+            self._image_failed(path, True)
+            return
         self._do_trash(path)
 
     def _trash_origin_path(self, trashed_base):
@@ -1254,32 +1553,81 @@ class MediaViewer(nbapp.AppWindow):
             while os.path.exists(dst):
                 dst = os.path.join(trash, "%s (%d)" % (base, n))
                 n += 1
-            try:
-                os.rename(path, dst)
-            except OSError:
-                # a file on another disk (a memory card, a USB stick) cannot be
-                # renamed across the filesystem boundary — copy it over instead
-                shutil.move(path, dst)
-            # Part of the trash transaction, not a cache: without this sidecar
-            # the Finder's Put Back has no folder to return the file to. Media
-            # moved the bytes and forgot where they came from, so a picture
-            # trashed from here could only be dragged back by hand.
+            # Write the Put Back record BEFORE moving the only file bytes. If
+            # this fails, nothing has left its original folder and the action
+            # can truthfully report failure. A failed move removes the staged
+            # record again.
             origin = self._trash_origin_path(os.path.basename(dst))
-            if origin is not None:
+            if origin is None:
+                raise OSError("cannot create the trash origin directory")
+            nbapp.atomic_write_text(origin, path)
+            try:
                 try:
-                    nbapp.atomic_write_text(origin, path)
-                except (OSError, UnicodeError):
+                    os.rename(path, dst)
+                except OSError:
+                    # A file on another disk cannot be renamed across the
+                    # filesystem boundary — copy it over instead.
+                    shutil.move(path, dst)
+            except (OSError, shutil.Error):
+                try:
+                    os.unlink(origin)
+                except OSError:
                     pass
-        except (OSError, shutil.Error):
-            self._show_notice(
+                raise
+        except (OSError, UnicodeError, shutil.Error):
+            # THE PICTURE STAYS UP. Nothing moved, nothing was lost and the
+            # file is still open — but a notice card replaced the photograph
+            # with a full-stage error, so a move that failed looked exactly
+            # like a file that had gone bad, over a toolbar still reporting the
+            # zoom of a picture no longer on screen. The failure is said where
+            # every other outcome of this action is said: the status line under
+            # the stage, the same one that carries "Moved … to the Trash" and
+            # "Could not undo that".
+            self._flash("%s · %s" % (
                 _t("This file could not be moved to the Trash"),
-                _t("The disk may be full or write-protected."))
+                _t("The disk may be full or write-protected.")))
             return
+        self._shown_path = None     # what left is no longer on the stage
+        # Say what happened and how to take it back. A picture that simply
+        # changed to the next one gave no way to tell a Delete that worked from
+        # a key that did nothing — the same action in the Finder flashes this
+        # exact phrase.
+        self._undo_trash = (dst, path, origin, self._identity(dst))
+        self._flash("%s · %s" % (_t("Moved “%s” to the Trash") % base,
+                                 _t("Ctrl+Z to undo")))
         # carry on where the user was: show the next picture in the folder (or
         # the one before it, if the trashed shot was the last)
         remaining = [p for p in self._siblings if p != path]
+        if not remaining and os.path.splitext(path)[1].lower() not in IMAGE_EXTS:
+            # A video is its own standalone list of one — Previous/Next step
+            # through IMAGES and a clip is not one — so an empty list here says
+            # nothing whatever about the folder. Trashing a film out of a
+            # folder of photographs emptied the entire viewer: the stage went
+            # back to "No file open", the Info panel to dashes, and a filmstrip
+            # that had been showing every one of those photographs a moment
+            # earlier said "No images". They were all still on the disk.
+            remaining = [p for p in self._folder_images(
+                os.path.dirname(path) or ".") if p != path]
+            self._sib_idx = 0
+        # getattr, not self._thumb_cache: trashing is reachable from a viewer
+        # that never built a filmstrip (and from every suite that drives the
+        # real handler on a partial instance), and a housekeeping line must
+        # not be what raises. Same guard the calendar/journal/music stores
+        # took after the identical fixture-contract regression.
+        getattr(self, "_thumb_cache", {}).pop(path, None)
+        pending = getattr(self, "_media_path", None)
+        if pending is not None and pending != path and pending in remaining:
+            # The picture that left the folder was the one on screen, but the
+            # person had already stepped on: let the decode they asked for
+            # land, and just drop the trashed file from the folder.
+            self._siblings = remaining
+            self._sib_idx = remaining.index(pending)
+            self._update_controls()
+            self._rebuild_strip()
+            return
         if not remaining:
             self._media_path = None
+            self._file_dims = None
             self._orig_pixbuf = None
             self._zoom = None
             self._siblings = []
@@ -1292,8 +1640,79 @@ class MediaViewer(nbapp.AppWindow):
             return
         self._siblings = remaining
         self._sib_idx = min(self._sib_idx, len(remaining) - 1)
-        self._thumb_cache.pop(path, None)
         self._display(remaining[self._sib_idx], rescan=False)
+
+    @staticmethod
+    def _identity(path):
+        """(device, inode) — what a pathname is not. Between the move and
+        Ctrl+Z something else can take the name in the Trash, and putting THAT
+        back would move a file nobody asked to move."""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        return (st.st_dev, st.st_ino)
+
+    def _undo_last_trash(self):
+        """Put the file this window last moved to the Trash back where it came
+        from. One step, like the Finder's: it covers the wrong key and the
+        wrong picture, which is what actually happens."""
+        record = getattr(self, "_undo_trash", None)
+        if not record:
+            self._flash(_t("There is nothing to undo"))
+            return
+        import shutil
+        dst, src, origin, identity = record
+        self._undo_trash = None
+        if (self._identity(dst) != identity or os.path.lexists(src)
+                or not os.path.lexists(dst)):
+            self._flash(_t("That item changed. Nothing was undone."))
+            return
+        try:
+            os.makedirs(os.path.dirname(src) or HOME, exist_ok=True)
+            try:
+                os.rename(dst, src)
+            except OSError:
+                shutil.move(dst, src)
+        except (OSError, UnicodeError, shutil.Error):
+            self._flash(_t("Could not undo that"))
+            return
+        if origin:
+            try:
+                os.remove(origin)
+            except OSError:
+                pass
+        self._flash(_t("Undone: %s") % _t("Move to Trash"))
+        self._display(src)
+
+    def _flash(self, message, ms=4000):
+        """Say what an action just did, under the stage, then take it away.
+
+        Never lets a status line stand between a person and their file: if the
+        band is not there (a viewer built for a headless check), the move still
+        happened and this simply says nothing."""
+        label = getattr(self, "_flash_lbl", None)
+        if label is None:
+            return
+        try:
+            label.set_text(message)
+            label.show()
+        except Exception:                                         # noqa: BLE001
+            return
+        old = getattr(self, "_flash_id", 0)
+        if old:
+            try:
+                GLib.source_remove(old)
+            except Exception:                                     # noqa: BLE001
+                pass
+        self._flash_id = GLib.timeout_add(ms, self._flash_clear)
+
+    def _flash_clear(self):
+        self._flash_id = 0
+        label = getattr(self, "_flash_lbl", None)
+        if label is not None and not getattr(self, "_closed", False):
+            label.hide()
+        return False
 
     # -- in-window confirmation (reliable on the no-compositor stack) --
     def _confirm(self, title, message, ok_label, on_yes):
@@ -1384,9 +1803,12 @@ class MediaViewer(nbapp.AppWindow):
             return self._fit_scale()
         return self._zoom
 
-    def _render_image(self):
+    def _render_image(self, anchor=None):
         """Scale the working pixbuf by the current scale, show it, and update the
-        real zoom percentage. Safe to call whenever an image is loaded."""
+        real zoom percentage. Safe to call whenever an image is loaded.
+
+        `anchor` is the point the stage was looking at (see _view_anchor); it is
+        put back under the same place once the resized picture is allocated."""
         pb = self._orig_pixbuf
         if pb is None:
             return
@@ -1415,23 +1837,147 @@ class MediaViewer(nbapp.AppWindow):
             nh = max(1, int(nh * k))
             scale *= k
         self._zoom = scale
+        self._set_zoom(scale)
+        self._render_gen = getattr(self, "_render_gen", 0) + 1
+        generation = self._render_gen
+        if nw * nh <= SYNC_SCALE_PIXELS:
+            # small enough to be invisible on the main loop (see the constant)
+            self._apply_scaled(self._scale_pixbuf(pb, nw, nh), sf, anchor)
+            return
+
+        # A bilinear scale to this size costs the better part of a second on
+        # the software path, and it was being spent on the GTK thread: one
+        # click at a deep zoom froze the whole window, repaint and Close
+        # included. The picture already on the stage stays up while the worker
+        # scales the new one — the same bargain the decode path makes.
+        def work(_job):
+            return self._scale_pixbuf(pb, nw, nh)
+
+        def done(scaled):
+            if self._closed or generation != self._render_gen:
+                return
+            self._apply_scaled(scaled, sf, anchor)
+
+        self.jobs.start("scale", work, on_done=done,
+                        on_error=lambda _error: None,
+                        policy=nbjobs.REPLACE)
+
+    @staticmethod
+    def _scale_pixbuf(pb, nw, nh):
         try:
-            scaled = pb.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+            return pb.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+        except Exception:                                         # noqa: BLE001
+            return None
+
+    def _apply_scaled(self, scaled, sf, anchor):
+        """Put a finished scale on the stage and restore the view point."""
+        if scaled is None:
+            return
+        try:
             # Handed over as a surface carrying the device scale: those extra
             # pixels are finer than logical units, and set_from_pixbuf would
             # instead draw the photo at sf times its intended size.
             nbicons.set_image_pixbuf(self._img, scaled, sf)
         except Exception:
-            pass
-        self._set_zoom(scale)
+            return
+        self._anchor_after_render(anchor)
 
-    def _zoom_by(self, factor):
+    def _view_anchor(self, x=None, y=None):
+        """What the stage is looking at, per axis, as (fraction of the picture,
+        fraction of the visible page). With no x/y that is the middle of the
+        stage; Ctrl+wheel passes the pointer instead.
+
+        A zoom has to put this back. The scroller keeps its raw offset when the
+        picture under it grows, so from a fitted photograph three zoom-ins
+        landed on the top-left corner and every further step drifted further
+        into it."""
+        out = []
+        for adj, pos in ((self._scroll.get_hadjustment(), x),
+                         (self._scroll.get_vadjustment(), y)):
+            upper = adj.get_upper() if adj is not None else 0
+            page = adj.get_page_size() if adj is not None else 0
+            if adj is None or upper <= 0 or page <= 0:
+                out.append((0.5, 0.5))
+                continue
+            at = page / 2.0 if pos is None else max(0.0, min(page, float(pos)))
+            frac = (adj.get_value() + at) / upper
+            out.append((min(1.0, max(0.0, frac)), at / page))
+        return tuple(out)
+
+    def _anchor_after_render(self, anchor):
+        """Put `anchor` back under the same place on the stage, once the
+        resized picture has been allocated.
+
+        It HAS to wait for that allocation: the scroller only learns its new
+        range when the new pixbuf has been laid out, and a value set before
+        then is silently clamped into the old range."""
+        if anchor is None or getattr(self, "_closed", False):
+            return
+        self._drop_anchor_handler()
+
+        def _place(*_args):
+            self._drop_anchor_handler()
+            for adj, (frac, at) in (
+                    (self._scroll.get_hadjustment(), anchor[0]),
+                    (self._scroll.get_vadjustment(), anchor[1])):
+                if adj is None:
+                    continue
+                page = adj.get_page_size()
+                lower = adj.get_lower()
+                hi = max(lower, adj.get_upper() - page)
+                want = frac * adj.get_upper() - at * page
+                adj.set_value(min(max(lower, want), hi))
+        try:
+            self._anchor_handler = self._img.connect("size-allocate", _place)
+        except Exception:                                         # noqa: BLE001
+            _place()
+            return
+        # A render that does not change the layout never allocates, and a
+        # handler left connected would re-centre on some unrelated resize
+        # later. Let it go after the allocation could only have happened.
+        GLib.timeout_add(400, self._drop_anchor_handler)
+
+    def _drop_anchor_handler(self):
+        handler = getattr(self, "_anchor_handler", 0)
+        if handler:
+            try:
+                self._img.disconnect(handler)
+            except Exception:                                     # noqa: BLE001
+                pass
+        self._anchor_handler = 0
+        return False
+
+    def _effective_scale(self, scale):
+        """The scale _render_image can actually reach: `scale` trimmed by the
+        MAX_PIX memory ceiling, with that method's own arithmetic."""
+        pb = self._orig_pixbuf
+        if pb is None:
+            return scale
+        sf = nbicons.scale_factor()
+        nw = max(1, int(round(pb.get_width() * scale * sf)))
+        nh = max(1, int(round(pb.get_height() * scale * sf)))
+        big = max(nw, nh)
+        if big > MAX_PIX:
+            scale *= MAX_PIX / float(big)
+        return scale
+
+    def _zoom_by(self, factor, anchor=None):
         if self._orig_pixbuf is None:
             return
         base = self._zoom if self._zoom else self._fit_scale()
+        want = max(ZOOM_MIN, min(ZOOM_MAX, base * factor))
+        # A click that cannot change the picture does nothing. Past the point
+        # where MAX_PIX trims every further step back to the same scale, each
+        # of those clicks still paid for a full-size bilinear scale to produce
+        # the identical image.
+        if (self._zoom is not None and not self._fit_mode
+                and abs(self._effective_scale(want) - self._zoom) < 1e-6):
+            return
+        if anchor is None:
+            anchor = self._view_anchor()
         self._fit_mode = False          # a manual zoom leaves fit mode
-        self._zoom = max(ZOOM_MIN, min(ZOOM_MAX, base * factor))
-        self._render_image()
+        self._zoom = want
+        self._render_image(anchor)
 
     def _on_zoom_in(self, _b=None):
         self._zoom_by(ZOOM_STEP)
@@ -1452,17 +1998,74 @@ class MediaViewer(nbapp.AppWindow):
         self._fit_to_window()
 
     def _on_rotate(self, _b=None):
-        if self._orig_pixbuf is None:
+        pb = self._orig_pixbuf
+        if pb is None:
             return
+        if pb.get_width() * pb.get_height() <= SYNC_SCALE_PIXELS:
+            self._land_rotation(pb, self._turn_pixbuf(pb, 1))
+            return
+        # Turning a 24-megapixel photograph is another half-second of GTK
+        # thread, on top of the scale. Off it goes — and the turns are COUNTED,
+        # so a second click while the first is still turning is not swallowed
+        # by the worker's replace policy.
+        self._turns_queued = getattr(self, "_turns_queued", 0) + 1
+        if not getattr(self, "_turning", False):
+            self._turning = True
+            self._run_rotation()
+
+    def _run_rotation(self):
+        base = self._orig_pixbuf
+        quarters, self._turns_queued = getattr(self, "_turns_queued", 0), 0
+        if base is None or quarters <= 0:
+            self._turning = False
+            return
+
+        def work(_job):
+            return self._turn_pixbuf(base, quarters)
+
+        def done(turned):
+            self._turning = False
+            if self._closed:
+                return
+            self._land_rotation(base, turned)
+            if getattr(self, "_turns_queued", 0) and self._orig_pixbuf is turned:
+                self._turning = True
+                self._run_rotation()
+
+        def failed(_error):
+            self._turning = False
+            self._turns_queued = 0
+
+        self.jobs.start("rotate", work, on_done=done, on_error=failed,
+                        policy=nbjobs.REPLACE)
+
+    @staticmethod
+    def _turn_pixbuf(pb, quarters):
+        turn = {1: GdkPixbuf.PixbufRotation.CLOCKWISE,
+                2: GdkPixbuf.PixbufRotation.UPSIDEDOWN,
+                3: GdkPixbuf.PixbufRotation.COUNTERCLOCKWISE}.get(quarters % 4)
+        if turn is None:
+            return pb                      # four quarter-turns is where it was
         try:
-            self._orig_pixbuf = self._orig_pixbuf.rotate_simple(
-                GdkPixbuf.PixbufRotation.CLOCKWISE)
-        except Exception:
+            return pb.rotate_simple(turn)
+        except Exception:                                         # noqa: BLE001
+            return None
+
+    def _land_rotation(self, base, turned):
+        """Show a finished turn — only if it is a turn of the picture that is
+        still on the stage. Opening another file mid-turn replaces the working
+        pixbuf, and landing this one would put the previous photograph back."""
+        if turned is None or self._orig_pixbuf is not base:
             return
+        self._orig_pixbuf = turned
         # keep the current mode/zoom across the rotate; fit mode refits to the
         # swapped dimensions, manual mode keeps the user's factor.
         self._render_image()
-        self._fill_info(self._media_path, self._orig_pixbuf)  # dims swapped
+        # Info still describes the FILE: the tooltip says this turn is not
+        # saved, so relabelling the file's Dimensions as the rotated size was
+        # the panel contradicting the button (_fill_info keeps _file_dims).
+        self._fill_info(self._shown_path or self._media_path,
+                        self._orig_pixbuf)
 
     def _on_scroll(self, _w, ev):
         if self._orig_pixbuf is None:
@@ -1470,15 +2073,17 @@ class MediaViewer(nbapp.AppWindow):
         if not (ev.state & Gdk.ModifierType.CONTROL_MASK):
             return False              # let the scroller pan, as it always did
         d = ev.direction
+        # the pointer is what a wheel zoom keeps still, not the middle
+        at = self._view_anchor(ev.x, ev.y)
         if d == Gdk.ScrollDirection.UP:
-            self._on_zoom_in()
+            self._zoom_by(ZOOM_STEP, at)
         elif d == Gdk.ScrollDirection.DOWN:
-            self._on_zoom_out()
+            self._zoom_by(1.0 / ZOOM_STEP, at)
         elif d == Gdk.ScrollDirection.SMOOTH:
             ok, _dx, dy = ev.get_scroll_deltas()
             if not ok or not dy:
                 return False
-            (self._on_zoom_out if dy > 0 else self._on_zoom_in)()
+            self._zoom_by(1.0 / ZOOM_STEP if dy > 0 else ZOOM_STEP, at)
         else:
             return False
         return True
@@ -1516,6 +2121,8 @@ class MediaViewer(nbapp.AppWindow):
 
     def _on_slideshow(self, _b=None):
         if self._slideshow_id:
+            # _stop_slideshow gives back the fullscreen the slideshow asked
+            # for, wherever the stop came from. One rule, in one place.
             self._stop_slideshow()
         else:
             self._start_slideshow()
@@ -1525,6 +2132,12 @@ class MediaViewer(nbapp.AppWindow):
             return
         self._slideshow_id = GLib.timeout_add(SLIDESHOW_MS, self._slideshow_tick)
         self._set_slide_active(True)
+        # A slideshow inside a toolbar, an Info panel and a filmstrip is a
+        # thumbnail with furniture around it. Fill the screen for it, and give
+        # the chrome back when the slideshow stops (Esc leaves either way).
+        if not self._stage_full and self._scroll.get_visible():
+            self._enter_stage_fullscreen()
+            self._slide_full = self._stage_full
 
     def _stop_slideshow(self):
         if self._slideshow_id:
@@ -1534,6 +2147,19 @@ class MediaViewer(nbapp.AppWindow):
                 pass
             self._slideshow_id = 0
         self._set_slide_active(False)
+        # The fullscreen the SLIDESHOW asked for ends with the slideshow,
+        # however it ended. This give-back used to live in the toolbar handler
+        # alone — and that button sits on the toolbar, which the slideshow's own
+        # fullscreen hides. So the branch could not be reached by anything a
+        # person does, while every way they actually stop one (Delete, an arrow
+        # key, a filmstrip pick, Ctrl+O) left them in a chromeless full screen
+        # with no menu bar, no toolbar, no filmstrip and nothing at all to say
+        # the slideshow had ended. A fullscreen the person chose with F is
+        # still theirs to leave: _slide_full is what tells the two apart.
+        if (getattr(self, "_slide_full", False)
+                and getattr(self, "_stage_full", False)
+                and not getattr(self, "_closed", False)):
+            self._exit_stage_fullscreen()
 
     def _slideshow_tick(self):
         sibs = self._siblings
@@ -1553,7 +2179,9 @@ class MediaViewer(nbapp.AppWindow):
                 ctx.add_class("active")
             else:
                 ctx.remove_class("active")
-            btn.set_tooltip_text(_t("Stop slideshow") if on else _t("Start slideshow"))
+            action = _t("Stop slideshow") if on else _t("Start slideshow")
+            btn.set_tooltip_text(action)
+            btn.get_accessible().set_name(action)
         img = self._btn_img.get("play")
         if img is not None:
             try:
@@ -1726,8 +2354,9 @@ class MediaViewer(nbapp.AppWindow):
         # 'pause' marks a playing clip (the button pauses it); 'play' marks a
         # paused clip (the button resumes it). Keep the tooltip in step.
         try:
-            self._v_play.set_tooltip_text(
-                _t("Pause") if name == "pause" else "Play")
+            action = _t("Pause") if name == "pause" else _t("Play")
+            self._v_play.set_tooltip_text(action)
+            self._v_play.get_accessible().set_name(action)
         except Exception:
             pass
         try:
@@ -1813,9 +2442,17 @@ class MediaViewer(nbapp.AppWindow):
 
     def _set_seek(self, v):
         try:
-            self._v_seek.set_value(max(0.0, min(1000.0, v)))
+            value = max(0.0, min(1000.0, v))
+            self._v_seek.set_value(value)
+            self._update_seek_accessible(value)
         except Exception:
             pass
+
+    def _update_seek_accessible(self, value):
+        duration = max(0, int(getattr(self, "_v_duration_ns", 0)))
+        position = int(duration * (max(0.0, min(1000.0, value)) / 1000.0))
+        self._v_seek.get_accessible().set_description(
+            "%s / %s" % (self._fmt_ns(position), self._fmt_ns(duration)))
 
     def _on_vseek_press(self, *_):
         self._v_user_seeking = True
@@ -1830,6 +2467,7 @@ class MediaViewer(nbapp.AppWindow):
             if self._player is not None and self._v_duration_ns > 0:
                 v = max(0.0, min(1000.0, value))
                 ns = int(self._v_duration_ns * (v / 1000.0))
+                self._update_seek_accessible(v)
                 self._player.seek_simple(
                     Gst.Format.TIME,
                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, ns)
@@ -1853,6 +2491,13 @@ class MediaViewer(nbapp.AppWindow):
         # set_state(NULL), or already queued behind this destroy handler, must
         # see a closed owner and do nothing.
         self._closed = True
+        startup_id = getattr(self, "_startup_id", 0)
+        self._startup_id = 0
+        if startup_id:
+            try:
+                GLib.source_remove(startup_id)
+            except Exception:
+                pass
         try:
             self.jobs.close()
         except Exception:                                         # noqa: BLE001
@@ -1860,36 +2505,66 @@ class MediaViewer(nbapp.AppWindow):
         self._stop_slideshow()
         self._stop_video()
         self._cancel_thumbs()
+        self._cancel_notice_timer()
+        self._drop_anchor_handler()
+        flash = getattr(self, "_flash_id", 0)
+        self._flash_id = 0
+        if flash:
+            try:
+                GLib.source_remove(flash)
+            except Exception:
+                pass
         # The fullscreen controls' auto-hide is a one-shot, so it does not leak
         # forever — but closing the window while it is pending left it to fire
         # into a destroyed widget tree three seconds later. Every other timer
         # here is cancelled on the way out; this one was simply missed.
         self._fs_cancel_timer()
+        # Give the desktop's menu bar back. Closing the window mid-fullscreen
+        # left the flag file behind holding this process's token; the panel
+        # only stands up again once it notices the process has gone, so the
+        # machine spent that gap with no menu bar for no reason.
+        if getattr(self, "_stage_full", False):
+            self._stage_full = False
+            self._hide_panel(False)
 
     # -- keyboard --
     def _on_key(self, w, ev):
-        """Viewer shortcuts, layered over the base. Ctrl+O opens a file; with an
-        image loaded, +/- zoom and 0 fits to the window; with more than one image
-        in the folder, ← / → (or PageUp/PageDown) step through them. Everything
-        else — including Esc, which the base uses to dismiss overlays / close —
-        falls through to super()._on_key. Keys are only claimed when no dropdown
-        menu or About card is capturing them."""
+        """Viewer shortcuts, layered over the base. Ctrl+O opens a file and
+        Ctrl+Z takes back the last Move to Trash; with an image loaded, +/- zoom
+        and 0 fits to the window; with more than one image in the folder, ← / →
+        (or PageUp/PageDown) step through them; F / F11 fill the screen with
+        whichever stage is up. Everything else — including Esc, which the base
+        uses to dismiss overlays / close — falls through to super()._on_key.
+        Keys are only claimed when no dropdown menu or About card is capturing
+        them."""
         # a confirm card owns Esc (and swallows the shortcuts beneath it) until
         # it is answered — Esc must never skip past it to close the whole app
         if getattr(self, "_confirm_layer", None) is not None:
             if ev.keyval == Gdk.KEY_Escape:
                 self._close_confirm()
             return True
+        # Nothing underneath a dropdown or the About card is live: they own the
+        # keyboard until they are dismissed. This used to test _about_layer, an
+        # attribute nbapp stopped setting when it renamed the card's handles, so
+        # the guard was never true and every viewer shortcut — Right, +, and
+        # Delete — still fired under an open About card.
+        capturing = (self._menu_open is not None
+                     or getattr(self, "_about_close", None) is not None)
         if ev.state & Gdk.ModifierType.CONTROL_MASK:
+            if capturing:
+                return super()._on_key(w, ev)
             if ev.keyval in (Gdk.KEY_o, Gdk.KEY_O):
                 self._on_open()
                 return True
+            if (ev.keyval in (Gdk.KEY_z, Gdk.KEY_Z)
+                    and not (ev.state & Gdk.ModifierType.SHIFT_MASK)):
+                self._undo_last_trash()
+                return True
         elif (not (ev.state & Gdk.ModifierType.MOD1_MASK)
-                and self._menu_open is None
-                and getattr(self, "_about_layer", None) is None):
+                and not capturing):
             kv = ev.keyval
             if (kv in (Gdk.KEY_Delete, Gdk.KEY_KP_Delete)
-                    and self._media_path):
+                    and getattr(self, "_shown_path", None)):
                 self._on_trash()
                 return True
             if self._orig_pixbuf is not None:
@@ -1910,17 +2585,21 @@ class MediaViewer(nbapp.AppWindow):
                 if kv in (Gdk.KEY_Right, Gdk.KEY_Page_Down):
                     self._on_next()
                     return True
-        # video fullscreen: Esc leaves it (claimed before the base treats Esc as
-        # "close"); F toggles whenever the video stage is up.
-        if (self._menu_open is None
-                and getattr(self, "_about_layer", None) is None):
-            if ev.keyval == Gdk.KEY_Escape and self._vfull:
-                self._exit_video_fullscreen()
+        # fullscreen: Esc leaves it (claimed before the base treats Esc as
+        # "close"); F (and F11) toggle it over whichever stage is up — a
+        # photograph as much as a film.
+        if not capturing:
+            if ev.keyval == Gdk.KEY_Escape and self._stage_full:
+                # a fullscreen slideshow ends with the fullscreen it asked for
+                if self._slideshow_id:
+                    self._stop_slideshow()
+                self._exit_stage_fullscreen()
                 return True
-            if (ev.keyval in (Gdk.KEY_f, Gdk.KEY_F)
+            if (ev.keyval in (Gdk.KEY_f, Gdk.KEY_F, Gdk.KEY_F11)
                     and not (ev.state & Gdk.ModifierType.CONTROL_MASK)
-                    and self._video.get_visible()):
-                self._toggle_video_fullscreen()
+                    and (self._video.get_visible()
+                         or self._scroll.get_visible())):
+                self._toggle_stage_fullscreen()
                 return True
             # Standard player keys, which the video stage had none of: Space
             # (and K) play/pause, Left/Right jog 5s, Up/Down jog 30s, Home/End
@@ -1945,7 +2624,7 @@ class MediaViewer(nbapp.AppWindow):
         a double-click does not leave the clip in the opposite state."""
         if ev.type == Gdk.EventType._2BUTTON_PRESS and ev.button == 1:
             self._on_video_toggle()      # revert the single-click toggle
-            self._toggle_video_fullscreen()
+            self._toggle_stage_fullscreen()
             return True
         if ev.type == Gdk.EventType.BUTTON_PRESS and ev.button == 1:
             self._on_video_toggle()
@@ -1990,16 +2669,31 @@ class MediaViewer(nbapp.AppWindow):
         except Exception:
             return None
 
-    def _toggle_video_fullscreen(self):
+    def _toggle_stage_fullscreen(self):
         # nbmotion-inventory: content.media
-        if self._vfull:
-            self._exit_video_fullscreen()
+        if self._stage_full:
+            self._exit_stage_fullscreen()
         else:
-            self._enter_video_fullscreen()
+            self._enter_stage_fullscreen()
 
     def _fullscreen_chrome(self):
         return (self._menubar_widget(), getattr(self, "_toolbar_w", None),
                 getattr(self, "_info_w", None), getattr(self, "_film_w", None))
+
+    def _user_hidden_chrome(self):
+        """The View-menu surfaces the person has already turned off.
+
+        Only these two are theirs to hide; the menu bar and the toolbar are not
+        toggleable and always come back."""
+        hidden = set()
+        for widget in (getattr(self, "_info_w", None),
+                       getattr(self, "_film_w", None)):
+            try:
+                if widget is not None and not widget.get_visible():
+                    hidden.add(widget)
+            except Exception:                                     # noqa: BLE001
+                pass
+        return hidden
 
     def _hide_fullscreen_chrome(self, widget):
         """Fade one chrome surface away, always landing hidden and opaque."""
@@ -2045,7 +2739,7 @@ class MediaViewer(nbapp.AppWindow):
             except Exception:
                 pass
 
-    def _enter_video_fullscreen(self):
+    def _enter_stage_fullscreen(self):
         """Hide all chrome so the video fills the screen edge to edge.
 
         The app window is already fullscreen (nbapp calls fullscreen()), but
@@ -2056,9 +2750,23 @@ class MediaViewer(nbapp.AppWindow):
         shell watches — the same mechanism the desktop already uses for
         app-active, and for the same reason: the panel is a separate process.
         """
-        if not self._video.get_visible():
+        # Which stage is asking. Fullscreen used to be video-only by
+        # construction, so a slideshow of photographs ran inside the toolbar,
+        # the Info panel and the filmstrip — a thumbnail with furniture round
+        # it — and F did nothing at all with a picture open.
+        if self._video.get_visible():
+            self._full_surface = "video"
+        elif self._scroll.get_visible():
+            self._full_surface = "image"
+        else:
             return
-        self._vfull = True
+        self._stage_full = True
+        # WHAT WAS ALREADY OFF STAYS OFF. The Info panel and the filmstrip are
+        # View-menu toggles; fullscreen hides everything, and handing all of it
+        # back on the way out silently reversed a choice the person had made
+        # deliberately — hide the Info panel, press F, press Esc, and there it
+        # was again.
+        self._fs_user_hidden = self._user_hidden_chrome()
         self._hide_panel(True)
         # Everything that is not the picture goes: the menubar, the Open/rotate
         # TOOLBAR (it used to stay up, so "fullscreen" still had a file-chooser
@@ -2066,7 +2774,7 @@ class MediaViewer(nbapp.AppWindow):
         # video stage and its transport remain.
         for w in self._fullscreen_chrome():
             self._hide_fullscreen_chrome(w)
-        if hasattr(self, "_v_full_btn"):
+        if self._full_surface == "video" and hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Exit Fullscreen"))
             self._v_full_btn.set_tooltip_text(_t("Leave fullscreen (Esc)"))
         # ...AND the transport. "Fullscreen" that keeps a playback bar pinned
@@ -2083,7 +2791,7 @@ class MediaViewer(nbapp.AppWindow):
             ctl.hide()
 
     def _on_fs_motion(self, _w, _ev):
-        if getattr(self, "_vfull", False):
+        if getattr(self, "_stage_full", False):
             self._fs_reveal(auto_hide=True)
         return False
 
@@ -2103,7 +2811,8 @@ class MediaViewer(nbapp.AppWindow):
         so the controls are always one twitch away without ever sitting on top
         of the film."""
         ctl = getattr(self, "_vctl", None)
-        if ctl is None or not self._vfull:
+        if (ctl is None or not self._stage_full
+                or getattr(self, "_full_surface", "video") != "video"):
             return
         ctl.show()
         self._fs_cancel_timer()
@@ -2115,7 +2824,7 @@ class MediaViewer(nbapp.AppWindow):
         ctl = getattr(self, "_vctl", None)
         # Never hide it out from under a pointer that is ON it (mid-seek), and
         # never while a menu/dialog owns the pointer.
-        if ctl is not None and self._vfull:
+        if ctl is not None and self._stage_full:
             try:
                 if not ctl.get_state_flags() & Gtk.StateFlags.PRELIGHT:
                     ctl.hide()
@@ -2123,14 +2832,22 @@ class MediaViewer(nbapp.AppWindow):
                 ctl.hide()
         return False
 
-    def _exit_video_fullscreen(self):
-        self._vfull = False
+    def _exit_stage_fullscreen(self):
+        if not getattr(self, "_stage_full", False):
+            return          # not in it; leaving twice must not re-fade anything
+        self._stage_full = False
+        self._full_surface = None
+        self._slide_full = False
         self._fs_cancel_timer()
         ctl = getattr(self, "_vctl", None)
         if ctl is not None:
             ctl.show()
         self._hide_panel(False)
+        keep_hidden = getattr(self, "_fs_user_hidden", None) or set()
+        self._fs_user_hidden = None
         for w in self._fullscreen_chrome():
+            if w in keep_hidden:
+                continue    # the person hid this one; fullscreen does not undo that
             self._show_fullscreen_chrome(w)
         if hasattr(self, "_v_full_btn"):
             self._v_full_btn.set_label(_t("Fullscreen"))
@@ -2145,10 +2862,21 @@ class MediaViewer(nbapp.AppWindow):
         that is the failure this costs one line to prevent."""
         try:
             if hide:
-                with open(VIDEO_FULL_FLAG, "w") as fh:
-                    fh.write(str(os.getpid()))
+                owner = _process_token()
+                if not owner:
+                    return
+                tmp = VIDEO_FULL_FLAG + ".%d.tmp" % os.getpid()
+                with open(tmp, "w") as fh:
+                    fh.write(owner)
+                os.replace(tmp, VIDEO_FULL_FLAG)
             elif os.path.exists(VIDEO_FULL_FLAG):
-                os.remove(VIDEO_FULL_FLAG)
+                try:
+                    with open(VIDEO_FULL_FLAG) as fh:
+                        owner = fh.read().strip()
+                except OSError:
+                    owner = ""
+                if owner == _process_token():
+                    os.remove(VIDEO_FULL_FLAG)
         except OSError:
             pass          # the panel staying up is a cosmetic loss, never fatal
 
@@ -2188,9 +2916,17 @@ class MediaViewer(nbapp.AppWindow):
             # when there is a file on screen to move.
             return [("Open…    Ctrl+O", lambda: self._on_open(None)),
                     ("Move to Trash",
-                     (lambda: self._on_trash(None)) if self._media_path
-                     else None),
+                     (lambda: self._on_trash(None))
+                     if getattr(self, "_shown_path", None) else None),
                     nbapp.SEP] + super().menu_items(name)
+        if name == "Edit":
+            # No clipboard group: nothing here is editable, and four permanently
+            # inert items teach nothing. Undo is real — Move to Trash is a move,
+            # and this is what puts it back.
+            return [nbcommands.dynamic_item(
+                "edit.undo", _t("Move to Trash"),
+                bool(getattr(self, "_undo_trash", None)),
+                self._undo_last_trash)]
         if name == "View":
             info = self._find_widget("infopanel")
             strip = self._find_widget("filmstrip")
@@ -2221,7 +2957,16 @@ class MediaViewer(nbapp.AppWindow):
                    border: none; background: transparent;
                    border-radius: 8px; box-shadow: none; }
         .toolbtn:hover { background: #F1EEE6; }
-        .toolbtn:disabled { border: none; background: transparent; }
+        /* A disabled tool must READ as disabled. These glyphs are drawn by
+           us in TOOL_INK, and GTK3 applies no insensitive effect of its own to
+           an image a widget was handed -- so every greyed control in this
+           toolbar rendered pixel for pixel identical to a live one, and the
+           only thing separating "no image is open" from "zoom in" was a
+           tooltip you had to hover to find. The OS greys a disabled menu item;
+           this is the same statement for a pictographic button, and the same
+           value the E-book Reader's identical toolbar uses. */
+        .toolbtn:disabled { border: none; background: transparent;
+                            opacity: 0.45; }
         /* the running-slideshow button: a faint red cell behind its red glyph,
            the one active accent among the tools (never decorative). */
         .toolbtn.active { background: #EAE3D2; }
@@ -2238,7 +2983,7 @@ class MediaViewer(nbapp.AppWindow):
         .stage * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .stage-title { font-size: 16px; font-weight: 600; color: #6E695E;
                        margin-top: 4px; }
-        .stage-sub { font-size: 13px; color: #9A9484; }
+        .stage-sub { font-size: 13px; color: #6E695E; }
         .imgscroll, .imgscroll viewport { background-color: #F1EEE6; }
 
         /* Video surface: a dark stage for the frame, with a paper transport bar
@@ -2258,6 +3003,12 @@ class MediaViewer(nbapp.AppWindow):
         .info-key { font-size: 13px; color: #6E695E; }
         .info-val { font-size: 13px; color: #1A1916; }
 
+        /* The transient status line: the same paper band as the filmstrip
+           above it, in the Info panel's quiet ink. */
+        .flashband { background: #F4F2EC; border-top: 1px solid #D7D2C5;
+                     padding: 8px 18px; font-size: 12px; color: #6E695E;
+                     font-family: "Nimbus Sans","Helvetica",sans-serif; }
+
         .filmstrip { background: #F4F2EC; border-top: 1px solid #D7D2C5; }
         /* Opaque rail tone: a transparent viewport window renders solid black
            with no compositor, so match the filmstrip surface instead. */
@@ -2271,7 +3022,7 @@ class MediaViewer(nbapp.AppWindow):
                     border-radius: 8px; box-shadow: none; }
         .filmcell:hover { border-color: #C9C4B6; background: #F4F2EC; }
         .filmcell.filmsel { border-color: #C8341E; background: #EAE3D2; }
-        .strip-empty { font-size: 12px; color: #9A9484;
+        .strip-empty { font-size: 12px; color: #6E695E;
                        font-family: "Nimbus Sans","Helvetica",sans-serif; }
 
         /* In-window confirmation card (Move to Trash): the house pattern of

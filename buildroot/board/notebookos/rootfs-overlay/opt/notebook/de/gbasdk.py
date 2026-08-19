@@ -54,6 +54,7 @@ import nbicons
 import gbabuild
 import gbaworkspace
 import gbahelp
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -75,6 +76,19 @@ RED = "#C8341E"
 
 # A compact GBA-friendly 15-bit palette for the sprite editor (plus transparent).
 TRANSPARENT = 0x7C1F
+def _set_user_text(label, text):
+    """A name the game's AUTHOR typed, exactly as they typed it.
+
+    Resource ids, folder names, sprite names and the project's own name are
+    identifiers the author chose, and they compile into the generated C under
+    exactly those spellings. "Player", "Game", "Start", "Level", "Room",
+    "Sound", "Key" and "Coin" are all catalog words, so the browser named a
+    resource one thing while the code named it another — and the shipped
+    default project is called "Game", so a fresh French install opened onto
+    "Jeu"."""
+    nbi18n.set_verbatim(label, str(text or ""))
+
+
 def _col(r, g, b):
     """A 15-bit BGR555 colour from 0..31 R/G/B components."""
     return (r & 31) | ((g & 31) << 5) | ((b & 31) << 10)
@@ -1030,7 +1044,8 @@ class GbaSdk(nbapp.AppWindow):
         try:
             for c in self._tree_body.get_children():
                 self._tree_body.remove(c)
-            self._proj_label.set_text(self.proj.get("name") or _t("Game"))
+            _set_user_text(self._proj_label,
+                           self.proj.get("name") or _t("Game"))
             selected = None
             q = ""
             try:
@@ -1118,7 +1133,8 @@ class GbaSdk(nbapp.AppWindow):
         car = Gtk.Label(label="\u25b8" if shut else "\u25be")
         car.get_style_context().add_class("caret")
         box.pack_start(car, False, False, 0)
-        lab = Gtk.Label(label=folder, xalign=0)
+        lab = Gtk.Label(xalign=0)
+        _set_user_text(lab, folder)
         lab.get_style_context().add_class("foldername")
         lab.set_ellipsize(Pango.EllipsizeMode.END)
         box.pack_start(lab, True, True, 0)
@@ -1201,7 +1217,8 @@ class GbaSdk(nbapp.AppWindow):
         box.pack_start(thumb, False, False, 0)
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         text.set_valign(Gtk.Align.CENTER)
-        name = Gtk.Label(label=r.get("id", "?"), xalign=0)
+        name = Gtk.Label(xalign=0)
+        _set_user_text(name, r.get("id", "?"))
         name.get_style_context().add_class("assetname")
         name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         text.pack_start(name, False, False, 0)
@@ -1944,7 +1961,7 @@ class GbaSdk(nbapp.AppWindow):
         if not pair or r is None:
             return
         one = dict((k, o) for k, _h, _n, o in KINDS).get(kind, "")
-        pair[0].set_text(r.get("id", "?"))
+        _set_user_text(pair[0], r.get("id", "?"))
         desc = self._describe(kind, r)
         pair[1].set_text("%s  ·  %s" % (_t(one), desc) if desc else _t(one))
 
@@ -2475,7 +2492,7 @@ class GbaSdk(nbapp.AppWindow):
             if i == self._sel_frame:
                 btn.get_style_context().add_class("on")
             btn.add(da)
-            btn.set_tooltip_text("%s %d" % (_t("Frame"), i + 1))
+            btn.set_tooltip_text(_t("%s %d") % (_t("Frame"), i + 1))
             btn.connect("clicked", lambda _w, ix=i: self._select_frame(ix))
             self._frame_list.pack_start(btn, False, False, 0)
         self._frame_list.show_all()
@@ -2519,10 +2536,27 @@ class GbaSdk(nbapp.AppWindow):
         return False
 
     # ---- animation preview ----
+    def _sync_preview_button(self, active):
+        btn = getattr(self, "_play_btn", None)
+        if btn is None:
+            return
+        child = btn.get_child()
+        if child is not None:
+            btn.remove(child)
+        btn.add(nbicons.image("stopsq" if active else "play", 12, MUTED))
+        message = (_acc("Stop preview", "Space") if active else
+                   _acc("Preview the animation", "Space"))
+        btn.set_tooltip_text(message)
+        acc = btn.get_accessible()
+        if acc is not None:
+            acc.set_name(message)
+        btn.show_all()
+
     def _on_play_toggle(self, btn):
         if btn.get_active():
             self._spr_preview = 0
             self._spr_play = GLib.timeout_add(140, self._preview_tick)
+            self._sync_preview_button(True)
         else:
             self._stop_preview()
 
@@ -2532,11 +2566,15 @@ class GbaSdk(nbapp.AppWindow):
             self._spr_play = None
         if hasattr(self, "_play_btn"):
             self._play_btn.set_active(False)
+            self._sync_preview_button(False)
 
     def _preview_tick(self):
         s = self._cur_sprite()
         if not s or not s.get("frames"):
             self._spr_play = None
+            if hasattr(self, "_play_btn"):
+                self._play_btn.set_active(False)
+                self._sync_preview_button(False)
             return False
         self._spr_preview = (self._spr_preview + 1) % len(s["frames"])
         self._spr_canvas.queue_draw()
@@ -4558,7 +4596,8 @@ class GbaSdk(nbapp.AppWindow):
         free.set_size_request(52, -1)
         row.pack_start(free, False, False, 0)
 
-        who = Gtk.Label(label=", ".join(b["sprites"]) or "\u2014", xalign=0.0)
+        who = Gtk.Label(xalign=0.0)
+        _set_user_text(who, ", ".join(b["sprites"]) or "\u2014")
         who.get_style_context().add_class("sdkstatus")
         who.set_ellipsize(Pango.EllipsizeMode.END)
         who.set_max_width_chars(30)
@@ -4604,7 +4643,8 @@ class GbaSdk(nbapp.AppWindow):
         row.set_margin_start(14)
         row.set_margin_end(14)
         row.set_margin_top(5)
-        name = Gtk.Label(label=sp["name"], xalign=0.0)
+        name = Gtk.Label(xalign=0.0)
+        _set_user_text(name, sp["name"])
         name.get_style_context().add_class("palname")
         name.set_ellipsize(Pango.EllipsizeMode.END)
         name.set_max_width_chars(20)
@@ -6871,6 +6911,10 @@ class GbaSdk(nbapp.AppWindow):
         self._load_note = lost
 
     def _on_destroy(self, *_):
+        # The sprite preview owns a repeating GLib source. Stop it before any
+        # model/widget teardown so a closed SDK window cannot be retained and
+        # tick against destroyed preview widgets indefinitely.
+        self._stop_preview()
         if self._layout_save_timer is not None:
             GLib.source_remove(self._layout_save_timer)
             self._layout_save_timer = None
@@ -7784,6 +7828,8 @@ class GbaSdk(nbapp.AppWindow):
         * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sdkbar { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                   padding: 8px 14px; }
+        .runbtn label { color: #FCFBF8; }
+        .runbtn:hover label { color: #FCFBF8; }
         .runbtn { background: #C8341E; color: #FCFBF8; border-radius: 8px;
                   padding: 6px 14px; font-weight: 600; box-shadow: none;
                   border: none; }
@@ -7843,7 +7889,7 @@ class GbaSdk(nbapp.AppWindow):
         .foldername { font-family: "Nimbus Sans","Helvetica",sans-serif;
                       font-size: 12px; color: #3A362E; }
         .foldercount { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                       font-size: 11px; color: #9A9484; }
+                       font-size: 11px; color: #6E695E; }
         .emptyrow { font-size: 11px; color: #6E695E; padding: 3px 12px 5px 12px; }
         .startbadge { font-size: 10px; font-weight: 700; color: #1A1916;
                       background: #EAE3D2; border: 1px solid #C9C4B6;

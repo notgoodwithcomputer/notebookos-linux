@@ -177,7 +177,12 @@ def scale_factor():
 # TYPE_PYOBJECT is the fallback: it also stores the surface, but a cell can then
 # only be filled through a cell-data function rather than add_attribute.
 try:
-    SURFACE_GTYPE = GObject.type_from_name("CairoSurface")
+    # type_from_name() returns an invalid/zero GType (rather than raising) when
+    # PyGObject was built without cairo's boxed-type registration.  Passing
+    # that value to Gtk.ListStore then crashes model construction, so treat it
+    # exactly like the exceptional missing-bridge case documented below.
+    SURFACE_GTYPE = (GObject.type_from_name("CairoSurface") or
+                     GObject.TYPE_PYOBJECT)
 except Exception:                                                 # noqa: BLE001
     SURFACE_GTYPE = GObject.TYPE_PYOBJECT
 

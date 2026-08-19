@@ -23,13 +23,51 @@ import os
 import json
 import re
 import time
+import copy
 import cairo
 
 import nbapp
 import nbicons
 import nbprint
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
+
+
+def _set_user_tooltip(widget, text):
+    """Hover text carrying the cook's own words.
+
+    set_tooltip_text is one of the setters nbi18n patches, so a category
+    called "Mains" hovered as "Secteur". set_tooltip_markup is not patched and
+    renders identically once escaped, so it is the verbatim route."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+def _set_recipe_text(label, text, fallback=""):
+    """Keep recipe-authored text out of the interface translation hook."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)              # a Gtk.Label
+    except AttributeError:
+        label.set_label(empty)             # a Gtk.Button / ToggleButton
 
 # The whole library (categories, recipes, the active category filter and the
 # current selection) is written to $NB_HOME/.config/notebook/cookbook.json on
@@ -40,6 +78,22 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 COOKBOOK_FILE = os.path.join(CFG_DIR, "cookbook.json")
 DOCUMENTS = os.path.join(HOME, "Documents")
+MAX_COOKBOOK_BYTES = 8 * 1024 * 1024
+
+
+class CookbookStoreTooLarge(ValueError):
+    pass
+
+
+def _read_cookbook_json(path=None, limit=MAX_COOKBOOK_BYTES):
+    """Read the text-only recipe library without trusting its file size."""
+    if path is None:
+        path = COOKBOOK_FILE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise CookbookStoreTooLarge("cookbook store is too large")
+    return json.loads(data)
 
 
 def _is_record(v):
@@ -95,6 +149,8 @@ def _quarantine(path):
     write. It deliberately cannot cover the case here: valid JSON of the wrong
     shape parses perfectly, and only this app knows the shape is not a
     cookbook."""
+    if not os.path.exists(path):
+        return True
     try:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = "%s.damaged-%s" % (path, stamp)
@@ -104,7 +160,8 @@ def _quarantine(path):
             n += 1
         os.replace(path, dest)
     except OSError:
-        pass
+        return False
+    return True
 
 
 # ---------------------------------------------------------------- quantities
@@ -183,6 +240,9 @@ def restate_servings(makes, n):
 class Cookbook(nbapp.AppWindow):
     app_name = "Cookbook"
     menus = ("File", "Edit", "View", "Cook")
+    # How much of a category name the header eyebrow shows. A 45-character
+    # name measured 518px there, which kept the whole app at 1100px minimum.
+    KICKER_MAX = 28
 
     def __init__(self):
         super().__init__()
@@ -193,9 +253,21 @@ class Cookbook(nbapp.AppWindow):
         self.recipes = []       # list of dicts: {title, cat, desc, time,
                                 #                 makes, effort, ing, steps}
         self.active_cat = 0     # 0 == "All"; else index into cats + 1
+        self.query = ""         # what the search box is narrowing the list to
         self.sel = -1           # index into self.recipes
         self._save_timer = None
+        self._closed = False
+        self._recovery_dirty = False
+        # What the save chip is allowed to claim. It used to stamp the clock at
+        # the moment of any refresh, so merely opening the app or clicking a
+        # recipe reported a save that never happened (and painted over a real
+        # "Not saved"). Only a write that reached the file sets these.
+        self._saved_at = None       # HH:MM of the last successful write
+        self._save_failed = False   # the last write attempt did not land
+        self._flash_until = 0.0     # a transient message owns the chip until
+        self._flash_timer = None    # this moment (monotonic seconds)
         self.meta_entries = {}  # field -> Gtk.Entry for the stat strip
+        self._fields = []       # header entries shown as text until edited
         # Cook mode: which step is showing, what the recipe is written for, and
         # what it is being cooked for now (scaling is display-only — see
         # scale_amount — so none of this is ever written to the recipe).
@@ -230,6 +302,7 @@ class Cookbook(nbapp.AppWindow):
 
         # Flush the final (possibly still-debounced) edit when the window
         # closes so no typed input is lost.
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
 
     # ------------------------------------------------------------------ sidebar
@@ -249,6 +322,17 @@ class Cookbook(nbapp.AppWindow):
         self.chipbox.set_homogeneous(False)
         self.chipbox.get_style_context().add_class("chipflow")
         chipwrap.pack_start(self.chipbox, False, False, 0)
+        # A cookbook is a library, and the only way to reach a recipe in it was
+        # to scroll the list: no search anywhere, and no Find in any menu, while
+        # Contacts, Music, Journal and Academics all have one. It reads every
+        # word of the recipe, because "what can I do with the lentils" is the
+        # question a cook actually asks the book.
+        self.search = Gtk.SearchEntry()
+        nbicons.style_search_entry(self.search)
+        self.search.set_placeholder_text(_t("Search recipes"))
+        self.search.get_style_context().add_class("cbsearch")
+        self.search.connect("search-changed", self._on_search)
+        chipwrap.pack_start(self.search, False, False, 0)
         side.pack_start(chipwrap, False, False, 0)
 
         # recipe list
@@ -276,10 +360,16 @@ class Cookbook(nbapp.AppWindow):
     def rebuild_chips(self):
         for c in self.chipbox.get_children():
             self.chipbox.remove(c)
+        self._chip_buttons = {}
         labels = ["All"] + list(self.cats)
         for i, name in enumerate(labels):
-            btn = Gtk.Button(label=name)
+            btn = Gtk.ToggleButton()
+            if i == 0:
+                btn.set_label(name)          # "All" is the app's own word
+            else:
+                _set_recipe_text(btn, name)  # a category the cook named
             btn.set_relief(Gtk.ReliefStyle.NONE)
+            btn.set_active(i == self.active_cat)
             ctx = btn.get_style_context()
             ctx.add_class("chip")
             if i == self.active_cat:
@@ -295,6 +385,7 @@ class Cookbook(nbapp.AppWindow):
             self._cap_chip(btn, name)
             btn.connect("clicked", self._on_chip, i)
             self.chipbox.add(btn)
+            self._chip_buttons[i] = btn
         # add-category chip
         add = Gtk.Button(label=_t("+ Category"))
         add.set_relief(Gtk.ReliefStyle.NONE)
@@ -318,21 +409,72 @@ class Cookbook(nbapp.AppWindow):
         except Exception:
             return
         if full and len(full) > 18:
-            btn.set_tooltip_text(full)
+            _set_user_tooltip(btn, full)
 
-    def _on_chip(self, _btn, idx):
+    def _on_search(self, entry):
+        q = entry.get_text().strip()
+        if q == self.query:
+            return
+        self.query = q
+        self._after_search()
+
+    def _after_search(self):
+        """The list has to follow the box; the recipe on the page does not —
+        narrowing the shelf must not close a column the cook is typing in."""
+        self.rebuild_list()
+        if self._cur() is None or self.stack.get_visible_child_name() == "empty":
+            self._refresh_editor()
+
+    def _can_search(self):
+        """True while the search box is on screen and there is a shelf to
+        narrow — cook mode hides the whole sidebar."""
+        if not self.recipes:
+            return False
+        try:
+            return self.stack.get_visible_child_name() != "cook"
+        except Exception:
+            return True
+
+    def _focus_search(self):
+        """Ctrl+F / View ▸ Search Recipes — put the caret in the search box."""
+        self.search.grab_focus()
+
+    def _clear_search(self):
+        """Drop the search and show the whole shelf again. True when there was
+        one to drop, so Esc can fall through to closing the app when there was
+        not (Esc leaves; it never destroys anything)."""
+        if not self.query and not self.search.get_text():
+            return False
+        self.search.set_text("")
+        self.query = ""
+        self._after_search()
+        return True
+
+    def _matches(self, r, q):
+        """True when recipe `r` answers the search `q` (already lower-cased)."""
+        for key in ("title", "cat", "desc", "time", "makes", "effort",
+                    "ing", "steps"):
+            v = r.get(key)
+            if isinstance(v, str) and q in v.lower():
+                return True
+        return False
+
+    def _on_chip(self, button, idx):
+        restore_focus = bool(button is not None and button.has_focus())
         self.active_cat = idx
         self.sel = -1
         self.rebuild_chips()
         self.rebuild_list()
         self._refresh_editor()
+        replacement = self._chip_buttons.get(idx)
+        if restore_focus and replacement is not None:
+            replacement.grab_focus()
 
     def rebuild_list(self):
         for c in self.listbox.get_children():
             self.listbox.remove(c)
         cat_filter = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
-        visible = [(i, r) for i, r in enumerate(self.recipes)
-                   if cat_filter is None or r["cat"] == cat_filter]
+        visible = [(i, self.recipes[i]) for i in self._visible_indices()]
         if not visible:
             # ONE empty state on screen at a time. This row used to carry
             # "No recipes" + "Add one with New Recipe, below." while the main
@@ -347,28 +489,38 @@ class Cookbook(nbapp.AppWindow):
             # that recipes DO exist and a category filter is hiding them —
             # "No recipes" was also simply untrue in that case. So the row
             # survives only there, and it names the category.
-            if self.recipes:
-                row = Gtk.ListBoxRow()
-                row.set_selectable(False)
-                row.set_activatable(False)
-                box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-                box.get_style_context().add_class("emptylistbox")
-                lbl = Gtk.Label(
-                    label=_t("No recipes in “%s”") % cat_filter
-                    if cat_filter else _t("No recipes"))
-                lbl.get_style_context().add_class("emptylist")
-                # Translated prose in a fixed-width sidebar: wrap it, or the
-                # sentence's own length sets the column's minimum.
-                lbl.set_line_wrap(True)
-                lbl.set_max_width_chars(22)
-                lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-                box.pack_start(lbl, False, False, 0)
-                row.add(box)
-                self.listbox.add(row)
+            #
+            # A search that found nothing follows the same division: the list
+            # states it (the search box is right above it), and the main pane —
+            # which may well be showing a recipe — never repeats the sentence.
+            if self.query:
+                self.listbox.add(self._empty_row(_t("No matches")))
+            elif self.recipes:
+                self.listbox.add(self._empty_row(
+                    _t("No recipes in “%s”") % cat_filter
+                    if cat_filter else _t("No recipes")))
         else:
             for idx, r in visible:
                 self.listbox.add(self._recipe_row(idx, r))
         self.listbox.show_all()
+
+    def _empty_row(self, text):
+        """A quiet, unselectable note in place of the recipe rows."""
+        row = Gtk.ListBoxRow()
+        row.set_selectable(False)
+        row.set_activatable(False)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.get_style_context().add_class("emptylistbox")
+        lbl = Gtk.Label(label=text)
+        lbl.get_style_context().add_class("emptylist")
+        # Translated prose in a fixed-width sidebar: wrap it, or the
+        # sentence's own length sets the column's minimum.
+        lbl.set_line_wrap(True)
+        lbl.set_max_width_chars(22)
+        lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        box.pack_start(lbl, False, False, 0)
+        row.add(box)
+        return row
 
     def _recipe_row(self, idx, r):
         row = Gtk.ListBoxRow()
@@ -392,10 +544,12 @@ class Cookbook(nbapp.AppWindow):
         outer.pack_start(icon, False, False, 0)
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        title = Gtk.Label(label=r["title"] or _t("Untitled recipe"), xalign=0)
+        title = Gtk.Label(label="", xalign=0)
+        _set_recipe_text(title, r["title"], "Untitled recipe")
         title.set_ellipsize(Pango.EllipsizeMode.END)
         title.get_style_context().add_class("rtitle")
-        meta = Gtk.Label(label=self._row_meta(r), xalign=0)
+        meta = Gtk.Label(label="", xalign=0)
+        _set_recipe_text(meta, self._row_meta(r))
         meta.set_ellipsize(Pango.EllipsizeMode.END)
         meta.get_style_context().add_class("rmeta")
         # keep handles so field edits can update this row's text in place
@@ -483,11 +637,24 @@ class Cookbook(nbapp.AppWindow):
         # the app at 1100px minimum even after the chips were capped. Ellipsize
         # it; the category is also shown in full on its chip and in the
         # Category picker.
-        self.kicker.set_ellipsize(Pango.EllipsizeMode.END)
-        self.kicker.set_max_width_chars(28)
+        # Ellipsize is applied per name in _set_kicker, never up front: see
+        # the note there about letter-spacing and Pango's fit test.
+        self.kicker.set_max_width_chars(self.KICKER_MAX)
+        # The eyebrow is the recipe's category CONTROL, not a caption: there
+        # was no way anywhere in the app to file an existing recipe, or to move
+        # one — a category could only ever be chosen by making a recipe while
+        # its chip was active, and the code comment here already promised a
+        # picker that did not exist.
+        self.kicker_btn = Gtk.Button()
+        self.kicker_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self.kicker_btn.get_style_context().add_class("kickerbtn")
+        self.kicker_btn.set_tooltip_text(_t("Choose the category"))
+        self.kicker_btn.get_accessible().set_name(_t("Category"))
+        self.kicker_btn.add(self.kicker)
+        self.kicker_btn.connect("clicked", self._on_kicker_clicked)
         self.savestate = Gtk.Label(label=_t("Saved"), xalign=1)
         self.savestate.get_style_context().add_class("savestate")
-        topline.pack_start(self.kicker, False, False, 0)
+        topline.pack_start(self.kicker_btn, False, False, 0)
         topline.pack_end(self.savestate, False, False, 0)
         head.pack_start(topline, False, False, 0)
 
@@ -496,14 +663,20 @@ class Cookbook(nbapp.AppWindow):
         self.title_entry.set_has_frame(False)
         self.title_entry.get_style_context().add_class("edtitle")
         self.title_entry.connect("changed", self._on_title_changed)
-        head.pack_start(self.title_entry, False, False, 0)
+        head.pack_start(
+            self._reader_field(self.title_entry, "edtitle", _t("Title"),
+                               wrap=True, lines=2, chars=30),
+            False, False, 0)
 
         self.desc_entry = Gtk.Entry()
         self.desc_entry.set_placeholder_text(_t("Description"))
         self.desc_entry.set_has_frame(False)
         self.desc_entry.get_style_context().add_class("eddesc")
         self.desc_entry.connect("changed", self._on_desc_changed)
-        head.pack_start(self.desc_entry, False, False, 0)
+        head.pack_start(
+            self._reader_field(self.desc_entry, "eddesc", _t("Description"),
+                               wrap=True, lines=2, chars=46),
+            False, False, 0)
 
         # The stat strip, with the way into cook mode beside it — the point at
         # which someone stops reading a recipe and starts making it.
@@ -538,7 +711,9 @@ class Cookbook(nbapp.AppWindow):
         # words a line (see _fit_columns). The handler hangs off the Stack, not
         # off `cols`: a hidden Stack page is never allocated, but it still
         # counts towards the window's minimum width.
-        self._ing_w = 0
+        self._ing_w = 0          # the width the last allocation asked for
+        self._ing_w_set = None   # the width actually written to the widget
+        self._ing_w_idle = None  # pending idle that will write it
 
         ing_box, self.ing_view, self.ing_render, self.ing_stack, \
             self.ing_edit_btn = self._panel(
@@ -608,6 +783,7 @@ class Cookbook(nbapp.AppWindow):
         less.set_relief(Gtk.ReliefStyle.NONE)
         less.get_style_context().add_class("scalebtn")
         less.set_tooltip_text(_t("Cook less"))
+        less.get_accessible().set_name(_t("Cook less"))
         less.connect("clicked", lambda *_: self._cook_resize(-1))
         self.cook_serves = Gtk.Label(label="")
         self.cook_serves.get_style_context().add_class("scaleval")
@@ -615,6 +791,7 @@ class Cookbook(nbapp.AppWindow):
         more.set_relief(Gtk.ReliefStyle.NONE)
         more.get_style_context().add_class("scalebtn")
         more.set_tooltip_text(_t("Cook more"))
+        more.get_accessible().set_name(_t("Cook more"))
         more.connect("clicked", lambda *_: self._cook_resize(1))
         self.cook_scaler.pack_start(less, False, False, 0)
         self.cook_scaler.pack_start(self.cook_serves, False, False, 0)
@@ -759,7 +936,7 @@ class Cookbook(nbapp.AppWindow):
         r = self._cur()
         if r is None:
             return
-        self.cook_title.set_text(r.get("title") or _t("Untitled recipe"))
+        _set_recipe_text(self.cook_title, r.get("title"), "Untitled recipe")
 
         factor = 1.0
         if self._cook_base and self._cook_n:
@@ -782,14 +959,16 @@ class Cookbook(nbapp.AppWindow):
             name, amount = self._split_ing(ln)
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             row.get_style_context().add_class("cookingrow")
-            nm = Gtk.Label(label=name, xalign=0)
+            nm = Gtk.Label(xalign=0)
+            _set_recipe_text(nm, name)
             nm.set_line_wrap(True)
             nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
             nm.set_valign(Gtk.Align.START)
             nm.get_style_context().add_class("cookingname")
             row.pack_start(nm, True, True, 0)
             if amount:
-                al = Gtk.Label(label=scale_amount(amount, factor), xalign=1)
+                al = Gtk.Label(xalign=1)
+                _set_recipe_text(al, scale_amount(amount, factor))
                 al.set_valign(Gtk.Align.START)
                 al.set_halign(Gtk.Align.END)
                 al.set_margin_top(3)   # optically level with the serif name
@@ -813,7 +992,7 @@ class Cookbook(nbapp.AppWindow):
         # instead of needing a shouted duplicate in four languages.
         self.cook_pos.set_text(
             (_t("Step %d of %d") % (self._cook_i + 1, len(steps))).upper())
-        self.cook_step.set_text(steps[self._cook_i])
+        _set_recipe_text(self.cook_step, steps[self._cook_i])
         if self._cook_i + 1 < len(steps):
             self.cook_peek.set_text(
                 _t("Next: %s") % steps[self._cook_i + 1])
@@ -830,6 +1009,18 @@ class Cookbook(nbapp.AppWindow):
         # caret is in an ingredient field, which is where the loss happens.
         if nbapp.undo_keys(self.undo, ev):
             return True
+        # The search box is in the sidebar, which cook mode hides, so cook mode
+        # keeps Esc (leave the stove page) and Ctrl+F falls through there.
+        if self._can_search():
+            # Esc drops an active search before it reaches the base handler
+            # (which would close the whole app) — the way out a narrowed list
+            # needs. Esc leaves; it never destroys anything.
+            if ev.keyval == Gdk.KEY_Escape and self._clear_search():
+                return True
+            if (ev.state & Gdk.ModifierType.CONTROL_MASK
+                    and ev.keyval in (Gdk.KEY_f, Gdk.KEY_F)):
+                self._focus_search()
+                return True
         try:
             if self.stack.get_visible_child_name() == "cook":
                 kv = ev.keyval
@@ -861,7 +1052,97 @@ class Cookbook(nbapp.AppWindow):
         w = max(200, min(320, int(inner * 0.42)))
         if w != self._ing_w:
             self._ing_w = w
-            self.ing_box.set_size_request(w, -1)
+            self._apply_ing_width()
+
+    def _apply_ing_width(self):
+        """Ask for the Ingredients width from an idle, not from inside the
+        allocation pass.
+
+        A size request made WHILE the stack is being allocated is stored on the
+        widget and then never allocated: coming back from cook mode (where the
+        sidebar is hidden and the page is 1024 wide) computed the right 206px,
+        wrote it, and left Ingredients sitting at its 320px cook-mode width with
+        Method squashed to three or four words a line until something else
+        forced a relayout. Landing the request one idle later puts it in its own
+        layout pass, which does run. The last value actually written is kept so
+        a re-entrant allocation cannot start a request/allocate loop."""
+        if self._ing_w == self._ing_w_set or self._ing_w_idle is not None:
+            return
+
+        def landing():
+            self._ing_w_idle = None
+            if self._ing_w != self._ing_w_set:
+                self._ing_w_set = self._ing_w
+                self.ing_box.set_size_request(self._ing_w, -1)
+            return False
+
+        self._ing_w_idle = GLib.idle_add(landing)
+
+    def _set_kicker(self, r):
+        """The category eyebrow for recipe `r`, upper-cased.
+
+        Shortened ONLY when the name really is longer than the eyebrow's cap.
+        Pango charges the trailing letter-spacing of the last letter against the
+        line when it tests whether the text fits, but leaves it out of the
+        natural width the label asks for — so a kicker allocated exactly what it
+        asked for was judged too narrow and EVERY category came out cut:
+        "SID…" for Sides, "NO CATEGO…" with the rest of the line empty. The cap
+        is what bounds the header's width, and it still does."""
+        cat = r.get("cat") if r else None
+        text = (cat if cat else _t("No category")).upper()
+        self.kicker.set_ellipsize(Pango.EllipsizeMode.END
+                                  if len(text) > self.KICKER_MAX
+                                  else Pango.EllipsizeMode.NONE)
+        if cat:
+            _set_recipe_text(self.kicker, text)   # the cook's category
+        else:
+            self.kicker.set_text(text)            # our own "No category"
+
+    def _on_kicker_clicked(self, button):
+        """Offer every category, No category, and a way to make a new one."""
+        if self._cur() is None:
+            return
+        try:
+            menu = Gtk.Menu()
+            current = (self._cur() or {}).get("cat")
+            none_item = Gtk.MenuItem(
+                label=("✓  " if not current else "     ") + _t("No category"))
+            none_item.connect("activate", lambda *_: self._file_current(None))
+            menu.append(none_item)
+            for name in self.cats:
+                # The cook's own category name, never run through the catalog.
+                shown = ("✓  " if name == current else "     ") + name
+                item = Gtk.MenuItem(label=shown)
+                nbi18n.set_verbatim(item.get_child(), shown)
+                item.connect("activate", lambda _mi, n=name:
+                             self._file_current(n))
+                menu.append(item)
+            menu.append(Gtk.SeparatorMenuItem())
+            new_item = Gtk.MenuItem(label=_t("New Category…"))
+            new_item.connect("activate", lambda *_: self._new_category(True))
+            menu.append(new_item)
+            menu.show_all()
+            nbapp.popup_at(menu, widget=button, anchor="widget-sw")
+        except Exception:
+            # The category control must never crash the recipe page.
+            pass
+
+    def _file_current(self, cat):
+        """File the current recipe under `cat` (None = No category)."""
+        r = self._cur()
+        if r is None or r.get("cat") == cat:
+            return
+        self.undo.checkpoint("Move to Category")
+        r["cat"] = cat
+        # Follow the recipe: leaving it selected under a filter that no longer
+        # shows it would put an empty list beside a recipe page.
+        if self.active_cat > 0 and self.sel not in self._cat_indices():
+            self.active_cat = (self.cats.index(cat) + 1) if cat in self.cats else 0
+            self.rebuild_chips()
+        self._set_kicker(r)
+        self.rebuild_list()
+        self._touch()
+        self.undo.commit()
 
     def _build_metabar(self):
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -874,19 +1155,136 @@ class Cookbook(nbapp.AppWindow):
             ctx.add_class("metacell")
             if i > 0:
                 ctx.add_class("metadiv")
-            cl = Gtk.Label(label=cap, xalign=0)
+            localized_cap = _t(cap.title())
+            cl = Gtk.Label(label=localized_cap.upper(), xalign=0)
             cl.get_style_context().add_class("metacap")
             ent = Gtk.Entry()
             ent.set_has_frame(False)
             ent.set_placeholder_text("—")
             ent.set_width_chars(10)
             ent.get_style_context().add_class("metaval")
+            cl.set_mnemonic_widget(ent)
+            ent.get_accessible().set_name(localized_cap)
             ent.connect("changed", self._on_meta_changed, field)
             cell.pack_start(cl, False, False, 0)
-            cell.pack_start(ent, False, False, 0)
+            cell.pack_start(self._reader_field(ent, "metaval", localized_cap,
+                                               chars=10), False, False, 0)
             self.meta_entries[field] = ent
             bar.pack_start(cell, False, False, 0)
         return bar
+
+    # ------------------------------------------------- read/edit text fields
+    def _reader_field(self, entry, css, name, wrap=False, lines=1, chars=0):
+        """Wrap `entry` so its value READS when nobody is editing it.
+
+        A Gtk.Entry can neither wrap nor ellipsize — it scrolls — so a recipe
+        title longer than the column showed whichever end the caret had last
+        left in view: the tail right after typing ("ndma’s Chicken Soup"),
+        and after the recipe was reselected the head with the right-hand side
+        simply cut off, no ellipsis either time to say anything was missing.
+        The sidebar row a few hundred pixels away showed the same title in full,
+        which made the recipe page the one place a recipe’s own name could
+        not be read. Same for the description and the Time / Makes / Effort
+        cells.
+
+        So the field shows a label that wraps (or ellipsizes, and then carries
+        the whole value in its tooltip) and swaps in the real entry when it is
+        clicked or focused — which is exactly how the Ingredients and Method
+        columns beside it already work, rather than a new idea."""
+        stack = Gtk.Stack()
+        stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        # Size to the child on screen, not to the larger of the two, or the
+        # read label’s wrapped height would pad the entry as well.
+        stack.set_hhomogeneous(False)
+        stack.set_vhomogeneous(False)
+        lbl = Gtk.Label(label="", xalign=0)
+        lbl.get_style_context().add_class(css)
+        lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        if wrap:
+            lbl.set_line_wrap(True)
+            # WORD_CHAR so one long word cannot set a minimum width the whole
+            # window has to grow to (the same rule the method rows follow).
+            lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+            lbl.set_lines(lines)
+        if chars:
+            lbl.set_max_width_chars(chars)
+            if not wrap:
+                lbl.set_width_chars(chars)   # so the cell never changes width
+        btn = Gtk.Button()
+        btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn.get_style_context().add_class("readfield")
+        btn.add(lbl)
+        btn.get_accessible().set_name(name)
+        btn.connect("clicked", lambda *_: self._edit_field(entry))
+        stack.add_named(btn, "read")
+        stack.add_named(entry, "edit")
+        entry._read_label = lbl
+        entry._read_chars = chars
+        entry._field_stack = stack
+        entry.connect("changed", lambda *_: self._sync_field(entry))
+        entry.connect("activate", lambda *_: self._leave_field(entry))
+        entry.connect("focus-in-event", self._on_field_focus_in)
+        entry.connect("focus-out-event", self._on_field_focus_out)
+        self._fields.append(entry)
+        self._sync_field(entry)
+        return stack
+
+    def _sync_field(self, entry):
+        """Put what the entry holds on its read label."""
+        lbl = getattr(entry, "_read_label", None)
+        if lbl is None:
+            return
+        text = entry.get_text()
+        ctx = lbl.get_style_context()
+        if text:
+            ctx.remove_class("placeholder")
+            # The cook’s own words: never run them through the catalog.
+            nbi18n.set_verbatim(lbl, text)
+        else:
+            ctx.add_class("placeholder")
+            lbl.set_text(entry.get_placeholder_text() or "")
+        chars = getattr(entry, "_read_chars", 0)
+        # A value the label had to shorten still has to be readable somehow.
+        _set_user_tooltip(lbl, text if (chars and len(text) > chars) else "")
+
+    def _edit_field(self, entry):
+        """Swap the real entry in and put the caret at the end of the text."""
+        if self._cur() is None:
+            return
+        stack = getattr(entry, "_field_stack", None)
+        if stack is not None:
+            stack.set_visible_child_name("edit")
+        entry.grab_focus()
+        entry.set_position(-1)
+
+    def _leave_field(self, entry):
+        """Back to reading. The entry keeps its scroll offset for as long as it
+        exists, so it is wound back to the start of the text as well."""
+        self._sync_field(entry)
+        entry.set_position(0)
+        stack = getattr(entry, "_field_stack", None)
+        if stack is not None:
+            stack.set_visible_child_name("read")
+
+    def _on_field_focus_in(self, entry, _ev):
+        # Reached by Tab as well as by clicking the label.
+        stack = getattr(entry, "_field_stack", None)
+        if stack is not None:
+            stack.set_visible_child_name("edit")
+        return False
+
+    def _on_field_focus_out(self, entry, _ev):
+        self._leave_field(entry)
+        return False
+
+    def _read_fields(self):
+        """Show every header field as text again (a recipe was just opened)."""
+        for entry in self._fields:
+            self._sync_field(entry)
+            entry.set_position(0)
+            stack = getattr(entry, "_field_stack", None)
+            if stack is not None:
+                stack.set_visible_child_name("read")
 
     def _panel(self, heading, placeholder, width, kind):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -1051,24 +1449,34 @@ class Cookbook(nbapp.AppWindow):
         name, amount = self._split_ing(line)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         row.get_style_context().add_class("ingrow")
-        nm = Gtk.Label(label=name, xalign=0)
+        nm = Gtk.Label(xalign=0)
+        _set_recipe_text(nm, name)
         # An ingredient you cannot read is useless, and on a 1024-wide screen
         # this column is only ~200px: ellipsizing turned "Preserved lemons,
         # quartered" into "Preserved lemons, quart...". Wrap onto a second line
         # instead — the row simply grows a little taller.
         nm.set_line_wrap(True)
         nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        nm.set_valign(Gtk.Align.START)
+        # BASELINE, not START: see the amount below.
+        nm.set_valign(Gtk.Align.BASELINE)
         nm.get_style_context().add_class("ingname")
         row.pack_start(nm, True, True, 0)
         if amount:
-            al = Gtk.Label(label=amount, xalign=1)
+            al = Gtk.Label(xalign=1)
+            _set_recipe_text(al, amount)
             al.set_line_wrap(True)                     # a wordy amount wraps
             al.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
             al.set_max_width_chars(16)                 # but never widens the
             al.set_halign(Gtk.Align.END)               # column (halign, since
-            al.set_valign(Gtk.Align.START)             # max-width-chars alone
             al.get_style_context().add_class("ingamt")  # does not cap a FILL
+            # 12px sans beside 16px serif: aligned at the TOP the amount sits
+            # six pixels above the name it belongs to, and the ledger reads as
+            # two lists rather than one. Both labels share the row's baseline
+            # instead — measured level whatever the two type sizes are, so it
+            # holds with Settings ▸ Large text as a fixed nudge would not. (A
+            # wrapped name keeps its FIRST line on that baseline, which is the
+            # line the amount belongs beside.)
+            al.set_valign(Gtk.Align.BASELINE)
             row.pack_end(al, False, False, 0)          # child)
         return row
 
@@ -1095,7 +1503,8 @@ class Cookbook(nbapp.AppWindow):
         num.set_halign(Gtk.Align.START)
         num.get_style_context().add_class("stepnum")
         row.pack_start(num, False, False, 0)
-        body = Gtk.Label(label=text, xalign=0)
+        body = Gtk.Label(xalign=0)
+        _set_recipe_text(body, text)
         body.set_line_wrap(True)
         # WORD_CHAR, not WORD: a single very long word (a pasted link, say)
         # cannot then set a minimum width the window has to grow to.
@@ -1187,23 +1596,32 @@ class Cookbook(nbapp.AppWindow):
                 self.empty_title.set_text(_t("No recipes"))
                 self.empty_hint.set_text(
                     _t("Add one with New Recipe, below the list."))
-            elif not self._visible_indices():
-                cat = (self.cats[self.active_cat - 1]
-                       if self.active_cat > 0 else None)
+            elif self.query and not self._visible_indices():
+                # The list has already said "No matches" beside the search box;
+                # this pane offers the way out of it instead of repeating it.
                 self.empty_title.set_text(
-                    _t("No recipes in “%s”") % cat if cat else _t("No recipes"))
-                self.empty_hint.set_text(
-                    _t("Add one with New Recipe."))
+                    _t("Clear the search to see all recipes."))
+                self.empty_hint.set_text("")
+            elif not self._visible_indices():
+                # The LIST owns the sentence that names the empty category (it
+                # is the only surface that knows a filter is hiding recipes).
+                # Naming it here as well put the identical sentence on screen
+                # twice, a few hundred pixels apart, which reads as a rendering
+                # fault — the very thing the note in rebuild_list sets out to
+                # avoid. So the list states the absence and this pane, which is
+                # the one with room for it, offers the way out of it.
+                self.empty_title.set_text(_t("Add one with New Recipe."))
+                self.empty_hint.set_text("")
             else:
                 self.empty_title.set_text(_t("No recipe selected"))
                 self.empty_hint.set_text(_t("Select a recipe from the list"))
+            # An empty label still takes a line of height, which would push the
+            # centred block off centre.
+            self.empty_hint.set_visible(bool(self.empty_hint.get_text()))
             self._switch_main("empty")
             return
         self._loading = True
-        # Runtime set_text bypasses the construction-time translation walk,
-        # so the fallback has to be translated here or it is English forever.
-        _cat = r.get("cat")
-        self.kicker.set_text((_cat if _cat else _t("No category")).upper())
+        self._set_kicker(r)
         self.title_entry.set_text(r.get("title", ""))
         self.desc_entry.set_text(r.get("desc", ""))
         for field, ent in self.meta_entries.items():
@@ -1216,8 +1634,8 @@ class Cookbook(nbapp.AppWindow):
         self.steps_stack.set_visible_child_name("view")
         self.ing_edit_btn.set_label(_t("Edit"))
         self.steps_edit_btn.set_label(_t("Edit"))
-        self.savestate.set_markup('<span foreground="#7FA98C">● </span>Saved %s'
-                                  % time.strftime("%H:%M"))
+        self._read_fields()
+        self._show_save_state()
         self._switch_main("editor")
         self._loading = False
 
@@ -1226,10 +1644,7 @@ class Cookbook(nbapp.AppWindow):
         if r is None or getattr(self, "_loading", False):
             return
         r["title"] = entry.get_text()
-        # Runtime set_text bypasses the construction-time translation walk,
-        # so the fallback has to be translated here or it is English forever.
-        _cat = r.get("cat")
-        self.kicker.set_text((_cat if _cat else _t("No category")).upper())
+        self._set_kicker(r)
         self._update_row_titles()
         self._touch()
 
@@ -1284,10 +1699,10 @@ class Cookbook(nbapp.AppWindow):
             return
         title_lbl = getattr(row, "_title_lbl", None)
         if title_lbl is not None:
-            title_lbl.set_text(r["title"] or _t("Untitled recipe"))
+            _set_recipe_text(title_lbl, r["title"], "Untitled recipe")
         meta_lbl = getattr(row, "_meta_lbl", None)
         if meta_lbl is not None:
-            meta_lbl.set_text(self._row_meta(r))
+            _set_recipe_text(meta_lbl, self._row_meta(r))
 
     def _find_row(self, idx):
         """Locate the current sidebar ListBoxRow for recipe index `idx`."""
@@ -1300,30 +1715,109 @@ class Cookbook(nbapp.AppWindow):
         """The whole library as a state. _serialize already produces exactly
         this — categories, recipes, the active filter and the selection — and
         reusing it means undo can never capture a different subset of the model
-        than the autosave writes."""
-        return self._serialize()
+        than the autosave writes.
+
+        The selection and the filter ride along as VOLATILE keys ("_"-prefixed,
+        which UndoHistory keeps but ignores when it decides whether two states
+        differ — Writer's caret is the same idea). Choosing a recipe or a chip
+        is navigation, not an edit anyone would ask to take back; carried as
+        ordinary keys they made Ctrl+Z on a mistyped title jump the page to
+        whatever recipe and chip the previous snapshot happened to hold."""
+        state = self._serialize()
+        state["_sel"] = state.pop("sel")
+        state["_active_cat"] = state.pop("active_cat")
+        return state
 
     def _undo_restore(self, state):
         """Put a snapshot back on screen. Rebuilds the chips as well as the
         list: undoing a New Category has to take the chip away too, and undoing
         a Delete Category has to bring it back."""
+        before = self._undo_snapshot()
+        self._apply_undo_state(state)
+        if self._save_timer:
+            try:
+                GLib.source_remove(self._save_timer)
+            except Exception:
+                pass
+            self._save_timer = None
+        if not self._save_state():
+            self._apply_undo_state(before)
+            # Repair best-effort if a writer failed after publishing. The
+            # persistent status message from the first failure remains visible.
+            self._save_state()
+            return False
+        # The message a delete left on the chip has been answered by this undo.
+        self._clear_flash()
+        self._show_save_state()
+        return True
+
+    def _apply_undo_state(self, state):
+        """Apply one complete cookbook snapshot without scheduling a save.
+
+        WHERE THE PAGE LANDS. The snapshot's selection and filter are put back
+        only when the restore is STRUCTURAL — the library gained or lost a
+        recipe or a category (an undo of New Recipe, Duplicate, Delete Recipe,
+        New/Delete Category), which is exactly when what was on screen may no
+        longer exist. An undo of typing changes text and nothing else, so it
+        leaves you on the recipe you are editing, in the column you were
+        typing in."""
+        known = {"cats", "active_cat", "sel", "recipes", "_sel", "_active_cat"}
+        self._extra = {k: copy.deepcopy(v) for k, v in state.items()
+                       if k not in known}
+        here_sel, here_cat = self.sel, self.active_cat
+        n_recipes, n_cats = len(self.recipes), len(self.cats)
+        editing = [kind for kind, stack in (("ing", self.ing_stack),
+                                            ("steps", self.steps_stack))
+                   if stack.get_visible_child_name() == "edit"]
         self.cats = list(state.get("cats", []))
         self.recipes = [self._make_recipe(**r) for r in state.get("recipes", [])]
-        self.active_cat = state.get("active_cat", 0)
-        if not (isinstance(self.active_cat, int)
-                and 0 <= self.active_cat <= len(self.cats)):
-            self.active_cat = 0
-        sel = state.get("sel", -1)
-        self.sel = sel if (isinstance(sel, int) and 0 <= sel < len(self.recipes)) \
-            else (0 if self.recipes else -1)
+        snap_sel = state.get("_sel", state.get("sel", -1))
+        snap_cat = state.get("_active_cat", state.get("active_cat", 0))
+        structural = (len(self.recipes) != n_recipes or len(self.cats) != n_cats)
+        cat = snap_cat if structural else here_cat
+        if not self._valid_cat(cat):
+            cat = snap_cat if self._valid_cat(snap_cat) else 0
+        self.active_cat = cat
+        sel = snap_sel if structural else here_sel
+        if isinstance(sel, int) and 0 <= sel < len(self.recipes):
+            self.sel = sel
+        elif sel == -1:
+            self.sel = -1          # nothing was selected: don't invent one
+        else:
+            # The recipe that was on screen is gone. Fall back INSIDE the active
+            # filter — recipe 0 blindly put a recipe from another category on
+            # the page while the chip beside it said otherwise.
+            vis = self._visible_indices()
+            self.sel = vis[0] if vis else -1
+        if self.sel >= 0 and self.sel not in self._cat_indices():
+            # ...and never show a recipe the category filter hides.
+            self.active_cat = self._filter_for(self.sel)
         self.rebuild_chips()
         self.rebuild_list()
         self._refresh_editor()
-        self._touch()
+        # _refresh_editor drops both columns back to their read view, which is
+        # right when the recipe changed and wrong when it did not: undo pressed
+        # with the caret in the ingredient editor closed the editor under it.
+        if self.sel == here_sel and self._cur() is not None:
+            for kind in editing:
+                self._enter_panel_edit(kind)
+
+    def _valid_cat(self, cat):
+        return (isinstance(cat, int) and not isinstance(cat, bool)
+                and 0 <= cat <= len(self.cats))
+
+    def _filter_for(self, idx):
+        """The chip index that shows recipe `idx` (0 = All)."""
+        cat = self.recipes[idx].get("cat") if 0 <= idx < len(self.recipes) else None
+        return (self.cats.index(cat) + 1) if cat in self.cats else 0
 
     def _touch(self):
         self.undo.touch()
-        self.savestate.set_markup('<span foreground="#C8341E">● </span>Editing…')
+        self._recovery_dirty = True
+        # Typing again answers whatever the last message said, so the chip goes
+        # back to reporting the document.
+        self._clear_flash()
+        self._show_save_state()
         if self._save_timer:
             GLib.source_remove(self._save_timer)
         self._save_timer = GLib.timeout_add(900, self._mark_saved)
@@ -1331,31 +1825,70 @@ class Cookbook(nbapp.AppWindow):
     def _mark_saved(self):
         # The debounce has fired: perform the REAL disk write, and only claim
         # "Saved" once the bytes have actually reached the file.
-        if self._save_state():
-            self.savestate.set_markup('<span foreground="#7FA98C">● </span>Saved %s'
-                                      % time.strftime("%H:%M"))
-        else:
-            self.savestate.set_markup(
-                '<span foreground="#C8341E">● </span>Not saved')
+        if self._closed:
+            self._save_timer = None
+            return False
+        self._save_state()
         self._save_timer = None
+        self._show_save_state()
         return False
+
+    def _dot(self, color, text):
+        self.savestate.set_markup('<span foreground="%s">● </span>%s'
+                                  % (color, GLib.markup_escape_text(text)))
+
+    def _show_save_state(self):
+        """Say what has actually happened to the file.
+
+        This label used to be stamped with time.strftime() on every refresh, so
+        opening the app claimed a save at the moment you opened it and clicking
+        any recipe re-stamped it — a time nothing was written at. Worse, that
+        stamp also ran on the navigation refresh, so a red "Not saved" from a
+        write that really had failed was replaced by a green "Saved <now>" as
+        soon as you clicked another recipe, while the file still held the old
+        text. The chip now renders from what the writer recorded, and a
+        transient message (a delete, an export) keeps the chip until it has been
+        on screen long enough to read."""
+        if time.monotonic() < self._flash_until:
+            return
+        if self._recovery_dirty and self._save_failed:
+            self._dot("#C8341E", _t("Not saved"))
+        elif self._recovery_dirty:
+            self._dot("#C8341E", _t("Editing…"))
+        elif self._saved_at:
+            self._dot("#7FA98C", _t("Saved %s") % self._saved_at)
+        else:
+            # Nothing has been written this session: the library on screen is
+            # the one in the file, and no clock reading would be true.
+            self._dot("#7FA98C", _t("Saved"))
 
     # ------------------------------------------------------------- persistence
     def _serialize(self):
         """Build the on-disk dict for the whole cookbook (categories, recipes,
         the active filter and the selection) written to the autosave file."""
-        return {
+        # Unknown top-level fields may belong to a newer Cookbook build. Carry
+        # them through an edit instead of silently downgrading the store and
+        # erasing metadata this version does not understand.
+        data = dict(getattr(self, "_extra", None) or {})
+        data.update({
             "cats": list(self.cats),
             "active_cat": self.active_cat,
             "sel": self.sel,
-            "recipes": [
-                {"title": r.get("title", ""), "cat": r.get("cat"),
-                 "desc": r.get("desc", ""), "time": r.get("time", ""),
-                 "makes": r.get("makes", ""), "effort": r.get("effort", ""),
-                 "ing": r.get("ing", ""), "steps": r.get("steps", ""),
-                 "photo": r.get("photo", "")}
-                for r in self.recipes],
-        }
+            "recipes": [self._serialize_recipe(r) for r in self.recipes],
+        })
+        return data
+
+    @staticmethod
+    def _serialize_recipe(r):
+        known = {"title", "cat", "desc", "time", "makes", "effort",
+                 "ing", "steps", "photo"}
+        out = {k: copy.deepcopy(v) for k, v in r.items() if k not in known}
+        out.update({"title": r.get("title", ""), "cat": r.get("cat"),
+                    "desc": r.get("desc", ""), "time": r.get("time", ""),
+                    "makes": r.get("makes", ""),
+                    "effort": r.get("effort", ""), "ing": r.get("ing", ""),
+                    "steps": r.get("steps", ""), "photo": r.get("photo", "")})
+        return out
 
     @staticmethod
     def _as_list(v):
@@ -1393,6 +1926,8 @@ class Cookbook(nbapp.AppWindow):
 
         Never raises and never gives up wholesale: one unreadable recipe costs
         itself, not the cookbook."""
+        self._extra = {k: v for k, v in data.items()
+                       if k not in ("cats", "active_cat", "sel", "recipes")}
         cats = []
         for c in self._as_list(data.get("cats")):
             c = self._as_text(c).strip()
@@ -1411,7 +1946,12 @@ class Cookbook(nbapp.AppWindow):
             cat = self._as_text(cat).strip() if not isinstance(cat, str) \
                 else cat.strip()
             fields["cat"] = cat or None
-            recipes.append(self._make_recipe(**fields))
+            recipe = self._make_recipe(**fields)
+            known = {"title", "cat", "desc", "time", "makes", "effort",
+                     "ing", "steps", "photo"}
+            recipe.update({k: copy.deepcopy(v) for k, v in r.items()
+                           if k not in known})
+            recipes.append(recipe)
             # A recipe filed under a category the list has lost keeps its
             # category and gets the chip back, rather than being quietly
             # unfiled: the user typed that name, and re-pointing beats dropping.
@@ -1438,8 +1978,13 @@ class Cookbook(nbapp.AppWindow):
         list is read as the recipe list it plainly is, and _apply_data takes
         the rest one record at a time."""
         try:
-            with open(COOKBOOK_FILE) as fh:
-                data = json.load(fh)
+            data = _read_cookbook_json()
+        except CookbookStoreTooLarge:
+            # Valid JSON that exceeds the launch budget would not be recognized
+            # as damaged by the shared writer. Mark it for the same protective
+            # move used by other valid-but-unrecognized cookbook shapes.
+            self._quarantine_pending = True
+            return
         except Exception:
             # First run (no file) or unreadable data -> empty library. An
             # unparseable file is quarantined by nbapp.atomic_write_json before
@@ -1489,12 +2034,20 @@ class Cookbook(nbapp.AppWindow):
             # same moment nbapp picks for the files it can detect, so there is
             # never a window in which the library has no file at all.
             if getattr(self, "_quarantine_pending", False):
+                if not _quarantine(COOKBOOK_FILE):
+                    raise OSError("could not preserve the unrecognized cookbook")
                 self._quarantine_pending = False
-                _quarantine(COOKBOOK_FILE)
             nbapp.atomic_write_json(COOKBOOK_FILE, self._serialize())
             self._save_warned = False
+            self._recovery_dirty = False
+            self._last_store_error = None
+            # The one moment a save time is true: the bytes are in the file.
+            self._saved_at = time.strftime("%H:%M")
+            self._save_failed = False
             return True
         except Exception as exc:
+            self._last_store_error = exc
+            self._save_failed = True
             # See academics._save_to_disk. Most callers here ignore the return
             # value, so without this a full disk or a read-only filesystem is
             # indistinguishable from the app eating the library: the file keeps
@@ -1515,17 +2068,44 @@ class Cookbook(nbapp.AppWindow):
     # category eyebrow, title, description, the time/makes/effort meta and the
     # Ingredients + Method sections — to a paginated PDF under $NB_HOME/
     # Documents. There is no file open / save.
+    FLASH_SECONDS = 5.0
+
     def _flash_status(self, text, ok=False):
         """Surface a transient status line in the recipe page's save indicator,
         matching the save chip's dot styling — a muted green dot for success,
-        signage-red for a problem (crash-safe)."""
+        signage-red for a problem (crash-safe).
+
+        It HOLDS the chip for a few seconds. This label is the only feedback a
+        no-confirm delete gives, and the autosave that the same delete started
+        used to overwrite it with "Saved 14:12" after 0.78 seconds — long enough
+        to see something appear, not long enough to read that Ctrl+Z brings the
+        recipe back."""
         color = "#7FA98C" if ok else "#C8341E"
         try:
-            self.savestate.set_markup(
-                '<span foreground="%s">● </span>%s'
-                % (color, GLib.markup_escape_text(text)))
+            self._dot(color, text)
+            self._flash_until = time.monotonic() + self.FLASH_SECONDS
+            if self._flash_timer:
+                GLib.source_remove(self._flash_timer)
+            self._flash_timer = GLib.timeout_add(
+                int(self.FLASH_SECONDS * 1000), self._flash_expired)
         except Exception:
             pass
+
+    def _flash_expired(self):
+        self._flash_timer = None
+        self._flash_until = 0.0
+        self._show_save_state()
+        return False
+
+    def _clear_flash(self):
+        """Give the chip back to the document (the user has moved on)."""
+        self._flash_until = 0.0
+        if self._flash_timer:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:
+                pass
+            self._flash_timer = None
 
     def _pdf_name(self, r):
         """A neutral PDF filename derived from the recipe title."""
@@ -1681,14 +2261,30 @@ class Cookbook(nbapp.AppWindow):
     def _on_destroy(self, *_):
         # Final flush on window close so the last (possibly still-debounced)
         # edit is written before we exit.
-        if self._save_timer:
-            try:
-                GLib.source_remove(self._save_timer)
-            except Exception:
-                pass
-            self._save_timer = None
+        if self._closed:
+            return False
+        self._closed = True
+        for attr in ("_save_timer", "_flash_timer", "_ing_w_idle"):
+            source = getattr(self, attr, None)
+            if source:
+                try:
+                    GLib.source_remove(source)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
         self._save_state()
         return False
+
+    def _on_delete(self, *_):
+        """Veto close while this window holds the only updated cookbook -- and
+        say why, with a way out (nbapp.close_unsaved_card). A bare veto was a
+        window that could not be closed on a full disk."""
+        if not getattr(self, "_recovery_dirty", False):
+            return False
+        if self._save_state():
+            return False
+        return not nbapp.close_unsaved_card(
+            self, getattr(self, "_last_store_error", None), COOKBOOK_FILE)
 
     def _dialog_escape(self, dlg):
         """Wire Esc to dismiss a decorationless modal dialog. These dialogs are
@@ -1700,7 +2296,10 @@ class Cookbook(nbapp.AppWindow):
             lambda _w, e: (dlg.destroy() or True)
             if e.keyval == Gdk.KEY_Escape else False)
 
-    def _new_category(self):
+    def _new_category(self, assign=False):
+        """Make a category. With `assign`, the recipe on screen is filed under
+        it — that is what asking for a new category from the recipe's own
+        category control means."""
         dlg = Gtk.Dialog(title="New Category", transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("catdlg")
@@ -1713,6 +2312,15 @@ class Cookbook(nbapp.AppWindow):
         entry = Gtk.Entry()
         entry.set_placeholder_text(_t("Category name"))
         entry.get_style_context().add_class("catdlgentry")
+        # Add used to close the dialog whatever was typed: a blank name or one
+        # that already exists left the chips exactly as they were, with no
+        # message anywhere — the same gesture as a successful add, and nothing
+        # to tell them apart. The dialog now stays open and says which it is.
+        err = Gtk.Label(label="", xalign=0)
+        err.get_style_context().add_class("catdlgerr")
+        err.set_line_wrap(True)
+        err.set_max_width_chars(34)
+        err.set_no_show_all(True)
         btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btns.set_halign(Gtk.Align.END)
         cancel = Gtk.Button(label=_t("Cancel"))
@@ -1723,19 +2331,44 @@ class Cookbook(nbapp.AppWindow):
         btns.pack_start(ok, False, False, 0)
         box.pack_start(hd, False, False, 0)
         box.pack_start(entry, False, False, 0)
+        box.pack_start(err, False, False, 0)
         box.pack_start(btns, False, False, 0)
         area.add(box)
 
+        def refuse(message):
+            err.set_text(message)
+            err.show()
+            entry.get_style_context().add_class("catdlgentryerr")
+            entry.grab_focus()
+
         def commit(*_):
             v = entry.get_text().strip()
-            if v and v not in self.cats:
-                self.cats.append(v)
+            if not v:
+                refuse(_t("Enter a category name."))
+                return
+            if v in self.cats:
+                refuse(_t("A category with that name already exists."))
+                return
+            self.undo.checkpoint("New Category")
+            self.cats.append(v)
+            r = self._cur() if assign else None
+            if r is not None:
+                # Asked for from the recipe's own category control: file it.
+                r["cat"] = v
+                self.active_cat = len(self.cats)
+            elif self._cur() is None:
+                # Nothing open, so show what was just made.
                 self.active_cat = len(self.cats)
                 self.sel = -1
-                self.rebuild_chips()
-                self.rebuild_list()
-                self._refresh_editor()
-                self._touch()
+            # ...and otherwise leave the page alone. Adding a category used to
+            # switch the filter to the new (empty) one and deselect the recipe,
+            # so making a category while writing a recipe threw the recipe off
+            # the screen.
+            self.rebuild_chips()
+            self.rebuild_list()
+            self._refresh_editor()
+            self._touch()
+            self.undo.commit()
             dlg.destroy()
 
         cancel.connect("clicked", lambda *_: dlg.destroy())
@@ -1754,8 +2387,12 @@ class Cookbook(nbapp.AppWindow):
         if not (0 <= ci < len(self.cats)):
             return
         name = self.cats[ci]
-        n = len([r for r in self.recipes if r.get("cat") == name])
         self._remove_category(ci)
+        # The same sentence a deleted recipe gets. Deleting a category used to
+        # say nothing at all: the chip vanished, its recipes quietly became
+        # "No category", and the only clue that any of it could be taken back
+        # was knowing Ctrl+Z exists.
+        self._flash_status(_t("Deleted “%s” — Ctrl+Z to undo") % name)
 
     def _remove_category(self, ci):
         """Delete category index `ci`, reassigning its recipes to No category
@@ -1839,9 +2476,23 @@ class Cookbook(nbapp.AppWindow):
                     nbapp.SEP,
                     ("Close    Esc", self.close)]
         if name == "View":
-            # category filters (mirror the sidebar chips) + list navigation
-            items = [(("•  " if self.active_cat == 0 else "     ") + "All Recipes",
-                      lambda: self._on_chip(None, 0))]
+            # the search, the category filters (mirroring the sidebar chips)
+            # and list navigation
+            items = [("Search Recipes    Ctrl+F",
+                      self._focus_search if self._can_search() else None),
+                     # Live whenever there is something to clear, which is
+                     # the same pair of conditions _clear_search itself tests.
+                     # `self.query` is the box STRIPPED, so a box holding only
+                     # spaces greyed this item out beside text a person can see
+                     # and Clear would remove -- and the callback's own guard
+                     # then had to refuse in silence for a case the menu said
+                     # could not happen.
+                     ("Clear Search",
+                      (lambda: self._clear_search())
+                      if self.query or self.search.get_text() else None),
+                     nbapp.SEP]
+            items += [(("•  " if self.active_cat == 0 else "     ") + "All Recipes",
+                       lambda: self._on_chip(None, 0))]
             for i, c in enumerate(self.cats):
                 items.append(
                     (("•  " if self.active_cat == i + 1 else "     ") + c,
@@ -1857,24 +2508,42 @@ class Cookbook(nbapp.AppWindow):
             # the odd sentence-case label in the bar.
             return [("Start Cooking", (lambda: self._enter_cook())
                      if has else None),
+                    ("Move to Category…",
+                     (lambda: self._on_kicker_clicked(self.kicker_btn))
+                     if has else None),
                     nbapp.SEP,
                     ("New Recipe", lambda: self.new_recipe()),
                     ("New Category…", lambda: self._new_category()),
-                    ("Delete Category…",
+                    # No ellipsis on either Delete: both act at once and are
+                    # taken back with Ctrl+Z, and rule 1 of the menu
+                    # conventions makes "…" a promise that something will be
+                    # asked first. The confirm they once had was removed on
+                    # purpose (see _confirm_delete_current) — the labels were
+                    # left behind still promising it.
+                    ("Delete Category",
                      (lambda: self._delete_active_category())
                      if has_cat else None),
                     nbapp.SEP,
                     ("Duplicate Recipe",
                      (lambda: self._duplicate_current()) if has else None),
-                    ("Delete Recipe…",
+                    ("Delete Recipe",
                      (lambda: self._confirm_delete_current()) if has else None)]
         return super().menu_items(name)
 
-    def _visible_indices(self):
-        """Recipe indices currently shown, honouring the active category."""
+    def _cat_indices(self):
+        """Recipe indices the active CATEGORY shows, search set aside."""
         cat_filter = self.cats[self.active_cat - 1] if self.active_cat > 0 else None
         return [i for i, r in enumerate(self.recipes)
                 if cat_filter is None or r.get("cat") == cat_filter]
+
+    def _visible_indices(self):
+        """Recipe indices currently listed: the active category, narrowed by
+        whatever is in the search box."""
+        q = (self.query or "").strip().lower()
+        idx = self._cat_indices()
+        if not q:
+            return idx
+        return [i for i in idx if self._matches(self.recipes[i], q)]
 
     def _select_relative(self, delta):
         vis = self._visible_indices()
@@ -1892,6 +2561,7 @@ class Cookbook(nbapp.AppWindow):
         r = self._cur()
         if r is None:
             return
+        self.undo.checkpoint("Duplicate Recipe")
         copy = dict(r)
         copy["title"] = (r.get("title") or _t("Untitled recipe")) + _t(" (copy)")
         self.recipes.insert(self.sel + 1, copy)
@@ -1899,6 +2569,7 @@ class Cookbook(nbapp.AppWindow):
         self.rebuild_list()
         self._refresh_editor()
         self._touch()
+        self.undo.commit()
 
     def _confirm_delete_current(self):
         """Delete the current recipe. No confirm: it is undoable now.
@@ -1955,7 +2626,7 @@ class Cookbook(nbapp.AppWindow):
                 font-size: 13px; font-weight: 500; border: 1px solid #D7D2C5;
                 background: #FCFBF8; color: #3A362E; box-shadow: none; }
         .chip:hover { background: #EFEBE0; }
-        .chip.active { background: #EAE3D2; color: #C8341E; font-weight: 600;
+        .chip.active { background: #EAE3D2; color: #B12D19; font-weight: 600;
                        border: 1px solid #C9C4B6; }
         .chip.active:hover { background: #EAE3D2; }
         .chipadd { min-height: 28px; padding: 0 12px; border-radius: 8px;
@@ -1966,8 +2637,13 @@ class Cookbook(nbapp.AppWindow):
            node, so a colour set on the button alone never reaches its text:
            every button whose label is not ink has to name the label as well. */
         .chip label { color: #3A362E; }
-        .chip.active label { color: #C8341E; font-weight: 600; }
-        .chipadd label { color: #8A857A; }
+        .chip.active label { color: #B12D19; font-weight: 600; }
+        .chipadd label { color: #6E695E; }
+
+        .cbsearch { margin-top: 14px; font-size: 13px; color: #1A1916;
+                    background: #FCFBF8; border: 1px solid #C9C4B6;
+                    border-radius: 8px; box-shadow: none; min-height: 30px; }
+        .cbsearch:focus { border: 1px solid #8A857A; }
 
         .recipelist { background: #F1EEE6; padding: 12px; }
         .recipelist row { padding: 0; }
@@ -1978,14 +2654,14 @@ class Cookbook(nbapp.AppWindow):
         .ricon { margin-top: 2px; }
         .rtitle { font-family: "Newsreader","Liberation Serif",serif;
                   font-size: 16px; color: #1A1916; }
-        .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #9A9484; }
+        .rmeta { font-size: 11px; letter-spacing: 0.3px; color: #6E695E; }
         .emptylistbox { padding: 34px 12px; }
         /* No tracking here. 11px + ~0.18em is this OS's UPPERCASE eyebrow
            style ("CLASSES", "TRANSITIONS"); applied to a sentence-case line
            it renders as "N o   r e c i p e s" -- spaced-out text reads as a
            rendering fault. Music's "No playlists" sidebar note, the same
            pattern one app over, is untracked too. */
-        .emptylist { font-size: 11px; color: #9A9484; font-weight: 600; }
+        .emptylist { font-size: 11px; color: #6E695E; font-weight: 600; }
 
         .sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
         .newrecipe { min-height: 40px; border: 1px solid #C9C4B6; border-radius: 8px;
@@ -1995,14 +2671,18 @@ class Cookbook(nbapp.AppWindow):
 
         .mainpane { background: #FCFBF8; }
         .emptytitle { font-size: 15px; color: #6E695E; }
-        .emptyhint { font-size: 13px; color: #9A9484; }
+        .emptyhint { font-size: 13px; color: #6E695E; }
 
         .edhead { padding: 20px 72px 6px; }
         .edkicker { font-family: "Nimbus Sans","Helvetica",sans-serif;
                     font-size: 11px; letter-spacing: 2px; color: #9A9484;
                     font-weight: 600; }
+        .kickerbtn { padding: 0; margin: 0; min-height: 0; border: none;
+                     background: transparent; background-image: none;
+                     box-shadow: none; }
+        .kickerbtn:hover label { color: #1A1916; }
         .savestate { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                     font-size: 12px; color: #8A857A; }
+                     font-size: 12px; color: #6E695E; }
         .edtitle { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 40px; color: #1A1916; background: transparent;
                    border: none; padding: 0; margin-top: 8px; }
@@ -2011,12 +2691,29 @@ class Cookbook(nbapp.AppWindow):
                   background: transparent; border: none; padding: 0;
                   margin-top: 6px; }
 
+        /* The read side of a header field: the label carries all the type, so
+           the button around it must add nothing at all. */
+        .readfield { padding: 0; margin: 0; min-height: 0; border: none;
+                     background: transparent; background-image: none;
+                     box-shadow: none; }
+        /* muted-3, not muted-2. These stand in for the recipe's own
+           title / description / meta value on the read side, inside a flat
+           .readfield BUTTON, so a person reads them and clicks them -- and
+           muted-2 measures 2.92:1 on paper, under the 3:1 floor
+           (button_contrast_check). One step down the same ink ramp is 3.55:1
+           and still clearly quieter than the real value (ink for the title and
+           the meta cells, muted for the description), so the placeholder still
+           reads AS a placeholder. Both tones map to _HC_QUIET in nbapp's
+           high-contrast table, so the boost survives the change. */
+        .edtitle.placeholder, .eddesc.placeholder,
+        .metaval.placeholder { color: #8A857A; }
+
         .metabar { margin-top: 20px; border: 1px solid #D7D2C5; border-radius: 8px;
                    background: #FCFBF8; }
         .metacell { padding: 9px 20px 10px; }
         .metadiv { border-left: 1px solid #D7D2C5; }
         .metacap { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                   font-size: 10px; letter-spacing: 1.5px; color: #9A9484;
+                   font-size: 10px; letter-spacing: 1.5px; color: #6E695E;
                    font-weight: 600; }
         .metaval { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 16px; color: #1A1916; background: transparent;
@@ -2032,29 +2729,32 @@ class Cookbook(nbapp.AppWindow):
                      border: none; box-shadow: none;
                      font-family: "Nimbus Sans","Helvetica",sans-serif;
                      font-size: 11px; letter-spacing: 1px; color: #9A9484; }
-        .paneledit label { color: #7D7767; letter-spacing: 1px; }
+        .paneledit label { color: #6E695E; letter-spacing: 1px; }
         .paneledit:hover, .paneledit:hover label { color: #1A1916; }
         .edbox { font-family: "Newsreader","Liberation Serif",serif;
                  font-size: 16px; color: #1A1916; background: transparent;
                  padding: 16px 0 0; caret-color: #C8341E; }
         .edbox text { background: transparent; }
         .edbox text selection { background-color: #EAE3D2; color: #1A1916; }
-        .edbox.placeholder text { color: #9A9484; }
+        .edbox.placeholder text { color: #8A857A; }   /* muted-3: see above */
 
         .renderlist { padding: 16px 0 0; background: transparent; }
+        /* Same placeholder tier, and the same defect shape -- a LABEL
+           inside a flat button (.renderphbtn). It is only reachable once a
+           recipe is open, so a construct-time gate never sees it. */
         .renderph { font-family: "Newsreader","Liberation Serif",serif;
-                    font-size: 16px; color: #9A9484; }
+                    font-size: 16px; color: #6E695E; }
         .renderphbtn { padding: 0; border: none; background: transparent;
                        background-image: none; box-shadow: none; }
         .ingrow { padding: 6px 0; }
         .ingname { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 16px; color: #1A1916; }
         .ingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                  font-size: 12px; letter-spacing: 0.5px; color: #9A9484; }
+                  font-size: 12px; letter-spacing: 0.5px; color: #6E695E; }
         .steprow { padding: 3px 0 15px; }
         .stepnum { min-width: 26px; min-height: 26px;
                    border: 1px solid #C9C4B6; border-radius: 100px;
-                   color: #8A857A;
+                   color: #6E695E;
                    font-family: "Nimbus Sans","Helvetica",sans-serif;
                    font-size: 12px; }
         .steptext { font-family: "Newsreader","Liberation Serif",serif;
@@ -2095,7 +2795,7 @@ class Cookbook(nbapp.AppWindow):
         .cookingamt { font-family: "Nimbus Sans","Helvetica",sans-serif;
                       font-size: 14px; font-weight: 600; color: #3A362E; }
         .cookingempty { font-family: "Newsreader","Liberation Serif",serif;
-                        font-size: 16px; color: #9A9484; padding-top: 14px; }
+                        font-size: 16px; color: #6E695E; padding-top: 14px; }
         .cooksteps { padding: 24px 36px 26px; }
         .cookpos { font-family: "Nimbus Sans","Helvetica",sans-serif;
                    font-size: 11px; letter-spacing: 2px; color: #9A9484;
@@ -2129,6 +2829,8 @@ class Cookbook(nbapp.AppWindow):
         .catdlgmsg { font-size: 14px; color: #3A362E; }
         .catdlgentry { min-height: 40px; border: 1px solid #C9C4B6; border-radius: 8px;
                        background: #FCFBF8; font-size: 15px; color: #1A1916; }
+        .catdlgentryerr { border: 1px solid #C8341E; }
+        .catdlgerr { font-size: 13px; color: #C8341E; }
         .dlgcancel { min-height: 38px; padding: 0 18px; border: 1px solid #C9C4B6;
                      color: #3A362E; border-radius: 8px; font-size: 14px;
                      background: #FCFBF8; box-shadow: none; }

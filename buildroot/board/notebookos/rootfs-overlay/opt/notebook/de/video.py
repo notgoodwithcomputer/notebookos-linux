@@ -25,6 +25,7 @@ import tempfile
 import subprocess
 import threading
 import time
+import copy
 
 import nbapp
 import nbpicker
@@ -32,6 +33,7 @@ import nbicons
 import nbvideo
 import nbtransitions
 import nbmotion
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 # ---- optional media libs (guarded) ----------------------------------------
@@ -78,6 +80,27 @@ PROJ_DIR = os.path.join(HOME, "Documents")
 VIDEOS_DIR = os.path.join(HOME, "Videos")
 
 SLOTS = 8
+MAX_PROJECT_BYTES = 64 * 1024 * 1024
+
+
+def _set_user_text(label, text):
+    """A name that belongs to the FILM, not to the interface.
+
+    Title-card words, captions, the project's filename and the names of the
+    media files a person imported are all their own words — "Home", "Titles",
+    "The End", "Intro". nbi18n looks up every label, so the storyboard, the
+    timeline chip and the preview read "Fin" while the exported film (drawn by
+    cairo, straight from the model) still said "The End"."""
+    nbi18n.set_verbatim(label, str(text or ""))
+
+
+def read_project_json(path, limit=MAX_PROJECT_BYTES):
+    """Decode a selected project without unbounded UI-thread allocation."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("video project is too large")
+    return json.loads(raw.decode("utf-8-sig"))
 
 # How many steps back Undo can go. Each step is one serialised project (a small
 # dict of the bin + the clip list), so the whole history costs almost nothing.
@@ -205,6 +228,30 @@ def _new_title(text="Title", sub="", dur=TITLE_DUR):
     }
 
 
+class _LaneCell(Gtk.Box):
+    """A timeline lane cell that is exactly as wide as its clip is long.
+
+    set_size_request only sets a FLOOR, and the chip inside a cell carries a
+    label: a clip whose name or caption was longer than its own seconds pushed
+    its cell wider, so one second of footage was 92px in the Video lane, 54px in
+    Audio and 457px in Titles, none of them agreeing with the ruler above. The
+    width the ruler is drawn from is the only width the cell reports, in both
+    directions, and the chip ellipsizes into whatever that is.
+
+    No __gtype_name__ on purpose: a fixed GType name can only be registered once
+    per process (see settings.ReadingColumn)."""
+
+    def __init__(self, w):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL)
+        self._cell_w = max(1, int(w))
+
+    def do_get_preferred_width(self):
+        return self._cell_w, self._cell_w
+
+    def do_get_preferred_width_for_height(self, _height):
+        return self.do_get_preferred_width()
+
+
 class StackHistory:
     """Presents this app's own two-stack history to nbapp.undo_menu_items.
 
@@ -295,6 +342,8 @@ class VideoEditor(nbapp.AppWindow):
         self._play_id = 0               # the running playback timeout, if any
         self._play_pos = 0.0            # playback clock, seconds into the reel
         self._live_clip = None          # index of the clip gtksink is streaming
+        self._live_pending = None       # clip whose preroll is asynchronous
+        self._live_failed = None        # failed stream; use still-frame fallback
         self._player = None             # nbvideo.Playback, built with the preview
         self._play_last = 0             # monotonic time of the last tick
         self._playhead = None           # the timeline playhead Box (moved live)
@@ -305,6 +354,12 @@ class VideoEditor(nbapp.AppWindow):
         self._pv_key = None             # frame key currently being decoded
         self._pv_path = None            # media path currently being decoded
         self._pv_queue = []             # frame keys still owed a card thumbnail
+        self._prev_shot = None          # frame key of the picture ON the stage
+        self._prev_soon_id = 0          # coalesced preview refresh, if pending
+        self._flash_id = 0              # the notice line's own timeout
+        self._audio_probe_cache = {}    # media path -> carries an audio stream
+        self._audio_probe_busy = set()  # paths a background probe is asking about
+        self._closed = False            # destroyed: no late repaint may land
         # in-window confirm overlay (destructive-action guard)
         self._confirm_layer = None
         # undo / redo history (see _push_undo)
@@ -317,6 +372,7 @@ class VideoEditor(nbapp.AppWindow):
         self._redo_names = []
         self.history = StackHistory(self)
         self._undo_busy = False    # true while restoring, so nothing re-records
+        self._quarantine_pending = False  # unrecognized autosave still at path
 
         # model — loaded from disk (empty on first run, no seed)
         self._bin = []                  # [{path, name, kind, dur, srcdur}]
@@ -345,6 +401,7 @@ class VideoEditor(nbapp.AppWindow):
         # paint the loaded model into every pane, then settle Properties on the
         # "nothing selected" state.
         self._render_all()
+        self._highlight_palette(None)
         self._load_props(None)
         self._update_project_name()
 
@@ -492,7 +549,8 @@ class VideoEditor(nbapp.AppWindow):
             ico.set_valign(Gtk.Align.CENTER)
             row.pack_start(ico, False, False, 0)
             txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            nm = Gtk.Label(label=m["name"], xalign=0)
+            nm = Gtk.Label(xalign=0)
+            _set_user_text(nm, m["name"])
             nm.get_style_context().add_class("binname")
             nm.set_ellipsize(Pango.EllipsizeMode.END)
             nm.set_max_width_chars(22)
@@ -677,9 +735,19 @@ class VideoEditor(nbapp.AppWindow):
 
         # a real decoded frame, cached per media path (video frames arrive
         # asynchronously — the poll paints them in when the decode finishes).
+        key = self._frame_key(clip)
         pixbuf = self._request_frame(clip)
         if pixbuf is not None:
-            self._show_frame(pixbuf)
+            self._show_frame(pixbuf, key)
+            return
+        if (key not in self._frame_cache
+                and self._same_shot(getattr(self, "_prev_shot", None), key)):
+            # The picture already on the stage is this very moment of this very
+            # file, being re-composited (a caption typed, an effect chosen)
+            # rather than replaced. Leave it up until the new one lands: going
+            # back to the dark placeholder between letters made the stage flash
+            # on every keystroke. A decode that FAILS caches False, which is not
+            # "unresolved", so a genuinely unshowable clip still says so.
             return
         # No frame yet — show the honest name/placeholder, never a fake frame.
         if kind == "audio":
@@ -691,6 +759,39 @@ class VideoEditor(nbapp.AppWindow):
         else:
             note = name          # a video frame is decoding, or decode failed
         self._show_placeholder(note)
+
+    # Typing is not an edit that has to be re-rendered per letter. A caption is
+    # part of the frame key, so every keystroke was a cache miss that tore down
+    # the running decode, rendered a full-size caption PNG with cairo on the main
+    # loop and started another ffmpeg — around 150ms a key on a developer's
+    # machine and worse on the guest, with the stage dropping to the dark
+    # placeholder in between. The refresh is coalesced instead: one decode, once
+    # the typing settles.
+    PREVIEW_SETTLE_MS = 400
+
+    def _preview_soon(self):
+        """Refresh the stage once the typing settles, not once per keystroke."""
+        self._cancel_preview_soon()
+        try:
+            self._prev_soon_id = GLib.timeout_add(
+                self.PREVIEW_SETTLE_MS, self._preview_now)
+        except Exception:
+            self._prev_soon_id = 0
+            self._update_preview()
+
+    def _cancel_preview_soon(self):
+        tid = getattr(self, "_prev_soon_id", 0)
+        if tid:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self._prev_soon_id = 0
+
+    def _preview_now(self):
+        self._prev_soon_id = 0
+        self._update_preview()
+        return False
 
     def _card_preview(self, clip, w=None, h=None):
         """A title card as it will actually be exported, scaled for the screen.
@@ -737,8 +838,22 @@ class VideoEditor(nbapp.AppWindow):
         cache[key] = pb if pb is not None else False
         return pb
 
-    def _show_frame(self, pixbuf):
-        """Put a real decoded frame on the stage, in place of the placeholder."""
+    @staticmethod
+    def _same_shot(a, b):
+        """Whether two frame keys are the same moment of the same FILE, so one
+        picture is the other being re-composited (see _frame_key).
+
+        A key with no file in it (a clip whose media went missing) matches
+        nothing, itself included: two such clips are not one picture."""
+        return bool(a and b and a[0] and a[0] == b[0] and a[1] == b[1])
+
+    def _show_frame(self, pixbuf, key=None):
+        """Put a real decoded frame on the stage, in place of the placeholder.
+
+        `key` is the frame key the picture came from (None for a title card or
+        a passing playback frame), so the stage knows which shot it is showing
+        when the next refresh asks whether to keep it."""
+        self._prev_shot = key
         try:
             # Device-scaled surface, not a raw pixbuf: see _decode_image.
             nbicons.set_image_pixbuf(self._prev_image, pixbuf)
@@ -751,10 +866,11 @@ class VideoEditor(nbapp.AppWindow):
 
     def _show_placeholder(self, text):
         """Reveal the neutral glyph + line and hide the decoded-frame image."""
+        self._prev_shot = None
         try:
             self._prev_image.hide()
             self._prev_glyph.show()
-            self._prev_label.set_text(text)
+            _set_user_text(self._prev_label, text)
             self._prev_label.show()
         except Exception:
             pass
@@ -1027,7 +1143,21 @@ class VideoEditor(nbapp.AppWindow):
         ef = EFFECT_VF.get(clip.get("effect", "none"), "")
         if ef:
             base += "," + ef
-        args = [ff, "-nostdin", "-y", "-ss", "%.3f" % max(0.0, t), "-i", path]
+        args = [ff, "-nostdin", "-y"]
+        # NEVER seek into a still. A single-frame input has no timeline to seek
+        # along, and an input -ss on one makes ffmpeg decode nothing at all: it
+        # exits 0 and leaves a zero-byte PNG, so the stage fell back to the
+        # file-name placeholder and the storyboard card stayed a black
+        # rectangle. Only a still that has to come through this chain was hit —
+        # one carrying a visual effect or a caption, or a format GdkPixbuf
+        # cannot read — which is exactly the still whose picture the person
+        # most needs to see, and the export renders it perfectly the whole
+        # time (it declares no -ss for an image either). Measured on this
+        # machine's ffmpeg: a JPEG yields no frame for ANY -ss, a PNG for any
+        # -ss above zero.
+        if not self._is_still(clip):
+            args += ["-ss", "%.3f" % max(0.0, t)]
+        args += ["-i", path]
         cap = clip.get("title", "") if clip.get("kind") in ("video", "image") \
             else ""
         cpng = self._render_caption_png(cap) if cap else None
@@ -1053,6 +1183,11 @@ class VideoEditor(nbapp.AppWindow):
             args += ["-vf", base]
         args += ["-frames:v", "1", "-f", "image2", tmp]
         return args
+
+    def _is_still(self, clip):
+        """Whether this clip's picture comes from a single-frame file."""
+        media = self._clip_media(clip) or {}
+        return (media.get("kind") or clip.get("kind")) == "image"
 
     def _pv_start(self, key, clip, cache=True, seek=None):
         """Start (or refresh) the single background frame decode. Only one runs
@@ -1139,7 +1274,7 @@ class VideoEditor(nbapp.AppWindow):
             if pixbuf is not None and self._playing and isinstance(key, tuple) \
                     and len(key) == 3 and key[1] == self._sel_cell:
                 try:
-                    self._show_frame(pixbuf)
+                    self._show_frame(pixbuf)          # a passing frame, unkeyed
                 except Exception:
                     pass
             self._pv_pump()
@@ -1154,7 +1289,7 @@ class VideoEditor(nbapp.AppWindow):
         clip = self._sel_clip()
         if pixbuf is not None and clip and self._frame_key(clip) == key:
             try:
-                self._show_frame(pixbuf)
+                self._show_frame(pixbuf, key)
             except Exception:
                 pass
         self._pv_pump()          # move on to the next card waiting for a frame
@@ -1290,6 +1425,8 @@ class VideoEditor(nbapp.AppWindow):
         self._prop_trim.set_digits(1)
         self._prop_trim.get_style_context().add_class("propentry")
         self._prop_trim.set_numeric(True)
+        self._prop_trim.get_accessible().set_name(
+            _t("TRIM START (SECONDS)"))
         self._prop_trim.connect("value-changed", self._on_trim_changed)
         self._prop_trim_hint = Gtk.Label(label="", xalign=0)
         self._prop_trim_hint.get_style_context().add_class("prophint")
@@ -1300,6 +1437,7 @@ class VideoEditor(nbapp.AppWindow):
         self._prop_dur = Gtk.SpinButton.new_with_range(1, 3600, 1)
         self._prop_dur.get_style_context().add_class("propentry")
         self._prop_dur.set_numeric(True)
+        self._prop_dur.get_accessible().set_name(_t("LENGTH (SECONDS)"))
         self._prop_dur.connect("value-changed", self._on_dur_changed)
         section("LENGTH (SECONDS)", [self._prop_dur], "length")
 
@@ -1321,6 +1459,7 @@ class VideoEditor(nbapp.AppWindow):
         self._prop_effect.get_style_context().add_class("propcombo")
         for key, name in EFFECTS:
             self._prop_effect.append(key, _t(name))
+        self._prop_effect.get_accessible().set_name(_t("VISUAL EFFECT"))
         self._prop_effect.connect("changed", self._on_effect_changed)
         section("VISUAL EFFECT", [self._prop_effect], "effect")
 
@@ -1329,6 +1468,7 @@ class VideoEditor(nbapp.AppWindow):
         self._prop_kb.get_style_context().add_class("propcombo")
         for key, name in KENBURNS:
             self._prop_kb.append(key, _t(name))
+        self._prop_kb.get_accessible().set_name(_t("PAN & ZOOM"))
         self._prop_kb.connect("changed", self._on_kb_changed)
         section("PAN & ZOOM", [self._prop_kb], "kenburns")
 
@@ -1338,6 +1478,7 @@ class VideoEditor(nbapp.AppWindow):
         self._prop_vol.set_draw_value(False)
         self._prop_vol.set_hexpand(True)
         self._prop_vol.add_mark(100, Gtk.PositionType.BOTTOM, None)
+        self._prop_vol.get_accessible().set_name(_t("VOLUME"))
         self._prop_vol.connect("value-changed", self._on_vol_changed)
         self._prop_mute = Gtk.CheckButton(label=_t("Mute this clip"))
         self._prop_mute.get_style_context().add_class("propcheck")
@@ -1364,14 +1505,20 @@ class VideoEditor(nbapp.AppWindow):
         # arrange: move + remove
         arrange = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         arrange.set_margin_top(4)
+        # These two stayed enabled on the first and on the last clip and did
+        # nothing at all when pressed, while the Clip menu correctly greyed the
+        # very same two actions out. They follow the selection now, and a
+        # disabled one says why, in the words the house already keeps for it.
         mvl = Gtk.Button(label=_t("◀ Move"))
         mvl.set_relief(Gtk.ReliefStyle.NONE)
         mvl.get_style_context().add_class("propmove")
         mvl.connect("clicked", lambda *_: self._move_clip(-1))
+        self._prop_mvl = mvl
         mvr = Gtk.Button(label=_t("Move ▶"))
         mvr.set_relief(Gtk.ReliefStyle.NONE)
         mvr.get_style_context().add_class("propmove")
         mvr.connect("clicked", lambda *_: self._move_clip(1))
+        self._prop_mvr = mvr
         rm = Gtk.Button(label=_t("Remove"))
         rm.set_relief(Gtk.ReliefStyle.NONE)
         rm.get_style_context().add_class("propremove")
@@ -1408,6 +1555,7 @@ class VideoEditor(nbapp.AppWindow):
             Gtk.Orientation.HORIZONTAL, 0, 150, 5)
         self._mus_vol.set_draw_value(False)
         self._mus_vol.add_mark(60, Gtk.PositionType.BOTTOM, None)
+        self._mus_vol.get_accessible().set_name(_t("VOLUME"))
         self._mus_vol.connect("value-changed", self._on_mus_vol)
         med.pack_start(self._mus_vol, False, False, 0)
         self._mus_fadein = Gtk.CheckButton(label=_t("Fade in"))
@@ -1452,6 +1600,19 @@ class VideoEditor(nbapp.AppWindow):
         # two numbers a person checks most while editing, and the only ones that
         # are not about the selected clip. Now they are always on screen, and
         # the scroller only has to carry the clip editor.
+        #
+        # A transient notice — a file that is not a project, a duplicate import,
+        # a save that failed — gets its own line above them. It used to be
+        # written over the Project row's VALUE, where it ran straight into the
+        # word "Project" with no gap, widened the whole column (shifting the
+        # preview stage), and stayed there until the next Save or Open happened
+        # to overwrite it.
+        self._prop_flash = Gtk.Label(label="", xalign=0)
+        self._prop_flash.get_style_context().add_class("propflash")
+        self._prop_flash.set_line_wrap(True)
+        self._prop_flash.set_max_width_chars(28)
+        self._prop_flash.set_no_show_all(True)
+        col.pack_start(self._prop_flash, False, False, 0)
         col.pack_start(table, False, False, 0)
         return col
 
@@ -1459,6 +1620,9 @@ class VideoEditor(nbapp.AppWindow):
         e = Gtk.Entry()
         e.get_style_context().add_class("propentry")
         e.set_placeholder_text(placeholder)
+        # An empty entry announces nothing at all without this: placeholder
+        # text is a hint, not a name, and ATK never reads it.
+        e.get_accessible().set_name(_t(placeholder))
         e.connect("changed", on_change)
         e.connect("activate", lambda *_: self._save_project())
         e.connect("focus-out-event", on_focus_out)
@@ -1510,15 +1674,24 @@ class VideoEditor(nbapp.AppWindow):
             if clip is not None:
                 kind = clip.get("kind", "video")
                 media = self._clip_media(clip)
-                self._prop_name.set_text(
+                _set_user_text(
+                    self._prop_name,
                     _t("Title card") if kind == "title"
                     else (media["name"] if media else _t("Clip")))
                 self._prop_cardtext.set_text(clip.get("cardtext", "") or "")
                 self._prop_cardsub.set_text(clip.get("cardsub", "") or "")
                 self._prop_title.set_text(clip.get("title", "") or "")
                 srcdur = self._clip_srcdur(clip)
-                self._prop_trim.set_range(0, max(1, int(srcdur) if srcdur
-                                                 else 36000))
+                # The in-point can only go as far as still leaves a clip behind
+                # it: the shortest slot is one second, which costs `speed`
+                # seconds of source. Offering the whole source length let Trim
+                # be set AT the end of the file — the panel then stated an
+                # in-point (2.0 "of 00:00:02") that neither the preview nor the
+                # export could use, because both clamp back inside the source
+                # and rendered from somewhere else without saying so.
+                sp = float(clip.get("speed", 1.0) or 1.0)
+                self._prop_trim.set_range(
+                    0, max(0.0, srcdur - sp) if srcdur else 36000)
                 self._prop_trim.set_value(float(clip.get("start", 0.0) or 0.0))
                 self._prop_trim_hint.set_text(
                     (_t("of %s") % self._fmt_hms(srcdur)) if srcdur else "")
@@ -1535,17 +1708,40 @@ class VideoEditor(nbapp.AppWindow):
                 self._prop_afade.set_active(bool(clip.get("afade")))
                 self._prop_vfade.set_active(bool(clip.get("vfade")))
                 self._prop_trans.set_text(
-                    _t(TRANS_NAME.get(clip.get("transition")) or "None"))
+                    _t(TRANS_NAME.get(self._lead_in(self._sel_cell)) or "None"))
         finally:
             self._suspend_prop = False
+        self._update_arrange(clip)
         self._update_prop_view(clip)
         self._update_props_table()
+
+    def _update_arrange(self, clip):
+        """Enable each Move button only where it can move something, and give a
+        disabled one the reason it cannot."""
+        k = self._sel_cell
+        here = (clip is not None and not self._sel_music
+                and isinstance(k, int) and 0 <= k < len(self.clips))
+        for btn, ok, why, act in (
+                (getattr(self, "_prop_mvl", None), here and k > 0,
+                 "This is already first in the list.", "Move Left"),
+                (getattr(self, "_prop_mvr", None),
+                 here and k < len(self.clips) - 1,
+                 "This is already last in the list.", "Move Right")):
+            if btn is None:
+                continue
+            try:
+                btn.set_sensitive(bool(ok))
+                text = _t(act) if ok else _t(why)
+                btn.set_tooltip_text(text)
+                btn.get_accessible().set_name(text)
+            except Exception:                                     # noqa: BLE001
+                pass
 
     def _load_music_props(self):
         self._suspend_prop = True
         try:
             m = self.music or {}
-            self._mus_name.set_text(m.get("name", "Music"))
+            _set_user_text(self._mus_name, m.get("name") or _t("Music"))
             self._mus_vol.set_value(
                 max(0.0, min(150.0, float(m.get("volume", 0.6)) * 100.0)))
             self._mus_fadein.set_active(bool(m.get("fadein", True)))
@@ -1574,9 +1770,9 @@ class VideoEditor(nbapp.AppWindow):
         c = self._cur_clip()
         if c is None:
             return
-        self._push_undo("cap:%s" % self._sel_cell)
+        self._push_undo("cap:%s" % self._sel_cell, name="Caption")
         c["title"] = entry.get_text()
-        self._update_preview()
+        self._preview_soon()
 
     def _on_caption_focus(self, _w, _e):
         if not self._suspend_prop:
@@ -1592,7 +1788,7 @@ class VideoEditor(nbapp.AppWindow):
         if c is not None:
             self._push_undo("card:%s" % self._sel_cell)
             c["cardtext"] = entry.get_text()
-            self._update_preview()
+            self._preview_soon()
 
     def _on_cardsub(self, entry):
         if self._suspend_prop:
@@ -1601,6 +1797,11 @@ class VideoEditor(nbapp.AppWindow):
         if c is not None:
             self._push_undo("cardsub:%s" % self._sel_cell)
             c["cardsub"] = entry.get_text()
+            # the stage is a preview of the card as it will be EXPORTED, and the
+            # subtitle is part of that card: it used to reach the storyboard
+            # thumbnail and stay off the big preview until the clip was
+            # deselected and picked again
+            self._preview_soon()
 
     def _on_card_focus(self, _w, _e):
         if not self._suspend_prop:
@@ -1639,6 +1840,10 @@ class VideoEditor(nbapp.AppWindow):
             self._suspend_prop = False
             self._render_story()
             self._render_timeline()
+            # the movie just got shorter: the transport total and the Duration
+            # row are about the film, not the clip, and stayed on the old
+            # length until the next edit happened to refresh them
+            self._update_props_table()
         self._update_preview()
 
     def _on_dur_changed(self, spin):
@@ -1690,6 +1895,7 @@ class VideoEditor(nbapp.AppWindow):
         self._save_project()
         self._render_story()
         self._render_timeline()
+        self._update_props_table()   # a clamped length shortens the film too
 
     def _on_effect_changed(self, combo):
         if self._suspend_prop:
@@ -1905,7 +2111,8 @@ class VideoEditor(nbapp.AppWindow):
             nm.get_style_context().add_class("storyname")
         else:
             media = self._clip_media(clip)
-            nm = Gtk.Label(label=media["name"] if media else _t("Clip"))
+            nm = Gtk.Label()
+            _set_user_text(nm, media["name"] if media else _t("Clip"))
             nm.get_style_context().add_class("storyname")
         nm.set_ellipsize(Pango.EllipsizeMode.END)
         nm.set_max_width_chars(15)
@@ -1921,13 +2128,15 @@ class VideoEditor(nbapp.AppWindow):
             bl.set_max_width_chars(16)
             grp.pack_start(bl, False, False, 0)
         cell.pack_start(grp, True, True, 0)
-        evt = Gtk.Button()
+        evt = Gtk.ToggleButton()
         evt.set_relief(Gtk.ReliefStyle.NONE)
         evt.get_style_context().add_class("videohit")
         evt.get_style_context().add_class("storyhit")
         evt.set_tooltip_text(_t("Select clip %d: %s") % (k + 1, nm.get_text()))
+        evt.set_active(k == self._sel_cell and not self._sel_music)
         evt.add(cell)
-        evt.connect("clicked", lambda _w, i=k: self._select_cell(i))
+        evt.connect("clicked", lambda _w, i=k:
+                    self._select_cell(i, focus_story=_w.has_focus()))
         return evt
 
     def _card_mat(self, clip):
@@ -1963,7 +2172,8 @@ class VideoEditor(nbapp.AppWindow):
         mat.set_size_request(self.CARD_W, self.CARD_H)
         mat.set_halign(Gtk.Align.CENTER)
         if kind == "title":
-            lbl = Gtk.Label(label=clip.get("cardtext") or _t("Title"))
+            lbl = Gtk.Label()
+            _set_user_text(lbl, clip.get("cardtext") or _t("Title"))
             lbl.get_style_context().add_class("storymattext")
             lbl.set_ellipsize(Pango.EllipsizeMode.END)
             lbl.set_max_width_chars(14)
@@ -2003,7 +2213,17 @@ class VideoEditor(nbapp.AppWindow):
         return "  ".join(b)
 
     def _story_connector(self, k):
-        """The transition connector shown before clip k (its lead-in)."""
+        """The transition connector shown before clip k (its lead-in).
+
+        It is a BUTTON. It draws a plus sign between two cards, which is the
+        same invitation the trailing "Add clip" card makes and the only place on
+        the storyboard where a transition belongs — and it was a bare Box, so
+        the one gesture the picture asks for did nothing at all. Clicking an
+        empty join now makes one (the transition the palette is on, or Fade),
+        and clicking a join that already has one selects that clip so the
+        palette lights on its transition and another can be chosen — or the lit
+        cell clicked again to take it off. Nothing is removed by this click, so
+        undo is not being spent on a mis-aim."""
         clip = self.clips[k]
         tr = clip.get("transition")
         dot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -2016,13 +2236,32 @@ class VideoEditor(nbapp.AppWindow):
             img = nbicons.image(tr, 15, RED)
             img.set_halign(Gtk.Align.CENTER)
             img.set_valign(Gtk.Align.CENTER)
-            dot.set_tooltip_text(_t(TRANS_NAME.get(tr) or "Transition"))
             dot.pack_start(img, True, True, 0)
         else:
             lbl = Gtk.Label(label="+")
             lbl.get_style_context().add_class("transplus")
             dot.pack_start(lbl, True, True, 0)
-        return dot
+        evt = Gtk.Button()
+        evt.set_relief(Gtk.ReliefStyle.NONE)
+        evt.get_style_context().add_class("videohit")
+        evt.get_style_context().add_class("transhit")
+        evt.set_valign(Gtk.Align.CENTER)
+        label = (_t(TRANS_NAME.get(tr) or "Transition") if tr
+                 else _t("Add Transition"))
+        evt.set_tooltip_text(label)
+        evt.get_accessible().set_name(label)
+        evt.add(dot)
+        evt.connect("clicked", lambda _w, i=k: self._on_connector_click(i))
+        return evt
+
+    def _on_connector_click(self, k):
+        """A click on the join before clip k."""
+        if not (isinstance(k, int) and 0 < k < len(self.clips)):
+            return
+        self._select_cell(k)
+        if self.clips[k].get("transition"):
+            return                     # already set: the palette now shows it
+        self._menu_add_transition()
 
     def _story_add_card(self):
         """The trailing dashed 'add clip' card that appends the selected bin
@@ -2122,6 +2361,38 @@ class VideoEditor(nbapp.AppWindow):
         if isinstance(mi, int) and 0 <= mi < len(self._bin):
             return self._bin[mi]
         return None
+
+    def _clip_path(self, clip):
+        """The media file a clip plays, or None.
+
+        A clip does not carry its own path — it carries an INDEX into the media
+        bin (see _new_clip), and the path lives on the bin entry. Both playback
+        entry points asked the clip dict for "path" and always got None, so
+        _play_clip_live returned False on its fourth line for every clip ever
+        made: the gtksink stream was never opened, Play fell through to the
+        one-still-a-second fallback, and a film with sound played silent on a
+        machine whose player was available the whole time."""
+        media = self._clip_media(clip)
+        return media.get("path") if media else None
+
+    def _lead_in(self, k):
+        """The transition that actually plays before clip k, or None.
+
+        A transition OVERLAPS two clips, so the first clip has nothing to come
+        out of: the storyboard draws a connector only between cards, _layout
+        folds from the second clip and _build_ffmpeg_cmd's fold starts there
+        too. A key stored on clip 0 (by an older project, or by a clip that has
+        since been moved to the front) is inert, and reading the value through
+        here is what stops the palette and Properties claiming otherwise."""
+        if not isinstance(k, int) or not (0 < k < len(self.clips)):
+            return None
+        return self.clips[k].get("transition")
+
+    def _can_lead_in(self):
+        """Whether the selection can be GIVEN a lead-in transition."""
+        k = self._sel_cell
+        return (not self._sel_music and isinstance(k, int)
+                and 0 < k < len(self.clips))
 
     def _sel_clip(self):
         k = self._sel_cell
@@ -2312,9 +2583,11 @@ class VideoEditor(nbapp.AppWindow):
                 tw = max(6, int(round(max(total, 1) * pps)))
                 cell = self._lane_cell_box(tw, sel=self._sel_music)
                 chip = self._lane_chip("tlchipmusic", "tlchipname",
-                                       self.music.get("name", "Music"),
+                                       self.music.get("name") or _t("Music"),
                                        icon="music")
-                cell.pack_start(chip, True, True, 0)
+                chip.show_all()          # an unshown widget measures as zero
+                if chip.get_preferred_width().minimum_width <= tw:
+                    cell.pack_start(chip, True, True, 0)
                 mlane.pack_start(self._lane_click_wrap(
                     cell, music=True, label=_t("Select background music: %s") %
                     self.music.get("name", "Music")),
@@ -2326,14 +2599,17 @@ class VideoEditor(nbapp.AppWindow):
                 self._playhead.set_margin_start(int(round(self._play_pos * pps)))
             except Exception:
                 pass
+        # anything the Audio lane could not answer for yet
+        self._audio_probe_soon([
+            (self._clip_media(c) or {}).get("path") for c in self.clips
+            if c.get("kind") == "video" and not c.get("mute")])
 
     # kept as an alias so transition/duration edits can refresh just the strip
     def _render_timeline_lanes(self):
         self._render_timeline()
 
     def _lane_cell_box(self, w, sel=False):
-        cell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        cell.set_size_request(w, -1)
+        cell = _LaneCell(w)
         sc = cell.get_style_context()
         sc.add_class("lanecell")
         if sel:
@@ -2360,34 +2636,111 @@ class VideoEditor(nbapp.AppWindow):
         lanes aligned to the same time origin."""
         kind = clip.get("kind")
         media = self._clip_media(clip)
-        chip = None
+        spec = None                      # (cls, labelcls, text, icon)
         if name == "Video":
             if kind == "title":
-                chip = self._lane_chip("tlchiptitle", "tlchipname",
-                                       clip.get("cardtext") or "Title")
+                spec = ("tlchiptitle", "tlchipname",
+                        clip.get("cardtext") or _t("Title"), None)
             elif kind in ("video", "image"):
-                chip = self._lane_chip(
-                    "tlchip", "tlchipname", media["name"] if media else "Clip",
-                    icon=clip.get("transition"))
+                spec = ("tlchip", "tlchipname",
+                        media["name"] if media else _t("Clip"),
+                        self._lead_in(k))
         elif name == "Audio":
             if kind == "audio" and not clip.get("mute"):
-                chip = self._lane_chip("tlchipaudio", "tlchipname",
-                                       media["name"] if media else "Audio",
-                                       icon="music")
+                spec = ("tlchipaudio", "tlchipname",
+                        media["name"] if media else _t("Audio"), "music")
             elif kind == "video" and not clip.get("mute"):
-                chip = self._lane_chip("tlchipaudio", "tlchipname", "Audio")
+                # only for a clip that really carries a track: a video-only file
+                # got an Audio chip promising sound the export replaces with
+                # silence. ffprobe blocks for up to ten seconds, so the answer
+                # is READ here and asked for off the UI thread; until it is in,
+                # the lane says nothing rather than guessing.
+                if self._audio_answer(media.get("path") if media else None) \
+                        is not False:
+                    spec = ("tlchipaudio", "tlchipname", _t("Audio"), None)
         elif name == "Titles":
             if clip.get("title"):
-                chip = self._lane_chip("tlchipcap", "tlchipname", clip["title"])
+                spec = ("tlchipcap", "tlchipname", clip["title"], None)
         cell = self._lane_cell_box(
             w, sel=(k == self._sel_cell and not self._sel_music))
-        if chip is not None:
-            cell.pack_start(chip, True, True, 0)
+        if spec is not None:
+            chip = self._fitted_chip(spec, w)
+            if chip is not None:
+                cell.pack_start(chip, True, True, 0)
         desc = (clip.get("cardtext") or _t("Title card")) if kind == "title" \
             else (media.get("name") if media else _t("Clip"))
         return self._lane_click_wrap(
             cell, k=k, label=_t("%s lane, clip %d: %s") %
             (_t(name), k + 1, desc))
+
+    def _fitted_chip(self, spec, w):
+        """The widest form of `spec` that fits inside `w` pixels, or None.
+
+        A chip may not overhang its neighbours: the cell IS the clip's length
+        against the ruler. But a chip is a name and, sometimes, a small mark
+        beside it, and those are not worth the same. The mark costs 18px of the
+        26px a chip already spends on its own frame, so at the default zoom a
+        four-second clip (48px) fitted a bare chip and not a marked one — and
+        giving a clip a transition made its NAME disappear from the Video lane
+        while the untouched clip beside it kept its own. The lane's job is to
+        say which clip is where, so the mark is dropped first and the name is
+        dropped only when even a bare chip cannot fit. The transition is still
+        drawn on the storyboard connector and named in Properties.
+
+        show_all FIRST: an unshown widget reports a width of zero, so measuring
+        before this let every chip through and they overhung the short cells.
+        """
+        cls, labelcls, text, icon = spec
+        for ico in ((icon, None) if icon else (None,)):
+            chip = self._lane_chip(cls, labelcls, text, icon=ico)
+            chip.show_all()
+            if chip.get_preferred_width().minimum_width <= w:
+                return chip
+        return None
+
+    def _audio_answer(self, path):
+        """What is already known about `path`'s sound: True, False, or None
+        while nothing has asked yet. Never asks: the probe blocks, and this is
+        read while a lane is being drawn."""
+        if not path:
+            return None
+        cache = getattr(self, "_audio_probe_cache", None)
+        return cache.get(path) if cache else None
+
+    def _audio_probe_soon(self, paths):
+        """Ask ffprobe whether these files carry sound, off the UI thread, and
+        repaint the lanes with the answer — the same shape as the import scan
+        and the export's command build, and for the same reason: the probe can
+        block for ten seconds a file."""
+        cache = getattr(self, "_audio_probe_cache", None)
+        if cache is None:
+            cache = self._audio_probe_cache = {}
+        busy = getattr(self, "_audio_probe_busy", None)
+        if busy is None:
+            busy = self._audio_probe_busy = set()
+        todo = [p for p in dict.fromkeys(paths)
+                if p and p not in cache and p not in busy]
+        if not todo:
+            return
+        busy.update(todo)
+
+        def worker():
+            for p in todo:
+                try:
+                    self._probe_has_audio(p)
+                except Exception:                                 # noqa: BLE001
+                    pass
+            GLib.idle_add(self._audio_probe_done, todo)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _audio_probe_done(self, paths):
+        # back on the main thread with the answers cached
+        busy = getattr(self, "_audio_probe_busy", None)
+        if busy is not None:
+            busy.difference_update(paths)
+        if not getattr(self, "_closed", False):
+            self._render_timeline()
+        return False
 
     def _lane_chip(self, cls, labelcls, text, icon=None):
         chip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
@@ -2397,7 +2750,10 @@ class VideoEditor(nbapp.AppWindow):
             img = nbicons.image(icon, 13, RED)
             img.set_valign(Gtk.Align.CENTER)
             chip.pack_start(img, False, False, 0)
-        lbl = Gtk.Label(label=text, xalign=0)
+        # Every chip's text is either the film's own words or an app word
+        # already put through _t() at the spec — either way it is finished.
+        lbl = Gtk.Label(xalign=0)
+        _set_user_text(lbl, text)
         lbl.get_style_context().add_class(labelcls)
         lbl.set_ellipsize(Pango.EllipsizeMode.END)
         chip.pack_start(lbl, True, True, 0)
@@ -2530,16 +2886,32 @@ class VideoEditor(nbapp.AppWindow):
             return False
         if clip.get("kind") != "video":
             return False
-        path = clip.get("path")
+        path = self._clip_path(clip)
         if not (path and os.path.isfile(path)):
             return False
         speed = float(clip.get("speed", 1.0) or 1.0)
         at = self._clip_start(clip) + into * speed
-        if not self._player.open(path, at=at, rate=speed):
+        token = object()
+        self._live_pending = (idx, path, token)
+
+        def ready(ok):
+            if getattr(self, "_live_pending", None) != (idx, path, token):
+                return
+            self._live_pending = None
+            if (ok and getattr(self, "_playing", False)
+                    and 0 <= idx < len(self.clips) and self.clips[idx] is clip):
+                self._live_failed = None
+                self._show_video_surface(True)
+                self._live_clip = idx
+            else:
+                self._live_failed = (idx, path)
+                self._show_video_surface(False)
+
+        if not self._player.open_async(path, at=at, rate=speed, play=True,
+                                       done=ready):
+            if self._live_pending == (idx, path, token):
+                self._live_pending = None
             return False
-        self._player.play()
-        self._show_video_surface(True)
-        self._live_clip = idx
         return True
 
     def _relaunch_live_clip(self, clip):
@@ -2573,7 +2945,12 @@ class VideoEditor(nbapp.AppWindow):
         into = max(0.0, self._play_pos - clip_off)
         if getattr(self, "_live_clip", None) == idx:
             return                       # already streaming this one
-        if self._play_clip_live(idx, clip, into):
+        path = self._clip_path(clip)
+        pending = getattr(self, "_live_pending", None)
+        if pending and pending[:2] == (idx, path):
+            return                       # decoder is prerolling without blocking
+        if (getattr(self, "_live_failed", None) != (idx, path)
+                and self._play_clip_live(idx, clip, into)):
             return
         self._show_video_surface(False)
         if not (PIXBUF_OK and self._ffmpeg_ok()):
@@ -2600,6 +2977,8 @@ class VideoEditor(nbapp.AppWindow):
         # machine: a paused playbin holds the audio device, so a second app
         # opening sound after Stop would find it busy.
         self._live_clip = None
+        self._live_pending = None
+        self._live_failed = None
         if getattr(self, "_player", None) is not None:
             try:
                 self._player.stop()
@@ -2627,10 +3006,12 @@ class VideoEditor(nbapp.AppWindow):
 
     def _set_play_glyph(self, playing):
         try:
+            action = _t("Stop") if playing else _t("Play")
             if self._play_img is not None:
                 nbicons.set_image(self._play_img, "stopsq" if playing else "play", 18, FAINT)
             if getattr(self, "_play_w", None) is not None:
-                self._play_w.set_tooltip_text(_t("Stop") if playing else "Play")
+                self._play_w.set_tooltip_text(action)
+                self._play_w.get_accessible().set_name(action)
         except Exception:
             pass
 
@@ -2665,7 +3046,9 @@ class VideoEditor(nbapp.AppWindow):
                 and 0 <= self.sel_media < len(self._bin)):
             return
         m = self._bin[self.sel_media]
-        self._push_undo()
+        # named, like every other discrete step: the Edit menu read a bare
+        # "Undo" for the commonest action in the app
+        self._push_undo(name="Add clip")
         self.clips.append(_new_clip(self.sel_media, m["kind"],
                                     self._bin_default_dur(m)))
         self._save_project()
@@ -2728,19 +3111,23 @@ class VideoEditor(nbapp.AppWindow):
                 except Exception:
                     pass
 
-    def _select_cell(self, idx, user_caused=True):
+    def _select_cell(self, idx, user_caused=True, focus_story=False):
         self._sel_music = False
         if idx is None or idx < 0 or idx >= len(self.clips):
             self._sel_cell = None
         else:
             self._sel_cell = idx
         self._render_story()
+        if focus_story and self._sel_cell is not None:
+            cells = getattr(self, "_story_cells", [])
+            if 0 <= self._sel_cell < len(cells):
+                cells[self._sel_cell].grab_focus()
         self._render_timeline()
         if user_caused and self._sel_cell is not None:
             self._animate_clip_selection(self._sel_cell)
         clip = self._sel_clip()
         # the palette reflects the selected clip's transition (none -> cleared)
-        self._active_transition = clip.get("transition") if clip else None
+        self._active_transition = self._lead_in(self._sel_cell)
         self._highlight_palette(self._active_transition)
         self._load_props(clip)
         self._update_preview()
@@ -2761,6 +3148,12 @@ class VideoEditor(nbapp.AppWindow):
 
     # -- transition palette --
     def _highlight_palette(self, key):
+        # A transition belongs to the join between two clips, so the palette is
+        # available only when the selection HAS a clip before it. It used to
+        # take the click on the first clip: the cell lit, Properties said "To
+        # Black", and the storyboard drew nothing because there is no connector
+        # there and the export never read it.
+        can = self._can_lead_in()
         for k, cell in self._trans_cells.items():
             if cell is None:
                 continue
@@ -2769,18 +3162,22 @@ class VideoEditor(nbapp.AppWindow):
                 cell.set_opacity(1.0); sc.add_class("transel")
             else:
                 cell.set_opacity(0.55); sc.remove_class("transel")
+            btn = cell.get_parent()
+            if btn is not None:
+                btn.set_sensitive(can)
 
     def _on_transition_click(self, _w, key):
         # A transition applies to the SELECTED storyboard clip (it is that clip's
-        # lead-in). With no clip selected there is nothing to apply it to, so we
-        # do nothing rather than light up a cell that maps to no clip and then
+        # lead-in). With no clip selected — or with the FIRST clip selected,
+        # which has nothing before it — there is nothing to apply it to, so we
+        # do nothing rather than light up a cell that maps to no join and then
         # clears the instant a clip is picked — which reads as if selecting the
         # clip had removed the transition. The palette always mirrors the
         # selected clip.
         try:
-            k = self._sel_cell
-            if k is None or not (0 <= k < len(self.clips)):
+            if not self._can_lead_in():
                 return True
+            k = self._sel_cell
             # toggling the same transition off is the natural second click
             cur = self.clips[k].get("transition")
             key = None if cur == key else key
@@ -2936,13 +3333,23 @@ class VideoEditor(nbapp.AppWindow):
             d1.get_style_context().add_class("dropmain")
             drop.pack_start(d1, False, False, 0)
             card.pack_start(drop, False, False, 0)
-            ok = Gtk.Button(label=_t("OK"))
+            # An empty state whose only control is OK is a dead end: the card
+            # is called Import Media and could not import media. Browse is the
+            # way out, and here it is the PRIMARY action.
+            foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            foot.set_margin_top(20)
+            foot.set_halign(Gtk.Align.END)
+            ok = Gtk.Button(label=_t("Cancel"))
             ok.set_relief(Gtk.ReliefStyle.NONE)
-            ok.get_style_context().add_class("dlgok")
-            ok.set_halign(Gtk.Align.END)
-            ok.set_margin_top(20)
+            ok.get_style_context().add_class("impbtn")
             ok.connect("clicked", lambda *_: self._close_import())
-            card.pack_start(ok, False, False, 0)
+            foot.pack_start(ok, False, False, 0)
+            br = Gtk.Button(label=_t("Choose…"))
+            br.set_relief(Gtk.ReliefStyle.NONE)
+            br.get_style_context().add_class("dlgok")
+            br.connect("clicked", lambda *_: self._imp_browse())
+            foot.pack_start(br, False, False, 0)
+            card.pack_start(foot, False, False, 0)
         else:
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -2958,6 +3365,14 @@ class VideoEditor(nbapp.AppWindow):
             self._imp_count = Gtk.Label(label=_t("0 selected"), xalign=0)
             self._imp_count.get_style_context().add_class("impcount")
             footer.pack_start(self._imp_count, True, True, 0)
+            # The list above is only what a scan of Home found. Anything else —
+            # a USB stick, /data, a folder the scan does not walk — is reached
+            # through here.
+            browse = Gtk.Button(label=_t("Choose…"))
+            browse.set_relief(Gtk.ReliefStyle.NONE)
+            browse.get_style_context().add_class("impbtn")
+            browse.connect("clicked", lambda *_: self._imp_browse())
+            footer.pack_start(browse, False, False, 0)
             cancel = Gtk.Button(label=_t("Cancel"))
             cancel.set_relief(Gtk.ReliefStyle.NONE)
             cancel.get_style_context().add_class("impbtn")
@@ -3010,7 +3425,8 @@ class VideoEditor(nbapp.AppWindow):
             ico.set_valign(Gtk.Align.CENTER)
             row.pack_start(ico, False, False, 0)
             txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            nm = Gtk.Label(label=name, xalign=0)
+            nm = Gtk.Label(xalign=0)
+            _set_user_text(nm, name)
             nm.get_style_context().add_class("impname")
             nm.set_ellipsize(Pango.EllipsizeMode.END)
             nm.set_max_width_chars(34)
@@ -3072,6 +3488,43 @@ class VideoEditor(nbapp.AppWindow):
         self._imp_addbtn.set_sensitive(n > 0)
         self._imp_addbtn.set_label(_t("Add to Media") if n == 0
                                    else _t("Add %d to Media") % n)
+
+    def _imp_browse(self):
+        """Pick a media file from ANYWHERE, through the house file picker.
+
+        The list this button sits under is a scan of Home, which is a good
+        shortcut and a bad ceiling: footage on a USB stick, in /data, or in any
+        folder the scan does not walk was simply unreachable, and when the scan
+        found nothing the card's only control was OK — a dialog called Import
+        Media that could not import media. This is the same nbpicker every
+        other app opens documents with, so it browses the whole machine,
+        including a mounted stick.
+        """
+        pats = tuple("*" + e for e in sorted(VIDEO_EXT | IMAGE_EXT | AUDIO_EXT))
+        start = VIDEOS_DIR if os.path.isdir(VIDEOS_DIR) else HOME
+        # Close the card FIRST: it is an overlay over this same window, and the
+        # picker is another one. Leaving it up stacks two cards and the person
+        # returns from the picker to a list that no longer says anything true.
+        self._close_import()
+        path = nbpicker.open_file(self, title=_t("Import Media"),
+                                  start_dir=start, patterns=pats)
+        if not path or not os.path.isfile(path):
+            return                      # cancelled: nothing to say, nothing done
+        kind = _ext_kind(os.path.splitext(path)[1].lower())
+        if kind is None:
+            self._flash(_t("That file is not a video, image, or sound."))
+            return
+        if any(m["path"] == path for m in self._bin):
+            # Already imported. Say so — silence here reads as a failed import,
+            # and the file IS in the bin, which is what the person wanted.
+            self._flash(_t("%s is already in Media.") % os.path.basename(path))
+            return
+        self._push_undo(name="Import Media…")
+        self._bin.append({"path": path, "name": os.path.basename(path),
+                          "kind": kind, "dur": KIND_DUR.get(kind, 4)})
+        self._save_project()
+        self._render_bin()
+        self._render_story()
 
     def _imp_confirm(self):
         # work out what is actually new first, so a confirm that brings in
@@ -3773,7 +4226,13 @@ class VideoEditor(nbapp.AppWindow):
         args += self._video_encoder()
         if want_audio:
             args += ["-c:a", "aac", "-b:a", "192k"]
-        args += ["-movflags", "+faststart"]
+        # The container is NAMED, never left to the output path. The render
+        # writes to a hidden draft (".nbvid-<name>.mp4.part") so a failure can
+        # never touch the film already in Videos, and libavformat guesses the
+        # muxer from the extension: ".part" matches nothing, so it refused with
+        # "Unable to choose an output format" and EVERY export failed, whatever
+        # the project, with the card able to say only that it could not be saved.
+        args += ["-f", "mp4", "-movflags", "+faststart"]
         if progress_file:
             args += ["-progress", progress_file]
         args += [out]
@@ -4154,7 +4613,12 @@ class VideoEditor(nbapp.AppWindow):
             except Exception:
                 pass
             rel = os.path.relpath(out, HOME) if out.startswith(HOME) else out
-            msg = "Saved  ·  " + rel
+            # _t: this line is the answer to the longest job in the app, and it
+            # went into the label as one long string ("Saved  ·  Videos/…"),
+            # which the catalog can never match — so the one word that IS
+            # translatable, and IS in all seventeen catalogs, came out English
+            # everywhere. Translate the word, then join the path to it.
+            msg = _t("Saved") + "  ·  " + rel
             # A film with silent black gaps in it, handed back as "Saved", is a
             # lie. Name the files that were not there.
             gone = getattr(self, "_exp_gone", None)
@@ -4457,22 +4921,16 @@ class VideoEditor(nbapp.AppWindow):
 
     # ================= clip menu actions =================
     def _delete_clip_guarded(self):
-        """Remove the selected clip, but confirm first when it carries edits
-        worth losing (a title, a transition, or a hand-set duration). A plain
-        default clip — one click to place again — is removed without nagging,
-        matching the house rule of guarding destructive, no-undo actions."""
+        """Remove the selected clip. Undo is the guard here, not a confirm.
+
+        The confirmation was retired when every destructive action in the OS
+        gained a live history behind it, so this deletes at once and the Edit
+        menu offers "Undo Delete Clip" with the clip's caption, transition and
+        trim intact. The inventory of edits that used to decide whether to ask
+        went with it: it was still being computed and no longer read."""
         k = self._sel_cell
         if k is None or not (0 <= k < len(self.clips)):
             return
-        clip = self.clips[k]
-        media = self._clip_media(clip)
-        # A clip carrying any hand edit is worth a confirm before it's gone.
-        edited = (bool(clip.get("title")) or bool(clip.get("transition"))
-                  or clip.get("effect", "none") != "none"
-                  or clip.get("kenburns", "none") != "none"
-                  or float(clip.get("speed", 1.0)) != 1.0
-                  or float(clip.get("start", 0.0)) != 0.0
-                  or clip.get("kind") == "title")
         self._menu_delete()
 
     def _menu_delete(self):
@@ -4481,13 +4939,20 @@ class VideoEditor(nbapp.AppWindow):
             return
         self._stop_playback(reset=True)
         self._push_undo(name="Delete Clip")
-        self.clips.pop(k)
+        removed = self.clips.pop(k)
         self._sel_cell = None
-        self._save_project()
+        if not self._save_project():
+            self.clips.insert(k, removed)
+            self._sel_cell = k
+            if self._undo:
+                self._undo.pop()
+            if self._undo_names:
+                self._undo_names.pop()
         self._render_all()
-        self._active_transition = None
-        self._highlight_palette(None)
-        self._load_props(None)
+        clip = self._sel_clip()
+        self._active_transition = self._lead_in(self._sel_cell)
+        self._highlight_palette(self._active_transition)
+        self._load_props(clip)
 
     def _menu_split(self):
         # Split the selected clip into two: the first half keeps its lead-in
@@ -4517,9 +4982,11 @@ class VideoEditor(nbapp.AppWindow):
         self._select_cell(k + 1, user_caused=False)
 
     def _menu_add_transition(self):
-        k = self._sel_cell
-        if k is None or not (0 <= k < len(self.clips)):
+        # the first clip has no lead-in (see _lead_in); the menu item is
+        # already off there, and this is the same rule stated once more
+        if not self._can_lead_in():
             return
+        k = self._sel_cell
         key = self._active_transition or "trfade"
         self._push_undo(name="Add Transition")
         self._active_transition = key
@@ -4578,8 +5045,12 @@ class VideoEditor(nbapp.AppWindow):
         except Exception:
             pass
 
-    def _restore(self, snap):
-        """Put a recorded project back on screen, selection and all."""
+    def _restore(self, snap, persist=True):
+        """Put a recorded project back on screen, selection and all.
+
+        Return whether the snapshot was fully adopted.  ``persist=False`` is
+        used only to put the pre-Undo view back after its recovery write failed.
+        """
         _key, data, sel, selmus, path = snap
         self._undo_busy = True
         try:
@@ -4591,61 +5062,103 @@ class VideoEditor(nbapp.AppWindow):
             self._sel_cell = (sel if isinstance(sel, int)
                               and 0 <= sel < len(self.clips) else None)
             clip = self._sel_clip()
-            self._active_transition = clip.get("transition") if clip else None
+            self._active_transition = self._lead_in(self._sel_cell)
             self._render_all()
             self._highlight_palette(self._active_transition)
             self._load_props(clip)
             self._update_project_name()
         except Exception:
-            pass
+            return False
         finally:
             self._undo_busy = False
-        self._save_project()
+        return self._save_project() if persist else True
 
     def _undo_action(self):
         if not self._undo:
-            return
+            return False
+        current = self._snapshot()
+        old_undo = list(self._undo)
+        old_redo = list(self._redo)
+        old_undo_names = list(self._undo_names)
+        old_redo_names = list(self._redo_names)
         try:
-            self._redo.append(self._snapshot())
+            self._redo.append(current)
             self._redo_names.append(
                 self._undo_names.pop() if self._undo_names else None)
             del self._redo[:-UNDO_DEPTH]
             del self._redo_names[:-UNDO_DEPTH]
-            self._restore(self._undo.pop())
+            if not self._restore(self._undo.pop()):
+                self._restore(current, persist=False)
+                self._undo[:] = old_undo
+                self._redo[:] = old_redo
+                self._undo_names[:] = old_undo_names
+                self._redo_names[:] = old_redo_names
+                return False
+            return True
         except Exception:
-            pass
+            self._restore(current, persist=False)
+            self._undo[:] = old_undo
+            self._redo[:] = old_redo
+            self._undo_names[:] = old_undo_names
+            self._redo_names[:] = old_redo_names
+            return False
 
     def _redo_action(self):
         if not self._redo:
-            return
+            return False
+        current = self._snapshot()
+        old_undo = list(self._undo)
+        old_redo = list(self._redo)
+        old_undo_names = list(self._undo_names)
+        old_redo_names = list(self._redo_names)
         try:
-            self._undo.append(self._snapshot())
+            self._undo.append(current)
             self._undo_names.append(
                 self._redo_names.pop() if self._redo_names else None)
             del self._undo[:-UNDO_DEPTH]
             del self._undo_names[:-UNDO_DEPTH]
-            self._restore(self._redo.pop())
+            if not self._restore(self._redo.pop()):
+                self._restore(current, persist=False)
+                self._undo[:] = old_undo
+                self._redo[:] = old_redo
+                self._undo_names[:] = old_undo_names
+                self._redo_names[:] = old_redo_names
+                return False
+            return True
         except Exception:
-            pass
+            self._restore(current, persist=False)
+            self._undo[:] = old_undo
+            self._redo[:] = old_redo
+            self._undo_names[:] = old_undo_names
+            self._redo_names[:] = old_redo_names
+            return False
 
     # ================= persistence =================
     def _serialize(self):
         """The whole project (media bin + clip sequence + music) as a plain
         dict — shared by the autosave and File ▸ Save."""
-        return {
+        out = copy.deepcopy(getattr(self, "_project_extra", {}))
+        out.update({
             "version": 2,
-            "bin": [{"path": m["path"], "name": m["name"], "kind": m["kind"],
-                     "dur": m["dur"], "srcdur": m.get("srcdur", 0.0)}
+            "bin": [dict({k: copy.deepcopy(v) for k, v in m.items()
+                          if k not in {"path", "name", "kind", "dur", "srcdur"}},
+                         path=m["path"], name=m["name"], kind=m["kind"],
+                         dur=m["dur"], srcdur=m.get("srcdur", 0.0))
                     for m in self._bin],
             "clips": [self._clip_record(c) for c in self.clips],
             "music": (dict(self.music) if isinstance(self.music, dict)
                       else None),
             "size": [self._out_w, self._out_h],
-        }
+        })
+        return out
 
     def _clip_record(self, c):
         """A clip as a plain persistable dict (every Movie-Maker attribute)."""
-        return {
+        known = {"media", "kind", "start", "duration", "title", "transition",
+                 "effect", "volume", "mute", "afade", "vfade", "kenburns",
+                 "speed", "cardtext", "cardsub"}
+        out = {k: copy.deepcopy(v) for k, v in c.items() if k not in known}
+        out.update({
             "media": c.get("media"), "kind": c.get("kind", "video"),
             "start": float(c.get("start", 0.0) or 0.0),
             "duration": self._clip_dur(c),
@@ -4659,7 +5172,8 @@ class VideoEditor(nbapp.AppWindow):
             "kenburns": c.get("kenburns", "none"),
             "speed": float(c.get("speed", 1.0)),
             "cardtext": c.get("cardtext", ""), "cardsub": c.get("cardsub", ""),
-        }
+        })
+        return out
 
     def _sanitize_clip(self, s):
         """Validate a raw clip dict into the in-memory model, or None to drop.
@@ -4668,7 +5182,15 @@ class VideoEditor(nbapp.AppWindow):
             return None
         kind = s.get("kind")
         if kind == "title":
-            c = _new_title(str(s.get("cardtext", "") or "Title"),
+            # A card whose text was deliberately cleared (a subtitle-only card,
+            # or a plain rule) stays cleared. `or "Title"` turned that empty
+            # string back into the word Title on every load, so reopening the
+            # project — and the export — put a title back over the person's card.
+            # "Title" is only the default for a record that carries no text
+            # field at all; _card_mat and _lane_cell keep an empty card legible
+            # on the storyboard without writing the word into the film.
+            ct = s.get("cardtext")
+            c = _new_title(ct if isinstance(ct, str) else "Title",
                            str(s.get("cardsub", "") or ""))
         else:
             try:
@@ -4678,6 +5200,10 @@ class VideoEditor(nbapp.AppWindow):
             if mi < 0 or mi >= len(self._bin):
                 return None            # dangling reference — drop the clip
             c = _new_clip(mi, self._bin[mi]["kind"], self._bin[mi]["dur"])
+        known = {"media", "kind", "start", "duration", "title", "transition",
+                 "effect", "volume", "mute", "afade", "vfade", "kenburns",
+                 "speed", "cardtext", "cardsub"}
+        c.update({k: copy.deepcopy(v) for k, v in s.items() if k not in known})
         try:
             c["duration"] = max(1, min(3600, int(round(float(
                 s.get("duration", c["duration"]))))))
@@ -4717,8 +5243,14 @@ class VideoEditor(nbapp.AppWindow):
         self.clips = []
         self.music = None
         self._out_w, self._out_h = EXPORT_W, EXPORT_H
+        self._project_extra = {}
         if not isinstance(data, dict):
             return
+        known_project = {"version", "bin", "clips", "slots", "music", "size",
+                         "path"}
+        self._project_extra = {
+            k: copy.deepcopy(v) for k, v in data.items()
+            if k not in known_project}
         # remembered export frame size; anything not on the offered list is
         # ignored rather than trusted (it feeds ffmpeg's scale/pad geometry)
         try:
@@ -4744,9 +5276,13 @@ class VideoEditor(nbapp.AppWindow):
                     srcdur = float(m.get("srcdur", 0.0) or 0.0)
                 except Exception:
                     srcdur = 0.0
-                self._bin.append({"path": path, "name": name, "kind": kind,
-                                  "dur": max(1, min(3600, dur)),
-                                  "srcdur": srcdur})
+                known_media = {"path", "name", "kind", "dur", "srcdur"}
+                item = {k: copy.deepcopy(v) for k, v in m.items()
+                        if k not in known_media}
+                item.update({"path": path, "name": name, "kind": kind,
+                             "dur": max(1, min(3600, dur)),
+                             "srcdur": srcdur})
+                self._bin.append(item)
         # v2 clips list, else migrate v1 sparse slots (dropping the gaps).
         raw = data.get("clips")
         if not isinstance(raw, list):
@@ -4764,11 +5300,14 @@ class VideoEditor(nbapp.AppWindow):
                 vol = max(0.0, min(2.0, float(mus.get("volume", 0.6))))
             except Exception:
                 vol = 0.6
-            self.music = {
+            known_music = {"path", "name", "volume", "fadein", "fadeout"}
+            self.music = {k: copy.deepcopy(v) for k, v in mus.items()
+                          if k not in known_music}
+            self.music.update({
                 "path": path,
                 "name": str(mus.get("name", "") or os.path.basename(path)),
                 "volume": vol, "fadein": bool(mus.get("fadein", True)),
-                "fadeout": bool(mus.get("fadeout", True))}
+                "fadeout": bool(mus.get("fadeout", True))})
 
     @staticmethod
     def _is_project(data):
@@ -4815,6 +5354,8 @@ class VideoEditor(nbapp.AppWindow):
         Moving the file aside instead means the bytes are never a candidate to be
         overwritten in the first place."""
         try:
+            if not os.path.lexists(PROJECT_FILE):
+                return True
             stamp = time.strftime("%Y%m%d-%H%M%S")
             dest = "%s.damaged-%s" % (PROJECT_FILE, stamp)
             n = 2
@@ -4823,7 +5364,8 @@ class VideoEditor(nbapp.AppWindow):
                 n += 1
             os.replace(PROJECT_FILE, dest)
         except OSError:
-            pass
+            return False
+        return True
 
     def _load_project(self):
         """Restore the working project from the autosave (empty on first run —
@@ -4835,18 +5377,41 @@ class VideoEditor(nbapp.AppWindow):
         except Exception:
             return
         if not self._is_project(data):
-            self._quarantine_autosave()
+            self._quarantine_pending = not self._quarantine_autosave()
             return
         self._apply_data(data)
+        # Which named project the session was in. Without it the editor came
+        # back holding the right film under the name "Untitled", and the next
+        # Save asked for a name the project already had. A file that has since
+        # been moved or deleted is simply not restored.
+        p = data.get("path")
+        if isinstance(p, str) and p and os.path.isfile(p):
+            self._path = p
 
     def _save_project(self):
         """Autosave the working project to CFG_DIR/video.json on every mutation
         and on close (session recovery). Never lets an I/O error reach the UI."""
         try:
-            nbapp.atomic_write_json(PROJECT_FILE, self._serialize())
-        except Exception:
-            # persistence must never crash the editor
-            pass
+            # If the load-time protective move failed, the unrecognized file
+            # is still the only original copy. Never replace it with this
+            # blank model; retry the move on later saves after storage becomes
+            # writable again.
+            if getattr(self, "_quarantine_pending", False):
+                if not self._quarantine_autosave():
+                    raise OSError("could not preserve unrecognized video project")
+                self._quarantine_pending = False
+            data = self._serialize()
+            # session recovery only: a named project file must not carry a path
+            # it can be copied away from, so this is added here and not in
+            # _serialize (which File ▸ Save shares).
+            data["path"] = self._path or ""
+            nbapp.atomic_write_json(PROJECT_FILE, data)
+            return True
+        except Exception as exc:
+            # Persistence must never crash the editor, but a failed working
+            # project write must remain visible to the person making the edit.
+            nbapp.note_save_failure(self, exc, PROJECT_FILE)
+            return False
 
     def _on_destroy(self, *_):
         # stop any in-flight render / preview decode (and drop their scratch
@@ -4862,6 +5427,9 @@ class VideoEditor(nbapp.AppWindow):
             except Exception:                                  # noqa: BLE001
                 pass
         self._pv_teardown()
+        self._cancel_preview_soon()
+        self._cancel_flash()
+        self._closed = True
         self._export_teardown()
         self._save_project()
         return False
@@ -4869,10 +5437,14 @@ class VideoEditor(nbapp.AppWindow):
     # ========= File menu: named project files ($NB_HOME/Documents) =========
     def _update_project_name(self):
         """Reflect the current named project (its file stem, or 'Untitled') in
-        the Properties table's Project row."""
+        the Properties table's Project row. A New / Open / Save supersedes any
+        notice still on the line above it."""
+        self._clear_flash()
         try:
             if self._path:
-                self._prop_vals["Project"].set_text(
+                # The file the person named in Save As, extension stripped.
+                _set_user_text(
+                    self._prop_vals["Project"],
                     os.path.splitext(os.path.basename(self._path))[0])
             else:
                 self._prop_vals["Project"].set_text(_t("Untitled"))
@@ -4880,14 +5452,39 @@ class VideoEditor(nbapp.AppWindow):
             pass
 
     def _flash(self, text):
-        """Surface a transient file-op error in the Project row (crash-safe);
-        the next _update_project_name() clears it."""
+        """Say something transient on the properties column's notice line, and
+        take it away again a few seconds later (crash-safe)."""
         try:
-            self._prop_vals["Project"].set_markup(
-                '<span foreground="#C8341E">%s</span>'
-                % GLib.markup_escape_text(text))
+            self._prop_flash.set_text(text)
+            self._prop_flash.set_no_show_all(False)
+            self._prop_flash.show()
+        except Exception:
+            return
+        self._cancel_flash()
+        try:
+            self._flash_id = GLib.timeout_add(5000, self._clear_flash)
+        except Exception:
+            self._flash_id = 0
+
+    def _cancel_flash(self):
+        tid = getattr(self, "_flash_id", 0)
+        if tid:
+            try:
+                GLib.source_remove(tid)
+            except Exception:
+                pass
+        self._flash_id = 0
+
+    def _clear_flash(self):
+        """Take the notice line back down (its timeout, or a New / Open / Save
+        that supersedes what it said)."""
+        self._flash_id = 0
+        try:
+            self._prop_flash.set_text("")
+            self._prop_flash.hide()
         except Exception:
             pass
+        return False
 
     def _reset_view_after_load(self):
         """Shared tail for New / Open: halt playback + any preview decode, drop
@@ -4920,8 +5517,7 @@ class VideoEditor(nbapp.AppWindow):
         marker (a 'slots' or 'bin' list). Without it we refuse the file rather
         than clobbering an unrelated JSON document with an empty project."""
         try:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
+            data = read_project_json(path)
             # ONE definition of "is this ours" (_is_project), shared with the
             # autosave. The marker used to be satisfied by ANY ONE of bin /
             # clips / slots being a list, so a foreign JSON document with a
@@ -4940,15 +5536,15 @@ class VideoEditor(nbapp.AppWindow):
         self._reset_view_after_load()
         return True
 
-    def _project_nonempty(self):
-        """True when the working project holds media or a placed clip — i.e.
-        when New / discard has something to actually throw away."""
-        return bool(self._bin) or bool(self.clips) or bool(self.music)
-
     def _file_new(self):
-        """Start an empty project — no media, empty storyboard. Confirms first
-        when the current project isn't empty (a destructive one-click action);
-        leaves any saved files on disk untouched."""
+        """Start an empty project — no media, empty storyboard.
+
+        No confirmation: undo is the guard, and the step is banked as
+        "Undo New Project" with the whole film in it. The helper that decided
+        whether the project was worth asking about went with the dialog, like
+        the one Delete Clip kept computing after its own confirm was retired —
+        it was still being maintained and nothing read it. Files already saved
+        to disk are untouched either way."""
         self._do_file_new()
 
     def _do_file_new(self):
@@ -4971,12 +5567,14 @@ class VideoEditor(nbapp.AppWindow):
             return self._file_save_as()
         if self._write_file(self._path):
             self._update_project_name()
+            return True
         else:
             reason = nbapp.save_failure_reason(
                 getattr(self, "_last_save_error", None), self._path)
             if getattr(getattr(self, "_last_save_error", None), "errno", None) == 28:
                 reason += " " + _t("Free up space and try again.")
             self._flash(reason)
+            return False
 
     def _file_save_as(self):
         path = self._choose_file(save=True)
@@ -4984,8 +5582,14 @@ class VideoEditor(nbapp.AppWindow):
             return
         if not os.path.splitext(path)[1]:
             path += ".json"
+        old_path = self._path
         self._path = path
-        self._file_save()
+        if not self._file_save():
+            # A failed Save As did not change the document's identity. Keeping
+            # the unwritable candidate here made the next ordinary Save target
+            # the wrong location and made the picker open beside a file that
+            # had never existed. The prior path remains the last real project.
+            self._path = old_path
 
     def _choose_file(self, save):
         """Finder-style in-app picker under Documents; return a path or None."""
@@ -4998,10 +5602,10 @@ class VideoEditor(nbapp.AppWindow):
         if save:
             suggested = (os.path.basename(self._path) if self._path
                          else "project.json")
-            return nbpicker.save_file(self, title="Save Project As",
+            return nbpicker.save_file(self, title=_t("Save Project As"),
                                       start_dir=start, suggested_name=suggested,
                                       patterns=("*.json",), default_ext=".json")
-        return nbpicker.open_file(self, title="Open Project",
+        return nbpicker.open_file(self, title=_t("Open Project"),
                                   start_dir=start, patterns=("*.json",))
 
     # ================= menus =================
@@ -5064,11 +5668,15 @@ class VideoEditor(nbapp.AppWindow):
                  else None),
                 ("Move Right", (lambda: self._move_clip(1)) if can_right
                  else None),
-                ("Delete Clip…",
+                # No ellipsis: an ellipsis promises a dialog, and the dialog
+                # this one promised was retired when undo became the guard.
+                # The step is banked as "Undo Delete Clip" instead.
+                ("Delete Clip",
                  (lambda: self._delete_clip_guarded()) if has_clip else None),
                 nbapp.SEP,
                 ("Add Transition",
-                 (lambda: self._menu_add_transition()) if has_clip else None),
+                 (lambda: self._menu_add_transition())
+                 if (has_clip and k > 0) else None),
             ]
         return super().menu_items(name)
 
@@ -5086,7 +5694,7 @@ class VideoEditor(nbapp.AppWindow):
                 start = p
                 break
         path = nbpicker.open_file(
-            self, title="Add Background Music", start_dir=start,
+            self, title=_t("Add Background Music"), start_dir=start,
             patterns=tuple("*" + e for e in sorted(AUDIO_EXT)))
         if not path or not os.path.isfile(path):
             return
@@ -5112,7 +5720,7 @@ class VideoEditor(nbapp.AppWindow):
                      font-size: 12px; font-weight: 600; color: #1A1916; }
         .importbtn:hover { background: #F4F2EC; }
         .emptytitle { font-size: 14px; font-weight: 600; color: #6E695E; }
-        .emptysub { font-size: 12px; color: #9A9484; }
+        .emptysub { font-size: 12px; color: #6E695E; }
 
         .binscroll, .binscroll viewport { background: #F1EEE6; }
         .binrow { padding: 10px 14px; border-bottom: 1px solid #D7D2C5; }
@@ -5121,10 +5729,10 @@ class VideoEditor(nbapp.AppWindow):
                     background-image: none; box-shadow: none; }
         .binhit:hover .binrow { background: #F8F7F2; }
         .binname { font-size: 13px; color: #1A1916; font-weight: 600; }
-        .binmeta { font-size: 11px; color: #9A9484; }
+        .binmeta { font-size: 11px; color: #6E695E; }
 
         .transwrap { border-top: 1px solid #D7D2C5; padding: 18px 20px 20px; }
-        .translabel { font-size: 10px; letter-spacing: 0.16em; color: #9A9484;
+        .translabel { font-size: 10px; letter-spacing: 0.16em; color: #6E695E;
                       font-weight: 700; margin-bottom: 12px; }
         .transcell { border: 1px solid #D7D2C5; background: #FCFBF8;
                      border-radius: 8px; padding: 10px 4px 8px; }
@@ -5159,10 +5767,10 @@ class VideoEditor(nbapp.AppWindow):
            English PROPERTIES has no ascender there so it never showed. */
         .prophead { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                     font-weight: 700; padding-top: 4px; margin-bottom: 14px; }
-        .prophint { font-size: 13px; color: #9A9484; }
+        .prophint { font-size: 13px; color: #6E695E; }
         .propname { font-size: 15px; color: #1A1916; font-weight: 600; }
         .propfieldlabel { font-size: 10px; letter-spacing: 0.14em;
-                          color: #9A9484; font-weight: 700; }
+                          color: #6E695E; font-weight: 700; }
         .propentry { background: #FCFBF8; border: 1px solid #C9C4B6;
                      border-radius: 8px; padding: 6px 9px; font-size: 14px;
                      color: #1A1916; box-shadow: none; }
@@ -5176,6 +5784,7 @@ class VideoEditor(nbapp.AppWindow):
         .proptable { border-top: 1px solid #D7D2C5; margin-top: 12px;
                      padding-top: 8px; }
         .proprow { padding: 9px 0; }
+        .propflash { font-size: 12px; color: #C8341E; margin-top: 12px; }
         .propkey { font-size: 13px; color: #6E695E; }
         .propval { font-size: 13px; color: #1A1916; font-weight: 500; }
 
@@ -5227,8 +5836,12 @@ class VideoEditor(nbapp.AppWindow):
         .storythumb { background: #1A1916; border: 1px solid #D7D2C5;
                       margin-bottom: 2px; }
         .storymattext { font-size: 11px; color: #F1EEE6; padding: 0 6px; }
-        .storynum { font-size: 12px; color: #9A9484; font-weight: 600; }
-        .storyhint { font-size: 11px; color: #7D7767; }
+        /* muted, not muted-2: the card is a toggle BUTTON and a selected
+           card fills with @select, where muted-2 fell to 2.36:1 (2.92:1 even
+           unselected, under the 3:1 floor). muted is what .storymeta beside it
+           on the same card already uses. */
+        .storynum { font-size: 12px; color: #6E695E; font-weight: 600; }
+        .storyhint { font-size: 11px; color: #6E695E; }
         .storyname { font-size: 12px; color: #1A1916; font-weight: 600; }
         .storymeta { font-size: 11px; color: #6E695E; }
         .storytitleovl { font-size: 10px; color: #1A1916; }
@@ -5237,11 +5850,15 @@ class VideoEditor(nbapp.AppWindow):
            mark here. The accent belongs to the selection alone. */
         .transdot.transdotset { border-style: solid; border-color: #1A1916;
                     background: #EFEBE0; }
-        .transplus { color: #9A9484; font-size: 15px; }
+        .transplus { color: #6E695E; font-size: 15px; }
+        /* the connector's own hit target: the dot IS the control, so the
+           button around it contributes no box of its own */
+        .transhit { padding: 0; margin: 0; border: 0; background: none;
+                    box-shadow: none; min-width: 0; min-height: 0; }
 
         .ruler { border-bottom: 1px solid #D7D2C5; }
         .rulergutter { border-right: 1px solid #D7D2C5; }
-        .tick { font-size: 10px; color: #9A9484; border-left: 1px solid #D7D2C5;
+        .tick { font-size: 10px; color: #6E695E; border-left: 1px solid #D7D2C5;
                 padding-left: 6px; }
         /* the playhead is a POSITION, not a selection: ink, so the one
            signage red on this window keeps meaning SELECTED (the chosen clip,
@@ -5275,7 +5892,7 @@ class VideoEditor(nbapp.AppWindow):
         .lanehit:hover .lanecell { background: #F8F7F2; }
         .tlscroll, .tlscroll viewport { background: #F1EEE6; }
         .storyadd { border: 1px dashed #C9C4B6; background: #F8F7F2; }
-        .storybadge { font-size: 10px; color: #9A9484; }
+        .storybadge { font-size: 10px; color: #6E695E; }
 
         /* ---------- properties (extended controls) ---------- */
         .propcombo { background: #FCFBF8; border: 1px solid #C9C4B6;
@@ -5302,8 +5919,8 @@ class VideoEditor(nbapp.AppWindow):
         .improw.impsel { background: #EAE3D2; box-shadow: inset 3px 0 0 #C8341E; }
         .imphit:hover .improw { background: #F8F7F2; }
         .impname { font-size: 13px; color: #1A1916; font-weight: 600; }
-        .imppath { font-size: 11px; color: #9A9484; }
-        .impadded { font-size: 11px; color: #B3AD9E; font-style: italic; }
+        .imppath { font-size: 11px; color: #6E695E; }
+        .impadded { font-size: 11px; color: #6E695E; font-style: italic; }
         .impcount { font-size: 12px; color: #6E695E; }
         .impbtn { padding: 8px 16px; border-radius: 8px; border: 1px solid #C9C4B6;
                   background: #F1EEE6; color: #1A1916; font-size: 13px;
@@ -5312,7 +5929,7 @@ class VideoEditor(nbapp.AppWindow):
         .dlgdrop { border: 1px dashed #C9C4B6; border-radius: 12px;
                    background: #FCFBF8; padding: 34px 22px; }
         .dropmain { font-size: 14px; color: #6E695E; }
-        .dropsub { font-size: 12px; color: #9A9484; }
+        .dropsub { font-size: 12px; color: #6E695E; }
         .dlgok { min-width: 96px; min-height: 38px; padding: 0 16px;
                  background: #C8341E; color: #FCFBF8; border-radius: 8px;
                  font-size: 14px; font-weight: 600; box-shadow: none;

@@ -24,6 +24,7 @@ import re
 import math
 import json
 import tempfile
+import fcntl
 
 from nbi18n import _t  # noqa: E402  (shared translation layer)
 import nbcommands  # noqa: E402  (canonical command labels/shortcuts/grouping)
@@ -161,11 +162,20 @@ def _reap_stale_tmp(d):
         for f in os.listdir(d):
             if f.startswith(".nbw-") and f.endswith(".tmp"):
                 p = os.path.join(d, f)
+                lockfd = None
                 try:
+                    lockfd = os.open(p, os.O_RDWR)
+                    fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     if os.path.getmtime(p) < cutoff:
                         os.unlink(p)
                 except OSError:
                     pass
+                finally:
+                    if lockfd is not None:
+                        try:
+                            os.close(lockfd)
+                        except OSError:
+                            pass
     except OSError:
         pass
 
@@ -339,8 +349,28 @@ def preserve_damaged(path):
             _BACKED_UP.add(path)
             if not _bak_would_shrink(path + ".bak", raw):
                 try:
-                    with open(path + ".bak", "w", encoding="utf-8") as bh:
-                        bh.write(raw)
+                    # THE BACKUP IS THE STORE, so it gets the store's
+                    # permissions. A plain open() takes the umask (0644 on this
+                    # image), which handed a full copy of a private journal,
+                    # address book or ledger to every account on the machine
+                    # while the store beside it stayed 0600 — the one file
+                    # nobody thinks to look at being the readable one. Match
+                    # the original's mode where there is one; fall back to
+                    # 0600, never to the umask.
+                    try:
+                        mode = stat.S_IMODE(os.stat(path).st_mode)
+                    except OSError:
+                        mode = 0o600
+                    fd = os.open(path + ".bak",
+                                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8") as bh:
+                            bh.write(raw)
+                    finally:
+                        try:
+                            os.chmod(path + ".bak", mode)   # an existing .bak
+                        except OSError:                     # keeps its old mode
+                            pass                            # without this
                 except OSError:
                     pass                 # a backup is a bonus, never a blocker
         return None
@@ -477,7 +507,7 @@ def atomic_write_text(path, text):
         raise
 
 
-def atomic_write_via(path, write):
+def atomic_write_via(path, write, *, allow_empty=False, validate=None):
     """The same guarantee for a writer that needs a real PATH rather than a
     string — cairo's PDFSurface, the csv module, an encoder that opens the
     file itself.
@@ -494,15 +524,36 @@ def atomic_write_via(path, write):
     this dance after a failed render destroyed a good PDF, and Writer,
     Accounting and Contacts still wrote straight onto the destination. The
     usual reason to export a second time is that the document changed, so the
-    file being overwritten is one the user still wants."""
+    file being overwritten is one the user still wants.
+
+    Returning from a producer is not, by itself, proof that it produced an
+    export: cairo and encoder wrappers can retain an internal error, and a
+    callback can accidentally return without opening the draft.  Empty output
+    is therefore rejected by default.  Callers with a format-level check can
+    supply ``validate(draft_path)``; it must return true before commit.  A
+    genuinely meaningful empty document must opt in explicitly."""
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
     _reap_stale_tmp(d)
     fd, tmp = tempfile.mkstemp(prefix=".nbw-", suffix=".tmp", dir=d)
-    os.close(fd)
+    fcntl.flock(fd, fcntl.LOCK_EX)
     try:
         write(tmp)
+        try:
+            size = os.path.getsize(tmp)
+        except OSError as exc:
+            raise OSError("export producer did not create its draft") from exc
+        if not allow_empty and size == 0:
+            raise OSError("export producer created an empty draft")
+        if validate is not None and not validate(tmp):
+            raise OSError("export draft failed validation")
         _keep_mode(path, tmp, _umask_mode())
+        # The producer may have closed only its language-level buffers. Flush
+        # the completed draft (including its final mode metadata) to storage
+        # before the atomic rename; directory fsync alone cannot make file
+        # contents durable.
+        with open(tmp, "rb") as durable:
+            os.fsync(durable.fileno())
         os.replace(tmp, path)
         _fsync_dir(d)
     except Exception:
@@ -511,6 +562,11 @@ def atomic_write_via(path, write):
         except OSError:
             pass
         raise
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 # Decode ceilings, shared by every app that turns a file into pixels.
@@ -573,6 +629,70 @@ def save_failure_reason(exc, path=None):
         return _t("There is no room left for new files, so this could not "
                   "be saved.")
     return _t("This could not be saved.")
+
+
+def close_unsaved_card(win, exc, path=None):
+    """The card for a close that would lose work the disk has refused.
+
+    An app whose store write failed must not close SILENTLY (the window goes,
+    the work goes with it) and must not refuse to close SILENTLY either (a
+    window that will not go away, with one status flash a minute ago as its
+    only explanation, is a trap on a full disk -- Esc only ever LEAVES in this
+    OS). Screenplay and Novel already do the right thing: say why, and offer
+    the way out. This is that card for every app: the reason a person can act
+    on (save_failure_reason), what closing now costs, Cancel focused so a
+    stray Return keeps the work, and a danger button that really closes.
+
+    Returns True when the person chose to close without saving. Every string
+    here is already in the catalogs (screenplay's close guard)."""
+    from nbi18n import _t as _tr
+    try:
+        dlg = Gtk.Dialog(title=_tr("Not saved"), transient_for=win, modal=True)
+        dlg.set_decorated(False)
+        dlg.get_style_context().add_class("nbapp")
+        dlg.get_style_context().add_class("nbclosecard")
+        box = dlg.get_content_area()
+        box.set_spacing(12)
+        box.set_margin_top(22); box.set_margin_bottom(18)
+        box.set_margin_start(26); box.set_margin_end(26)
+        head = Gtk.Label(label=_tr("Not saved"), xalign=0)
+        head.get_style_context().add_class("nbclose-title")
+        box.pack_start(head, False, False, 0)
+        msg = Gtk.Label(
+            label=_tr(save_failure_reason(exc, path)) + " " + _tr(
+                "Closing now loses the writing since the last save. "
+                "Make room and close again to try once more."),
+            xalign=0)
+        msg.set_line_wrap(True)
+        msg.set_width_chars(38)
+        msg.set_max_width_chars(42)
+        msg.get_style_context().add_class("nbclose-msg")
+        box.pack_start(msg, False, False, 0)
+        cancel = dlg.add_button(_tr("Cancel"), Gtk.ResponseType.CANCEL)
+        cancel.get_style_context().add_class("nbclose-cancel")
+        ok = dlg.add_button(_tr("Close Without Saving"), Gtk.ResponseType.OK)
+        ok.get_style_context().add_class("nbclose-danger")
+        try:
+            # the stock action row hugs the card edge; give it the same
+            # inset as the text above it
+            area = ok.get_parent()
+            area.set_margin_start(26); area.set_margin_end(26)
+            area.set_margin_bottom(18); area.set_spacing(10)
+        except Exception:                                         # noqa: BLE001
+            pass
+        dlg.connect("key-press-event",
+                    lambda _w, e: (dlg.response(Gtk.ResponseType.CANCEL) or True)
+                    if e.keyval == Gdk.KEY_Escape else False)
+        dlg.show_all()
+        cancel.grab_focus()          # a stray Return must never lose the work
+        r = dlg.run()
+        dlg.destroy()
+        return r == Gtk.ResponseType.OK
+    except Exception:                                             # noqa: BLE001
+        # A card that cannot be built must not become a window that cannot
+        # be closed: fall back to letting the close through, as before the
+        # guard existed.
+        return True
 
 
 def note_save_failure(owner, exc, path=None, app_name=""):
@@ -647,7 +767,22 @@ def atomic_write_json(path, obj, indent=None, ensure_ascii=True):
     # Never overwrite bytes we could not read. Doing this HERE rather than in
     # each app's load path covers all ~22 persistence sites at once, including
     # any added later, and cannot be forgotten by a new app.
+    damaged_at_path = False
+    try:
+        if os.path.isfile(path):
+            if os.path.getsize(path) == 0:
+                damaged_at_path = True
+            else:
+                with open(path, "r", encoding="utf-8") as existing:
+                    json.load(existing)
+    except (OSError, ValueError, UnicodeDecodeError):
+        damaged_at_path = True
     preserve_damaged(path)
+    if damaged_at_path and os.path.exists(path):
+        # Preservation is not a best-effort bonus when these are the only
+        # unreadable bytes the user has. A failed rename must block the fresh
+        # replacement and let the caller surface/retry the save.
+        raise OSError("could not preserve damaged store before replacing it")
     fd, tmp = tempfile.mkstemp(prefix=".nbw-", suffix=".tmp", dir=d)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -663,6 +798,44 @@ def atomic_write_json(path, obj, indent=None, ensure_ascii=True):
         except OSError:
             pass
         raise
+
+
+def atomic_update_json(path, update, indent=None, ensure_ascii=True,
+                       recover_unrecognized=None):
+    """Lock, read, update and atomically publish one shared JSON object.
+
+    Atomic replacement protects bytes, but two processes doing independent
+    read/modify/write cycles can still erase one another's fields.  The sidecar
+    lock is held across the whole cycle. ``update`` receives a shallow copy of
+    the current dict and must return the dict to publish.  The published dict is
+    returned so callers can refresh their baseline.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    lock_path = path + ".lock"
+    with open(lock_path, "a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as source:
+                    current = json.load(source)
+                if not isinstance(current, dict):
+                    if recover_unrecognized is None:
+                        raise ValueError("shared JSON store is not an object")
+                    recover_unrecognized(path)
+                    if os.path.exists(path):
+                        raise OSError("could not preserve unrecognized JSON store")
+                    current = {}
+            else:
+                current = {}
+            result = update(dict(current))
+            if not isinstance(result, dict):
+                raise TypeError("JSON update must return an object")
+            atomic_write_json(path, result, indent=indent,
+                              ensure_ascii=ensure_ascii)
+            return result
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 # =====================================================================
@@ -807,6 +980,7 @@ class UndoHistory:
         self._typing_label = typing_label
         self._hist = []            # [[state, label], ...] oldest first
         self._hi = -1              # index of the state currently on screen
+        self._seen = None          # stable snapshot the history last looked at
         self._timer = None         # pending typing checkpoint
         self._label = None         # what the edit in flight should be called
         self.busy = False          # True while restoring (apps guard on this)
@@ -836,6 +1010,7 @@ class UndoHistory:
             return                 # a snapshot must never break an edit
         prev = self._hist[self._hi][0] if self._hi >= 0 else None
         state, added = _share_and_weigh(state, prev)
+        self._seen = self._stable(state)   # what the history last saw on screen
         if prev is not None and self._stable(state) == self._stable(prev):
             # Same document, so this is not a step of its own - keep the newer
             # volatile part (the caret) and leave the depth alone.
@@ -933,8 +1108,20 @@ class UndoHistory:
         stands alone, and remember what to call it. `label` may carry the
         trailing ellipsis of the menu item it came from ("Delete Entry...") -
         it is trimmed for display, so the caller can pass the label it already
-        has instead of maintaining a second copy of the wording."""
+        has instead of maintaining a second copy of the wording.
+
+        THE BASELINE IS WHAT IS ON SCREEN, NOT THE LAST STEP THAT HAPPENED TO
+        BE RECORDED. Apps whose additions never touch() the history -- a task
+        typed into Tasks, an event quick-added in Calendar, a new contact --
+        left the newest recorded state as the one from launch (or from the
+        last structural edit). Undo of a later Delete then restored THAT, and
+        three tasks typed in the afternoon vanished with the one deleted by
+        mistake: measured on Tasks, add three / delete one / Ctrl+Z -> zero
+        tasks. So the pre-edit state is pushed here (unlabelled; a no-op when
+        it equals the top of the history), and undo of the edit that follows
+        lands exactly one step back from what the person was looking at."""
         self.flush()
+        self._push(None)
         self._label = label
 
     def commit(self):
@@ -989,24 +1176,61 @@ class UndoHistory:
         # steps back over the sentence just typed instead of ignoring it (and
         # so redo can bring it back).
         self.flush()
+        # ...and so is anything the app changed WITHOUT telling the history
+        # (an app whose additions never touch() nor checkpoint()): pushing the
+        # on-screen state first makes those changes a step of their own -- one
+        # Ctrl+Z takes them back as a batch and Redo returns them -- instead of
+        # undo stepping straight over them to an older state and the app then
+        # writing that older state to disk. A no-op when nothing changed (the
+        # push dedupes against the top), so a repeated undo keeps walking back
+        # and keeps its redo tail. Same class as checkpoint()'s baseline push.
+        try:
+            changed = self._stable(self._take()) != getattr(self, "_seen", None)
+        except Exception:                                         # noqa: BLE001
+            changed = False
+        if changed:
+            self._push(None)
         if self._hi <= 0:
             return False
+        old_hi = self._hi
         self._hi -= 1
-        return self._apply()
+        if not self._apply():
+            self._hi = old_hi
+            return False
+        return True
 
     def redo(self):
         if self._hi >= len(self._hist) - 1:
             return False
+        old_hi = self._hi
         self._hi += 1
-        return self._apply()
+        if not self._apply():
+            self._hi = old_hi
+            return False
+        return True
 
     def _apply(self):
         self.busy = True
         try:
-            self._restore(self._hist[self._hi][0])
+            # Existing callbacks return None. A persistence-aware callback may
+            # explicitly reject the restore with False; keep the history
+            # cursor on the state that is still on screen in that case.
+            restored = self._restore(self._hist[self._hi][0])
         finally:
             self.busy = False
-        return True
+        if restored is not False:
+            # Remember the document AS THE APP RE-SERIALISES IT after the
+            # restore, not the stored snapshot: a restore that rebuilds the
+            # model can legitimately come back with a different but
+            # equivalent serialisation (defaults filled in, ids reissued),
+            # and undo()'s "did the person change anything?" question must
+            # compare against that, or every undo would look like an edit
+            # and the history would never run off the end (gbasdk did).
+            try:
+                self._seen = self._stable(self._take())
+            except Exception:                                     # noqa: BLE001
+                self._seen = None
+        return restored is not False
 
 
 def undo_menu_items(hist):
@@ -1064,9 +1288,10 @@ def _logo_pixbuf():
 # installer) — correctly hides the home. Ref-counted across processes via a
 # per-PID marker dir, so closing one of several open apps doesn't prematurely
 # reveal the home, and a crashed app's stale marker is reaped on the next check.
-# Both live in /tmp on purpose: it is a tmpfs, so a reboot clears it. That is
-# what keeps a RECYCLED pid from being mistaken for a live app and refusing to
-# launch it. The names carry the NB_HOME they belong to, so a test running an
+# Both live in /tmp on purpose: a reboot clears them. Within one boot a PID can
+# still be recycled, so each marker also carries /proc's process start token
+# and is trusted only when both match. The names carry the NB_HOME they belong
+# to, so a test running an
 # app against a sandbox home cannot collide with a real one -- on the machine
 # NB_HOME is exported once by session.sh, so every app agrees on one directory
 # and the single-instance guard still sees its siblings.
@@ -1085,6 +1310,45 @@ _APP_DIR = "/tmp/nb-apps" + _APP_SCOPE
 # re-derive the paths themselves or the two halves can disagree.
 APP_FLAG = _APP_FLAG
 APP_DIR = _APP_DIR
+_INSTANCE_LOCKS = {}
+
+
+def _proc_start_token(pid):
+    """Kernel birth token for *pid*, or ``""`` when it cannot be read."""
+    try:
+        with open("/proc/%s/stat" % pid, encoding="ascii") as fh:
+            raw = fh.read()
+        # comm is parenthesized and may itself contain spaces or ')'.  Fields
+        # after its final ')' start at stat field 3; starttime is field 22.
+        return raw.rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError, ValueError):
+        return ""
+
+
+def app_marker_live(name):
+    """Whether numeric APP_DIR marker *name* belongs to that exact process."""
+    if not str(name).isdigit():
+        return False
+    try:
+        with open(os.path.join(_APP_DIR, str(name)), encoding="utf-8") as fh:
+            fields = fh.read().splitlines()
+    except OSError:
+        return False
+    # Legacy module-only markers are unsafe after PID reuse. /tmp is cleared
+    # at boot, so they can only come from an interrupted in-place update.
+    return bool(len(fields) >= 2 and fields[1]
+                and _proc_start_token(name) == fields[1])
+
+
+def app_map_beacon_live(pid):
+    """Whether *pid*'s first-map beacon belongs to this process lifetime."""
+    try:
+        with open(os.path.join(_APP_DIR, "%s.mapped" % pid),
+                  encoding="ascii") as fh:
+            token = fh.read().strip()
+    except OSError:
+        return False
+    return bool(token and token == _proc_start_token(pid))
 
 
 def _refresh_app_flag():
@@ -1094,7 +1358,8 @@ def _refresh_app_flag():
             if name.endswith(".mapped"):
                 # the launch-continuity beacon (see AppWindow._map_beacon):
                 # reaped here with its process, exactly like the pid marker
-                if not os.path.isdir("/proc/" + name[:-len(".mapped")]):
+                pid = name[:-len(".mapped")]
+                if not app_map_beacon_live(pid):
                     try:
                         os.remove(os.path.join(_APP_DIR, name))
                     except OSError:
@@ -1102,7 +1367,7 @@ def _refresh_app_flag():
                 continue
             if not name.isdigit():
                 continue
-            if os.path.isdir("/proc/" + name):
+            if app_marker_live(name):
                 alive = True
             else:
                 try:
@@ -1129,16 +1394,47 @@ def refresh_app_flag():
 
 
 def _register_app(win=None):
+    tmp = ""
     try:
         os.makedirs(_APP_DIR, exist_ok=True)
         # The marker carries the MODULE NAME, not just the pid, so
         # claim_single_instance() below can tell whether the app already open is
         # this one or a different one.
-        with open(os.path.join(_APP_DIR, str(os.getpid())), "w") as _fh:
-            _fh.write(_app_module_name(win) + "\n")
+        fd, tmp = tempfile.mkstemp(prefix=".register-", dir=_APP_DIR)
+        with os.fdopen(fd, "w", encoding="utf-8") as _fh:
+            _fh.write(_app_module_name(win) + "\n" +
+                      _proc_start_token(os.getpid()) + "\n")
+            _fh.flush()
+            os.fsync(_fh.fileno())
+        os.replace(tmp, os.path.join(_APP_DIR, str(os.getpid())))
+        tmp = ""
         _refresh_app_flag()
     except Exception:
-        pass
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+def _publish_map_beacon():
+    """Publish the current process's first-map token without a partial file."""
+    tmp = ""
+    try:
+        os.makedirs(_APP_DIR, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".mapped-", dir=_APP_DIR)
+        with os.fdopen(fd, "w", encoding="ascii") as fh:
+            fh.write(_proc_start_token(os.getpid()) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, os.path.join(_APP_DIR, "%d.mapped" % os.getpid()))
+        tmp = ""
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 def _app_module_name(win=None):
@@ -1188,6 +1484,57 @@ def claim_single_instance(win=None):
     """
     me = _app_module_name(win)
     mine = str(os.getpid())
+    # This process already holds the admission lock for this app: a second
+    # call in ONE process is not a rival copy racing to overwrite the store
+    # (which is the whole point of the guard) — it is the same process
+    # constructing the window again, e.g. a test that builds two instances,
+    # or a re-init. Do NOT re-acquire the flock: opening the same lock file a
+    # second time is a distinct file description, so flock(LOCK_NB) on it
+    # fails against the lock we ALREADY hold, and the app would os._exit(0) on
+    # itself — silently, with block-buffered output lost, which read as a
+    # whole suite that "did not run". One process, one claim.
+    if me in _INSTANCE_LOCKS:
+        return
+    # The marker scan below is useful for compatibility and stale cleanup, but
+    # check-then-create alone lets two simultaneous launches both pass. Hold an
+    # advisory lock for this process's lifetime so admission is atomic.
+    try:
+        os.makedirs(_APP_DIR, exist_ok=True)
+        lock_path = os.path.join(_APP_DIR, ".instance-" +
+                                 re.sub(r"[^A-Za-z0-9_.-]", "_", me))
+        lock = open(lock_path, "a+")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, BlockingIOError):
+            # Held — but by WHOM? _INSTANCE_LOCKS above answers that only
+            # while this module object survives; a test that re-imports nbapp
+            # (board_selftest reloads it three times to re-pin screen_size)
+            # gets a FRESH registry while the previous incarnation still holds
+            # the flock, so the process would exit(0) on its own lock. The
+            # file carries the holder's pid for exactly this question: our own
+            # pid means the same process, and one process is one claim.
+            holder = ""
+            try:
+                lock.seek(0)
+                holder = lock.read(32).strip()
+            except OSError:                                       # noqa: BLE001
+                holder = ""
+            lock.close()
+            if holder == mine:
+                return
+            os._exit(0)
+        try:
+            lock.seek(0)
+            lock.truncate(0)
+            lock.write(mine)
+            lock.flush()
+        except OSError:                                           # noqa: BLE001
+            pass
+        _INSTANCE_LOCKS[me] = lock
+    except OSError:
+        # Retain the old marker behavior if /tmp is unexpectedly unavailable;
+        # failing every app closed would leave the appliance unusable.
+        pass
     try:
         names = os.listdir(_APP_DIR)
     except OSError:
@@ -1195,11 +1542,11 @@ def claim_single_instance(win=None):
     for name in names:
         if not name.isdigit() or name == mine:
             continue
-        if not os.path.isdir("/proc/" + name):
+        if not app_marker_live(name):
             continue                      # dead; _refresh_app_flag reaps it
         try:
             with open(os.path.join(_APP_DIR, name)) as fh:
-                if fh.read().strip() == me:
+                if fh.readline().strip() == me:
                     os._exit(0)
         except OSError:
             continue
@@ -1210,6 +1557,17 @@ def _unregister_app():
         os.remove(os.path.join(_APP_DIR, str(os.getpid())))
     except OSError:
         pass
+    try:
+        os.remove(os.path.join(_APP_DIR, "%d.mapped" % os.getpid()))
+    except OSError:
+        pass
+    for lock in list(_INSTANCE_LOCKS.values()):
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            lock.close()
+        except OSError:
+            pass
+    _INSTANCE_LOCKS.clear()
     _refresh_app_flag()
 
 
@@ -1555,6 +1913,79 @@ def name_control(widget, name):
     return widget
 
 
+_QUIET_SIGNALS = ("clicked", "toggled")
+
+
+def set_active_quietly(button, on):
+    """Light or unlight a toggle/check/radio button WITHOUT running its handlers.
+
+    Gtk.ToggleButton.set_active emits BOTH "toggled" AND "clicked" (GTK3's
+    gtk_toggle_button_set_active calls gtk_button_clicked), and a
+    Gtk.RadioButton whose sibling activates is deactivated with set_active(FALSE)
+    and emits both as well. So a pick-one row whose "clicked" handler restates
+    the row from inside itself re-enters that handler for every button in the
+    row: the finder's list/grid pair, accounting's Debit/Credit, screenplay's
+    element row, the packages rail and the installer's step rail all
+    ping-ponged to RecursionError, and every one of them was a plain Gtk.Button
+    row made a toggle row for accessibility (a button carrying only a CSS class
+    says nothing to assistive technology about which segment is chosen).
+
+    This blocks EVERY handler of both signals on the button for the duration of
+    the assignment — by signal id, so nothing has to remember a handler id —
+    and is a no-op when the state already matches. Not a guard that swallows
+    the second call: no second call at all. See choose_segment() for a row."""
+    if button.get_active() == bool(on):
+        return
+    from gi.repository import GObject
+    blocked = []
+    for sig in _QUIET_SIGNALS:
+        sid = GObject.signal_lookup(sig, type(button))
+        if sid:
+            GObject.signal_handlers_block_matched(
+                button, GObject.SignalMatchType.ID, sid, 0, None, None, None)
+            blocked.append(sid)
+    try:
+        button.set_active(bool(on))
+    finally:
+        for sid in blocked:
+            GObject.signal_handlers_unblock_matched(
+                button, GObject.SignalMatchType.ID, sid, 0, None, None, None)
+
+
+def choose_segment(pairs, chosen, css_class="on"):
+    """Show `chosen` as the one that is on across a pick-one row of toggle (or
+    radio) buttons, without firing any of their handlers (see
+    set_active_quietly). `pairs` is an iterable of (key, button); the button
+    whose key == chosen goes active and gains `css_class`, every other one goes
+    inactive and loses it. Radio siblings deactivate EACH OTHER, so the whole
+    row is blocked before any member is touched.
+
+    The row's handler stays wired to the button — a person's press still
+    arrives — this only keeps the row's own restatement from being one."""
+    from gi.repository import GObject
+    items = [(key, b) for key, b in pairs]
+    blocked = []
+    for _key, b in items:
+        for sig in _QUIET_SIGNALS:
+            sid = GObject.signal_lookup(sig, type(b))
+            if sid:
+                GObject.signal_handlers_block_matched(
+                    b, GObject.SignalMatchType.ID, sid, 0, None, None, None)
+                blocked.append((b, sid))
+    try:
+        for key, b in items:
+            on = (key == chosen)
+            if b.get_active() != on:
+                b.set_active(on)
+            if css_class:
+                ctx = b.get_style_context()
+                (ctx.add_class if on else ctx.remove_class)(css_class)
+    finally:
+        for b, sid in blocked:
+            GObject.signal_handlers_unblock_matched(
+                b, GObject.SignalMatchType.ID, sid, 0, None, None, None)
+
+
 def _name_hook():
     """Make every tooltip in the OS an accessible name as well.
 
@@ -1736,6 +2167,21 @@ APP_CSS = b"""
                    font-size: 24px; font-weight: 500; letter-spacing: 0.01em;
                    color: #1A1916; }
 .nbabout .a-sub  { font-size: 13px; color: #6E695E; }
+/* the "Not saved" close card (close_unsaved_card): a papertone card, no
+   window-manager chrome, danger on the one button that loses work */
+.nbclosecard { background: #FCFBF8; border: 1px solid #C9C4B6; }
+.nbclosecard .nbclose-title { font-size: 17px; font-weight: 700;
+                              color: #1A1916; }
+.nbclosecard .nbclose-msg { color: #6E695E; font-size: 13px; }
+.nbclosecard .nbclose-cancel { min-height: 26px; padding: 0 14px;
+                               background: #FCFBF8; border: 1px solid #D7D2C5;
+                               border-radius: 8px; color: #2A2620;
+                               font-size: 13px; }
+.nbclosecard .nbclose-danger, .nbclosecard .nbclose-danger label {
+    color: #FCFBF8; font-size: 13px; }
+.nbclosecard .nbclose-danger { min-height: 26px; padding: 0 14px;
+                               background: #C8341E; border: 1px solid #A32A18;
+                               border-radius: 8px; }
 """
 
 
@@ -1892,11 +2338,105 @@ def _apply_motion_policy():
         pass
 
 
+_MODALITY_HOOKED = False
+
+
+def note_input_modality(event):
+    """Show focus rings for the KEYBOARD and never for the mouse.
+
+    Papertone draws a 2px accent ring wherever GTK asks for one, and the rule
+    carries a comment saying "a mouse user never sees a ring (verified: all 28
+    apps render pixel-identically with this rule added)". That verification was
+    done with OFFSCREEN renders, and an offscreen window is never the active
+    toplevel, so `gtk_widget_has_visible_focus()` was False in every one of
+    them and no ring could have drawn either way -- the instrument could not
+    see the thing it was certifying.
+
+    On the machine the flag says otherwise: GtkWindow:focus-visible DEFAULTS to
+    True and GTK3 never lowers it, so from the first frame every control that
+    takes focus by CLICK wears the keyboard ring. Measured on target: clicking
+    a calendar's sidebar row drew a red rectangle around it.
+
+    So the modality is tracked here, in the one dispatcher every app shares: a
+    button press (or a touch) lowers the flag for that window, a key press
+    raises it. Reach for the keyboard and the rings come back on the same
+    keystroke that needs them; use the mouse and the interface stays quiet.
+    Never raises -- it sits on the input path of the whole session."""
+    try:
+        kind = event.type
+        if kind in (Gdk.EventType.BUTTON_PRESS, Gdk.EventType._2BUTTON_PRESS,
+                    Gdk.EventType._3BUTTON_PRESS, Gdk.EventType.TOUCH_BEGIN):
+            visible = False
+        elif kind == Gdk.EventType.KEY_PRESS:
+            visible = True
+        else:
+            return False
+        widget = Gtk.get_event_widget(event)
+        if widget is None:
+            return False
+        top = widget.get_toplevel()
+        if not isinstance(top, Gtk.Window):
+            return False
+        # CLICKING A WINDOW GIVES IT THE KEYBOARD. The window manager on this
+        # machine does not do it: matchbox activates what it maps, and it never
+        # moves the input focus for a click on a DIALOG it did not activate --
+        # which is every window this OS opens. Measured on target: the Finder
+        # was on screen with the X input focus sitting on GTK's 1x1 GROUP-LEADER
+        # window, so clicking the search field and typing an app's name did
+        # nothing at all, and the desktop board wore the focus ring instead.
+        # A window-level button-press handler cannot fix it either: a GtkEntry
+        # stops the press, so it never bubbles to the toplevel. This dispatcher
+        # sees every event before any widget does, which is the only place the
+        # rule can live once.
+        if kind != Gdk.EventType.KEY_PRESS:
+            try:
+                gw = top.get_window()
+                # get_accept_focus() is the window's OWN declaration that it
+                # does not take the keyboard -- the menu bar and the on-screen
+                # keyboard set it False so a click on them never pulls the
+                # keyboard out of the app being typed into. Honour it here, or
+                # this rule would take with one hand what it gives with the
+                # other: use a menu, lose the caret.
+                if (gw is not None and gw.is_viewable()
+                        and top.get_accept_focus() and not top.is_active()):
+                    gw.focus(getattr(event, "time", 0) or Gdk.CURRENT_TIME)
+            except Exception:                                     # noqa: BLE001
+                pass
+        if top.get_focus_visible() == visible:
+            return False
+        top.set_focus_visible(visible)
+        return True
+    except Exception:                                             # noqa: BLE001
+        return False
+
+
+def track_input_modality():
+    """Install note_input_modality() on the process's GDK event dispatcher.
+
+    Done once, from install_css(), so every app inherits it from the call it
+    already makes. The dispatcher MUST hand every event on to GTK whatever
+    happens above, or the app stops responding to input entirely."""
+    global _MODALITY_HOOKED
+    if _MODALITY_HOOKED:
+        return
+    _MODALITY_HOOKED = True
+
+    def _dispatch(event, *_a):
+        note_input_modality(event)
+        Gtk.main_do_event(event)
+
+    try:
+        Gdk.event_handler_set(_dispatch)
+    except Exception:                                             # noqa: BLE001
+        _MODALITY_HOOKED = False      # unchanged behaviour, nothing broken
+
+
 def install_css():
     global _CSS_DONE
     if _CSS_DONE:
         return
     apply_direction()
+    track_input_modality()
     # The accessibility floor (see TEXT_STEPS): a no-op at the defaults, and
     # placed here so every app gets it from the one call it already makes.
     _a11y_base()
@@ -1959,7 +2499,9 @@ class AppWindow(Gtk.Window):
         install_css()
         # A fullscreen app owns the screen — hide the desktop home while we run.
         _register_app(self)
-        self.connect("destroy", lambda *_: _unregister_app())
+        self._base_closed = False
+        self._clock_source_id = 0
+        self.connect("destroy", self._on_base_destroy)
         self.set_decorated(False)
         # Opaque visual BEFORE the window is realised (set_visual only takes
         # effect pre-realise) — see force_opaque_visual.
@@ -2030,9 +2572,7 @@ class AppWindow(Gtk.Window):
             self._map_beacon_done = True
             try:
                 os.makedirs(_APP_DIR, exist_ok=True)
-                with open(os.path.join(_APP_DIR,
-                                       "%d.mapped" % os.getpid()), "w"):
-                    pass
+                _publish_map_beacon()
             except Exception:                                     # noqa: BLE001
                 pass
             # nbmotion-inventory: system.app-launch
@@ -2145,10 +2685,16 @@ class AppWindow(Gtk.Window):
         # resize even for identical text, so on this CPU-only software renderer
         # skipping the no-op keeps the timer from doing needless work forever.
         self._clock_txt = self._date_txt = None
-        self._tick(); GLib.timeout_add_seconds(1, self._tick)
+        self._tick()
+        self._clock_source_id = GLib.timeout_add_seconds(1, self._tick)
         return bar
 
     def _tick(self):
+        if getattr(self, "_base_closed", False):
+            # Returning False also lets GLib remove the source if destruction
+            # raced with a callback already dispatched from the main loop.
+            self._clock_source_id = 0
+            return False
         now = time.localtime()
         clk = time.strftime("%H:%M", now)
         dat = time.strftime("%a %-d %b", now)
@@ -2159,6 +2705,21 @@ class AppWindow(Gtk.Window):
             self._date_txt = dat
             self._date.set_text(dat)
         return True
+
+    def _on_base_destroy(self, *_):
+        """Release repeating chrome work owned by every application window."""
+        if getattr(self, "_base_closed", False):
+            return False
+        self._base_closed = True
+        source_id = getattr(self, "_clock_source_id", 0)
+        self._clock_source_id = 0
+        if source_id:
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass
+        _unregister_app()
+        return False
 
     # -- the menu bar's notification centre --
     def notify(self, title, body=""):

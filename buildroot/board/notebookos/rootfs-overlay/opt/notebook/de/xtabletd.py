@@ -36,6 +36,7 @@ import signal
 import struct
 import subprocess
 import sys
+import threading
 import time
 from ctypes import (POINTER, Structure, byref, c_char_p, c_int, c_long,
                     c_ubyte, c_ulong, c_void_p)
@@ -43,6 +44,8 @@ from ctypes import (POINTER, Structure, byref, c_char_p, c_int, c_long,
 EV_SYN = 0
 EV_KEY = 1
 EV_SW = 5
+
+_X_ERROR_LOCK = threading.Lock()
 SW_TABLET_MODE = 1
 EVENT = struct.Struct("llHHi")       # Linux input_event on x86-64
 SW_BYTES = 8                         # comfortably covers current SW_MAX
@@ -63,6 +66,23 @@ class _XIDeviceInfo(Structure):
 
 class _XIAnyClassInfo(Structure):
     _fields_ = [("type", c_int), ("sourceid", c_int)]
+
+
+def has_touch_class(classes, count):
+    """Conservatively inspect XI classes; malformed metadata means touch."""
+    if count <= 0:
+        return False
+    if not classes:
+        # A device advertising classes without a class array is racing removal
+        # or malformed. Never risk disabling a touchscreen on incomplete data.
+        return True
+    try:
+        items = ctypes.cast(classes, POINTER(POINTER(_XIAnyClassInfo)))
+        return any(not items[index]
+                   or items[index].contents.type == XI_TOUCH_CLASS
+                   for index in range(count))
+    except (TypeError, ValueError, IndexError):
+        return True
 
 
 def device_is_internal(device):
@@ -113,6 +133,12 @@ class XInput2:
         self.xi.XIChangeProperty.argtypes = [
             c_void_p, c_int, c_ulong, c_ulong, c_int, c_int,
             POINTER(c_ubyte), c_int]
+        self._x_error_handler_type = ctypes.CFUNCTYPE(c_int, c_void_p,
+                                                       c_void_p)
+        self.x11.XSetErrorHandler.argtypes = [self._x_error_handler_type]
+        self.x11.XSetErrorHandler.restype = self._x_error_handler_type
+        self.x11.XSync.argtypes = [c_void_p, c_int]
+        self.x11.XSync.restype = c_int
 
     def _open(self):
         if not os.environ.get("DISPLAY"):
@@ -127,12 +153,13 @@ class XInput2:
         status = self.xi.XIGetProperty(
             dpy, device_id, prop, 0, 1024, False, 0, byref(actual),
             byref(fmt), byref(count), byref(remain), byref(data))
-        if status != 0 or not data or fmt.value != 8:
-            return None
         try:
+            if status != 0 or not data or fmt.value != 8:
+                return None
             return ctypes.string_at(data, count.value).decode("utf-8", "replace")
         finally:
-            self.x11.XFree(data)
+            if data:
+                self.x11.XFree(data)
 
     def devices(self):
         dpy = self._open()
@@ -147,10 +174,7 @@ class XInput2:
                 if info.use not in (XI_SLAVE_POINTER, XI_SLAVE_KEYBOARD):
                     continue
                 node = self._node(dpy, info.deviceid)
-                classes = ctypes.cast(
-                    info.classes, POINTER(POINTER(_XIAnyClassInfo)))
-                touch = any(classes[item].contents.type == XI_TOUCH_CLASS
-                            for item in range(info.num_classes))
+                touch = has_touch_class(info.classes, info.num_classes)
                 phys = None
                 bus_type = None
                 if node:
@@ -184,12 +208,28 @@ class XInput2:
         if not dpy:
             return False
         try:
-            prop = self.x11.XInternAtom(dpy, b"Device Enabled", False)
-            value = (c_ubyte * 1)(1 if enabled else 0)
-            self.xi.XIChangeProperty(dpy, device_id, prop, XA_INTEGER, 8,
-                                     PROP_MODE_REPLACE, value, 1)
-            self.x11.XFlush(dpy)
-            return True
+            failed = [False]
+
+            @self._x_error_handler_type
+            def trap(_display, _event):
+                failed[0] = True
+                return 0
+
+            # X errors are asynchronous and the handler is process-global.
+            # Serialize the brief trap+sync window and do not claim success
+            # until the server has acknowledged this exact request.
+            with _X_ERROR_LOCK:
+                previous = self.x11.XSetErrorHandler(trap)
+                try:
+                    prop = self.x11.XInternAtom(dpy, b"Device Enabled", False)
+                    value = (c_ubyte * 1)(1 if enabled else 0)
+                    self.xi.XIChangeProperty(
+                        dpy, device_id, prop, XA_INTEGER, 8,
+                        PROP_MODE_REPLACE, value, 1)
+                    self.x11.XSync(dpy, False)
+                finally:
+                    self.x11.XSetErrorHandler(previous)
+            return not failed[0]
         finally:
             # X connection loss needs no special recovery: the X session has
             # ended and its server-side device state is discarded on restart.
@@ -319,7 +359,19 @@ class OskController:
         try:
             child.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            pass
+            # A wedged keyboard must not become an unowned always-on-top
+            # process.  Escalate, then reap it before another fold is allowed
+            # to launch a replacement.
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            try:
+                child.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # Retain ownership so start_confirmed cannot create a second
+                # OSK while this process is still alive.
+                self.child = child
 
 
 class Actions:
@@ -379,15 +431,18 @@ class Actions:
             pass
 
     def _record_disabled(self):
-        if not self.disabled:
-            try:
+        try:
+            if not self.disabled:
                 os.unlink(self.inhibited_file)
-            except FileNotFoundError:
-                pass
-            return
-        with open(self.inhibited_file, "w", encoding="utf-8") as fh:
-            for name in self.disabled.values():
-                fh.write(name + "\n")
+                return
+            with open(self.inhibited_file, "w", encoding="utf-8") as fh:
+                for name in self.disabled.values():
+                    fh.write(name + "\n")
+        except OSError:
+            # This is a recovery breadcrumb, not the inhibition mechanism.
+            # Failure to maintain it must never interrupt re-enabling devices
+            # or stopping the OSK on the fail-open teardown path.
+            pass
 
     def inhibit(self):
         try:
@@ -401,6 +456,27 @@ class Actions:
         except Exception:
             self.enable_all()
             raise
+
+    def reconcile_inhibition(self):
+        """Disable internal devices that appeared while already folded."""
+        try:
+            devices = self.xinput.devices()
+            by_id = {device["id"]: device for device in devices}
+            # Forget vanished IDs and IDs now belonging to an external/touch
+            # device. Never issue an enable/disable command to such a device.
+            for device_id in list(self.disabled):
+                device = by_id.get(device_id)
+                if device is None or not device_is_internal(device):
+                    self.disabled.pop(device_id, None)
+            for device in devices:
+                device_id = device["id"]
+                if device_is_internal(device) and device_id not in self.disabled:
+                    if self.xinput.set_enabled(device_id, False):
+                        self.disabled[device_id] = device["name"]
+            self._record_disabled()
+        except Exception:
+            # A partial/inconsistent XInput view must fail open.
+            self.enable_all()
 
     def enable_all(self):
         pending = dict(self.disabled)
@@ -425,7 +501,10 @@ class Actions:
         finally:
             try:
                 os.unlink(self.inhibited_file)
-            except FileNotFoundError:
+            except OSError:
+                # A stale/bad diagnostic marker must not abort the daemon
+                # after physical input has been healed. Monitoring the next
+                # fold is more important than tidying this breadcrumb.
                 pass
 
     def __call__(self, enabled):
@@ -444,7 +523,10 @@ class Actions:
         self.osk.stop()
         try:
             os.unlink(self.flag)
-        except FileNotFoundError:
+        except OSError:
+            # State publication is already obsolete once the daemon is
+            # closing. A stale directory or permission failure here must not
+            # skip main()'s remaining atexit/instance-lock teardown.
             pass
 
 
@@ -464,7 +546,7 @@ class DeviceLoop:
         self.core = core
         self.discover = discover
         self.poller = select.poll()
-        self.devices = {}               # fd -> [path, partial bytes]
+        self.devices = {}               # fd -> [path, partial bytes, mode]
         self.running = True
 
     def stop(self, *_args):
@@ -473,7 +555,7 @@ class DeviceLoop:
     def rescan(self):
         wanted = set(self.discover())
         present = {entry[0] for entry in self.devices.values()}
-        for fd, (path, _partial) in list(self.devices.items()):
+        for fd, (path, _partial, _mode) in list(self.devices.items()):
             if path not in wanted:
                 self._drop(fd)
         for path in sorted(wanted - present):
@@ -488,10 +570,32 @@ class DeviceLoop:
                 except (UnboundLocalError, OSError):
                     pass
                 continue
-            self.devices[fd] = [path, b""]
+            self.devices[fd] = [path, b"", mode]
             self.poller.register(fd, select.POLLIN | select.POLLERR |
                                  select.POLLHUP)
-            self.core.set_mode(mode)
+            self._publish_mode()
+        if self.core.mode is True:
+            reconcile = getattr(self.core.action, "reconcile_inhibition", None)
+            if reconcile is not None:
+                reconcile()
+
+    def _publish_mode(self):
+        # Firmware may expose the same physical hinge through more than one
+        # input device. Laptop mode is safe only when every live source says
+        # unfolded; one active source must keep tablet protections enabled.
+        self.core.set_mode(any(entry[2] for entry in self.devices.values()))
+
+    def _consume_records(self, fd, records):
+        entry = self.devices.get(fd)
+        if entry is None:
+            return
+        changed = False
+        for kind, code, value in records:
+            if kind == EV_SW and code == SW_TABLET_MODE:
+                entry[2] = value != 0
+                changed = True
+        if changed:
+            self._publish_mode()
 
     def _drop(self, fd):
         try:
@@ -502,7 +606,13 @@ class DeviceLoop:
             os.close(fd)
         except OSError:
             pass
-        self.devices.pop(fd, None)
+        removed = self.devices.pop(fd, None)
+        # Losing the last authority is not an "unfolded" event. Preserve the
+        # last known safety state until a switch device returns and reports a
+        # real mode; otherwise a transient driver reset can enable the folded
+        # keyboard and remove the only usable on-screen keyboard.
+        if removed is not None and self.devices:
+            self._publish_mode()
 
     def run(self):
         while self.running:
@@ -534,7 +644,7 @@ class DeviceLoop:
                         continue
                     data = entry[1] + chunk
                     complete = len(data) - len(data) % EVENT.size
-                    self.core.feed(decode_events(data[:complete]))
+                    self._consume_records(fd, decode_events(data[:complete]))
                     entry[1] = data[complete:]
         for fd in list(self.devices):
             self._drop(fd)

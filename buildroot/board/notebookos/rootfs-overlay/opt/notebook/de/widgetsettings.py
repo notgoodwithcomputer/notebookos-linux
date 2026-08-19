@@ -187,7 +187,9 @@ class WidgetSettings(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__()
+        self._store_quarantine_pending = ""
         self.data, self.order = self._load()
+        self._save_error = ""
         self._switches = {}
         self._rows = {}
         self._build()
@@ -203,7 +205,17 @@ class WidgetSettings(nbapp.AppWindow):
         try:
             with open(STORE, encoding="utf-8") as fh:
                 raw = json.load(fh)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            raw = {}
+        except (OSError, ValueError, UnicodeDecodeError):
+            nbapp.preserve_damaged(STORE)
+            if os.path.lexists(STORE):
+                self._store_quarantine_pending = "damaged"
+            raw = {}
+        if not isinstance(raw, dict):
+            nbapp.quarantine_unrecognized(STORE)
+            if os.path.lexists(STORE):
+                self._store_quarantine_pending = "unrecognized"
             raw = {}
         # widgets.board_state is what the DESKTOP reads this file with, so the
         # writer and the reader can never disagree about what it means -- down
@@ -212,12 +224,28 @@ class WidgetSettings(nbapp.AppWindow):
 
     def _save(self):
         try:
+            pending = getattr(self, "_store_quarantine_pending", "")
+            if pending:
+                if pending == "damaged":
+                    nbapp.preserve_damaged(STORE)
+                else:
+                    nbapp.quarantine_unrecognized(STORE)
+                if os.path.lexists(STORE):
+                    raise OSError("could not preserve the prior widget settings")
+                self._store_quarantine_pending = ""
             os.makedirs(os.path.dirname(STORE), exist_ok=True)
             nbapp.atomic_write_json(
                 STORE, {"tiles": self.data, "order": list(self.order)},
                 indent=1)
-        except OSError:
-            pass          # a read-only home must never stop the app working
+            self._save_error = ""
+            return True
+        except OSError as exc:
+            # The switches may keep working in memory, but the desktop is a
+            # separate process and sees only this file.  Keep the failure in
+            # the existing status strip; otherwise the preview promises a
+            # board layout that can never reach the board.
+            self._save_error = nbapp.save_failure_reason(exc, STORE)
+            return False
 
     # -- ui ------------------------------------------------------------------
 
@@ -230,7 +258,7 @@ class WidgetSettings(nbapp.AppWindow):
         .ws-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .ws-lede { font-size: 14px; color: #6E695E; }
         .ws-eyebrow { font-size: 11px; letter-spacing: 0.14em;
-                      font-weight: 700; color: #9A9484; }
+                      font-weight: 700; color: #6E695E; }
         .ws-rule { background: #D7D2C5; }
         .ws-row { padding: 12px 8px; }
         .ws-row-hot { background: #F4F2EC; }
@@ -238,13 +266,13 @@ class WidgetSettings(nbapp.AppWindow):
         .ws-name { font-size: 15px; color: #1A1916; }
         .ws-blurb { font-size: 13px; color: #6E695E; }
         /* the board's position number, in the board's own furniture colour */
-        .ws-slot { font-size: 12px; color: #9A9484; }
+        .ws-slot { font-size: 12px; color: #6E695E; }
         /* "4 / 6" beside the section name: how much of the board is spoken
            for. Tabular-ish weight so it reads as a count, not a heading. */
         .ws-count { font-size: 12px; font-weight: 700; color: #6E695E; }
         /* Why a control below is dead, or why a list is empty. Stated once per
            list rather than left to be discovered by pressing something. */
-        .ws-reason { font-size: 13px; color: #8A857A; padding: 2px 0 10px 28px; }
+        .ws-reason { font-size: 13px; color: #6E695E; padding: 2px 0 10px 28px; }
         .ws-preview { border: 1px solid #D7D2C5; padding: 0; }
         .ws-move { min-width: 26px; min-height: 24px; padding: 0;
                    background: #FCFBF8; border: 1px solid #D7D2C5;
@@ -393,6 +421,7 @@ class WidgetSettings(nbapp.AppWindow):
         for child in self._rowbox.get_children():
             self._rowbox.remove(child)
         self._switches.clear()
+        self._move_buttons = {}
         shown = self._shown()
         slots = widgets.slot_count()
         off = [t for t in self.order if not self.data.get(t)]
@@ -448,7 +477,7 @@ class WidgetSettings(nbapp.AppWindow):
         self._wrap(lbl)
         return lbl
 
-    def _move(self, tid, delta):
+    def _move(self, tid, delta, restore_focus=False):
         """Move a tile one place along THE BOARD, not one place along the
         stored order.
 
@@ -458,6 +487,7 @@ class WidgetSettings(nbapp.AppWindow):
         tiles are reordered among themselves and written back into the
         positions they already occupied, so the switched-off tiles keep their
         places and come back where they were left."""
+        before = (dict(self.data), list(self.order))
         shown = self._shown()
         if tid not in shown:
             return
@@ -469,8 +499,16 @@ class WidgetSettings(nbapp.AppWindow):
         slots = [k for k, t in enumerate(self.order) if self.data.get(t)]
         for k, t in zip(slots, shown):
             self.order[k] = t
-        self._save()
+        if not self._save():
+            self.data.clear(); self.data.update(before[0])
+            self.order[:] = before[1]
         self._fill_rows()
+        if restore_focus:
+            target = getattr(self, "_move_buttons", {}).get((tid, delta))
+            if target is None or not target.get_sensitive():
+                target = getattr(self, "_move_buttons", {}).get((tid, -delta))
+            if target is not None:
+                target.grab_focus()
         self.preview.queue_draw()
         self._refresh_status()
 
@@ -544,9 +582,12 @@ class WidgetSettings(nbapp.AppWindow):
                 b = Gtk.Button(label=glyph)
                 b.get_style_context().add_class("ws-move")
                 b.set_tooltip_text(_t(tip))
+                title = widgets.TILE_TITLE[tid]
+                b.get_accessible().set_name("%s: %s" % (_t(tip), _t(title)))
                 b.set_sensitive(not stop)
-                b.connect("clicked",
-                          lambda _b, t=tid, d=delta: self._move(t, d))
+                self._move_buttons[(tid, delta)] = b
+                b.connect("clicked", lambda _b, t=tid, d=delta:
+                          self._move(t, d, _b.has_focus()))
                 moves.pack_start(b, False, False, 0)
             row.pack_end(moves, False, False, 0)
 
@@ -599,6 +640,9 @@ class WidgetSettings(nbapp.AppWindow):
         list's switches go dead when the board is full -- but a hand-edited
         store can still arrive with eight tiles on, and the screen must not
         misdescribe it."""
+        if getattr(self, "_save_error", ""):
+            self.status.set_text(self._save_error)
+            return
         slots = widgets.slot_count()
         n = sum(1 for tid in widgets.TILE_ORDER if self.data.get(tid))
         shown = min(n, slots)
@@ -616,11 +660,14 @@ class WidgetSettings(nbapp.AppWindow):
     # -- actions -------------------------------------------------------------
 
     def _on_toggle(self, sw, _param, tid):
+        restore_focus = sw.has_focus()
+        before = (dict(self.data), list(self.order))
         self.data[tid] = bool(sw.get_active())
         # A tile that goes on or off changes SECTION, renumbers everything
         # under it, and can be what makes the board full -- so both lists are
         # rebuilt, not just the row that was touched.
-        self._after_change()
+        self._after_change(restore_switch=tid if restore_focus else None,
+                           before=before)
 
     def _fill_board(self):
         """Switch tiles on, in board order, until the grid is full.
@@ -628,6 +675,7 @@ class WidgetSettings(nbapp.AppWindow):
         Not "switch everything on": there are more tiles than the board can
         draw, so that would leave some of them switched on and undrawable --
         the exact state the lower list's dead switches exist to prevent."""
+        before = (dict(self.data), list(self.order))
         room = widgets.slot_count() - len(self._shown())
         for tid in self.order:
             if room <= 0:
@@ -635,26 +683,34 @@ class WidgetSettings(nbapp.AppWindow):
             if not self.data.get(tid):
                 self.data[tid] = True
                 room -= 1
-        self._after_change()
+        self._after_change(before=before)
 
     def _set_all(self, on):
+        before = (dict(self.data), list(self.order))
         for tid in widgets.TILE_ORDER:
             self.data[tid] = on
-        self._after_change()
+        self._after_change(before=before)
 
     def _reset_order(self):
+        before = (dict(self.data), list(self.order))
         self.order = list(widgets.TILE_ORDER)
-        self._after_change()
+        self._after_change(before=before)
 
-    def _after_change(self):
+    def _after_change(self, restore_switch=None, before=None):
         """Save, then redraw everything that describes the board. One place,
         because the picture, the two lists and the status line all describe the
         same state, and any of them left stale is the screen disagreeing with
         the desktop."""
-        self._save()
+        if not self._save() and before is not None:
+            self.data.clear(); self.data.update(before[0])
+            self.order[:] = before[1]
         self._refresh_status()
         self.preview.queue_draw()
         self._fill_rows()
+        if restore_switch is not None:
+            target = self._switches.get(restore_switch)
+            if target is not None:
+                target.grab_focus()
 
     def menu_items(self, name):
         if name == "File":

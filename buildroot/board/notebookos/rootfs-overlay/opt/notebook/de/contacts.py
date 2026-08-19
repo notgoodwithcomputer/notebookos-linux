@@ -19,10 +19,12 @@ from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 
 import os
 import json
+import quopri
 import re
 import time
 import subprocess
 import copy
+import unicodedata
 from datetime import date, timedelta
 
 import cairo
@@ -32,6 +34,7 @@ import nbcommands
 import nbicons
 import nbprint
 import nbpicker
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,14 +47,29 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 CONTACTS_FILE = os.path.join(CFG_DIR, "contacts.json")
 DOCS_DIR = os.path.join(HOME, "Documents")
+MAX_CONTACTS_BYTES = 8 * 1024 * 1024
+
+
+class ContactsStoreTooLarge(ValueError):
+    pass
+
+
+def _read_contacts_json(path=None, limit=MAX_CONTACTS_BYTES):
+    if path is None:
+        path = CONTACTS_FILE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise ContactsStoreTooLarge("address book is too large")
+    return json.loads(data)
 
 # papertone palette
 INK = "#1A1916"
 PAPER = "#FCFBF8"
 PANEL = "#F1EEE6"
 HAIR = "#D7D2C5"
-MUTED = "#9A9484"
-MUTED2 = "#8A857A"
+MUTED = "#6E695E"
+MUTED2 = "#6E695E"
 SEL = "#EAE3D2"
 ACCENT = "#C8341E"
 
@@ -70,6 +88,32 @@ FIELDS = [("Organization", "organization"), ("Address", "address"),
 # separately). Kept in one place so load / new / normalize agree.
 FIELD_KEYS = ("name", "role", "organization", "address", "bday", "notes")
 VALUE_LABELS = ("mobile", "home", "work")
+# What a stored label is CALLED on screen. The catalog is a single
+# English-keyed map with no context, and "Home" and "Work" were already in
+# it for the home SCREEN and the day's work — so asking for "Home" beside a
+# telephone number printed the word for a website's front page. A home
+# number read "Startseite" in German, "Accueil" in French, "Главная" in
+# Russian, "主页" in Chinese, "Ana Sayfa" in Turkish: thirteen of the
+# seventeen languages named a home page where a person's home number is.
+# "mobile" had no entry at all, so a mobile number stayed English beside
+# them. These keys name the kind of thing the value IS, which is what the
+# catalog can hold and what a translator can get right. The STORED label is
+# untouched: the field still reads and writes "home:", and a vCard still
+# carries TYPE=HOME.
+PHONE_LABEL_NAMES = {"mobile": "Mobile", "home": "Home phone",
+                     "work": "Work phone"}
+EMAIL_LABEL_NAMES = {"mobile": "Mobile", "home": "Home email",
+                     "work": "Work email"}
+# What the Phones / Emails fields show while they are empty. A card holds any
+# number of values, each of which can be named, and the field said only
+# "Phones" — so the spelling that does either was undiscoverable. These are
+# worked examples in the exact spelling the field writes and reads back
+# (labeled_text / parse_labeled_text), which is why the label words are the
+# stored English ones in every language: a translated label would not read
+# back as a label.
+VALUE_EXAMPLES = {"phones": "mobile: 555-0100; work: 555-0101",
+                  "emails": "me@example.com; me@job.com"}
+MAX_VCARD_BYTES = 32 * 1024 * 1024
 
 # The contact card is a fixed reading measure centred in the detail pane —
 # the width the design draws it at, and the width it keeps until the pane is
@@ -77,11 +121,15 @@ VALUE_LABELS = ("mobile", "home", "work")
 CARD_W = 760
 CARD_MARGIN = 64
 
-# Top-to-bottom order of the single-line edit fields, used so Enter advances
-# to the next field (Tab-like) instead of dropping out of edit mid-form. Notes
-# is a multi-line area (its own widget) and is deliberately not in this list.
-EDIT_ORDER = ("name", "role", "organization", "phones", "emails",
-              "address", "bday")
+# Top-to-bottom order of the edit fields, so Enter advances to the next field
+# (Tab-like) instead of dropping out of edit mid-form. DERIVED from the order
+# _rebuild_detail packs them in — name, role, then Phones and Emails, then
+# FIELDS — because a second, hand-written copy of that order drifted from it:
+# Enter in Role landed in Organization (the third row on screen), then jumped
+# back up to Phones, so anyone filling a card in from the keyboard typed their
+# phone number into the organization field. Notes is the multi-line area the
+# run ends in.
+EDIT_ORDER = ("name", "role", "phones", "emails") + tuple(k for _l, k in FIELDS)
 
 # Letter dividers only appear once a book is long enough that scanning it needs
 # them; a handful of contacts reads better as the flat list the design draws.
@@ -97,6 +145,31 @@ DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 _BDAY_NUM_RE = re.compile(r"^(\d{1,4})\D+(\d{1,2})(?:\D+(\d{1,4}))?\D*$")
 _WORD_RE = re.compile(r"[A-Za-z]+")
 _DIGITS_RE = re.compile(r"\d+")
+
+
+def value_label_name(field, label):
+    """The on-screen name of one value's label, in the running language."""
+    names = EMAIL_LABEL_NAMES if field == "emails" else PHONE_LABEL_NAMES
+    return _t(names.get(label, label.capitalize()))
+
+
+def _set_person_text(label, text, fallback=""):
+    """Put a person's own words on a label without the interface catalog
+    touching them.
+
+    nbi18n auto-translates the text of every Gtk.Label it walks, which is
+    right for chrome and wrong for content. A contact filed under "Home" —
+    the name people genuinely give their own landline — came up as "Accueil"
+    on a French install, in the list AND on the card; an organization called
+    "Library" as "Bibliothèque"; a role of "Work" as "Travail". The stored
+    record was never altered, so the name on screen was not the name the
+    search box could find, and the edit form showed a different word again.
+    Only the empty state is ours to translate."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+    else:
+        label.set_text(_t(fallback))
 
 
 def _labeled_values(value, fallback_label):
@@ -138,14 +211,40 @@ def normalize_person(p, i=0):
     return person
 
 
-def labeled_text(values):
-    """Editable one-item-per-line spelling: ``mobile: 555-0100``."""
+def labeled_text(values, field=None):
+    """Editable one-item-per-line spelling: ``mobile: 555-0100``.
+
+    EMAILS CARRY NO CATEGORY. A phone genuinely has kinds -- which number to
+    ring at nine in the evening is a real question -- but an email address is
+    an email address, and asking a person to file each one as Home or Work
+    added a decision with no consequence to every card in the book. Addresses
+    are written and read back plain. Nothing is lost: parse_labeled_text still
+    understands a "work: a@b" that was typed or imported, so an existing card
+    and a vCard from elsewhere both still come in whole."""
+    if field == "emails":
+        return "; ".join(v["value"] for v in values)
     return "; ".join("%s: %s" % (v["label"], v["value"]) for v in values)
 
 
-def parse_labeled_text(text, fallback):
+def parse_labeled_text(text, fallback, split_values=False):
+    """Read the editable spelling back.
+
+    A semicolon or a newline separates values, and so does a comma FOLLOWED BY
+    A SPACE — "555-0001, 555-0002" is the two numbers anybody writing that
+    meant. A comma with no space after it stays inside the value, because in a
+    dialling string that is what it is ("555-1234,,123" is one number with two
+    pauses in it), and splitting one of those would turn a number somebody
+    imported into two wrong ones.
+
+    `split_values` additionally splits one value on any space, for a field
+    whose values can hold none: an email address never does, so
+    "a@x.com b@x.com" is two addresses and not one impossible one. A value
+    with a colon in it is left whole — a colon is how a value is NAMED, and
+    guessing where the names go in "a@x.com work: b@x.com" would invent an
+    address called "work:" out of somebody's typing.
+    """
     out = []
-    for line in re.split(r"[;\n]+", text or ""):
+    for line in re.split(r"[;\n]+|,\s", text or ""):
         line = line.strip()
         if not line:
             continue
@@ -171,9 +270,37 @@ def parse_labeled_text(text, fallback):
         # own new suite caught it before this shipped.
         if sep and value.strip() and (label in VALUE_LABELS
                                       or label == fallback):
-            out.append({"label": label, "value": value.strip()})
+            values = [value.strip()]
         else:
-            out.append({"label": fallback, "value": line})
+            label, values = fallback, [line]
+        if split_values and ":" not in values[0]:
+            values = [v for v in re.split(r"\s+", values[0]) if v]
+        out.extend({"label": label, "value": v} for v in values)
+    return out
+
+
+def merge_labeled_values(original, edited):
+    """Keep newer per-address fields while the visible label/value are edited.
+
+    The form has one row per stored item and keeps their order, so an edited
+    row remains the same address record even when its visible value changes.
+    Newly added rows have no source metadata; deleted rows simply disappear.
+    """
+    source = original if isinstance(original, list) else []
+    same_shape = len(source) == len(edited)
+    unused = list(range(len(source)))
+    out = []
+    for i, value in enumerate(edited):
+        match = i if same_shape else next((j for j in unused
+            if isinstance(source[j], dict)
+            and source[j].get("label") == value.get("label")
+            and source[j].get("value") == value.get("value")), None)
+        row = (dict(source[match]) if match is not None
+               and isinstance(source[match], dict) else {})
+        if match in unused:
+            unused.remove(match)
+        row.update(value)
+        out.append(row)
     return out
 
 
@@ -192,17 +319,61 @@ def contact_matches(person, query):
                                for v in person.get("phones", [])))
 
 
+# Latin letters that carry their mark inside the glyph, which is why NFKD
+# cannot lift it off. An address book files each one under the letter it is
+# read as, so a name is where the reader's finger goes looking for it.
+_FOLD_LETTERS = {"Ø": "O", "ø": "o", "Æ": "AE", "æ": "ae",
+                 "Œ": "OE", "œ": "oe", "Đ": "D", "đ": "d",
+                 "Ð": "D", "ð": "d", "Ł": "L", "ł": "l",
+                 "Þ": "TH", "þ": "th", "ß": "ss", "İ": "I",
+                 "ı": "i"}
+
+
+def fold_name(text):
+    """`text` with its accents taken off, for FILING only — what is displayed
+    is always the name as it was typed. Sorting and grouping on the raw string
+    put every accented initial after Z under a divider of its own, so
+    "Émile Éluard" filed itself past "Zed Zane" instead of beside "Eve
+    Evans", and "Øyvind" was nowhere near the O's. A name in a script with no
+    Latin base (日本 太郎) comes back unchanged and keeps its own divider."""
+    out = []
+    for ch in unicodedata.normalize("NFKD", text or ""):
+        if unicodedata.combining(ch):
+            continue
+        out.append(_FOLD_LETTERS.get(ch, ch))
+    return "".join(out)
+
+
+def sort_letter(name):
+    """The divider a card files under: the base letter of its initial, or '#'
+    for a name that starts with a digit, a symbol or nothing at all."""
+    folded = fold_name((name or "").strip())
+    return folded[0].upper() if folded[:1].isalpha() else "#"
+
+
 def ordered_people(people, query=""):
     pairs = [(i, p) for i, p in enumerate(people) if contact_matches(p, query)]
-    pairs.sort(key=lambda ip: ((ip[1].get("name") or "").lower(),
-                               not ip[1].get("favorite")))
+    def filed(p):
+        return fold_name(p.get("name") or "").lower()
+    pairs.sort(key=lambda ip: (filed(ip[1]), not ip[1].get("favorite")))
     # Favorites come first inside each initial group, while letters remain A-Z.
-    pairs.sort(key=lambda ip: (((ip[1].get("name") or "#")[:1].upper()
-                                if (ip[1].get("name") or "")[:1].isalpha()
-                                else "#"),
+    pairs.sort(key=lambda ip: (sort_letter(ip[1].get("name")),
                                not ip[1].get("favorite"),
-                               (ip[1].get("name") or "").lower()))
+                               filed(ip[1])))
     return pairs
+
+
+def next_after_delete(people, index, query=""):
+    """The record that takes `index`'s PLACE IN THE LIST when it is deleted:
+    the row after it in the visible order, or the row before it when the last
+    row goes. None when the deleted card is not on screen (a filter is hiding
+    it) or nothing is left to select."""
+    order = [i for i, _p in ordered_people(people, query)]
+    if index not in order:
+        return None
+    pos = order.index(index)
+    after = order[pos + 1:] + order[:pos][::-1]
+    return people[after[0]] if after else None
 
 
 def _vc_escape(value):
@@ -257,8 +428,14 @@ def export_vcards(people):
         for v in p.get("emails", []):
             lines.append("EMAIL;TYPE=%s:%s" % (v["label"].upper(),
                                                 _vc_escape(v["value"])))
-        for prop, key in (("ORG", "organization"), ("ADR", "address"),
-                          ("NOTE", "notes"), ("BDAY", "bday")):
+        # TITLE carries the card's Role. Leaving it out meant Export All
+        # vCards — the only whole-book copy this app can write that reads
+        # back in — dropped what every person in the book DOES, silently:
+        # exporting and re-importing gave an address book with every role
+        # blank, and nothing said so.
+        for prop, key in (("TITLE", "role"), ("ORG", "organization"),
+                          ("ADR", "address"), ("NOTE", "notes"),
+                          ("BDAY", "bday")):
             if p.get(key):
                 value = p[key]
                 if prop == "ADR":
@@ -274,7 +451,11 @@ def parse_vcards(text):
     raw = str(text).replace("\r\n", "\n").replace("\r", "\n").split("\n")
     lines = []
     for line in raw:
-        if line[:1] in (" ", "\t") and lines:
+        if (lines and lines[-1].endswith("=")
+                and "ENCODING=QUOTED-PRINTABLE" in
+                lines[-1].split(":", 1)[0].upper()):
+            lines[-1] = lines[-1][:-1] + line.lstrip(" \t")
+        elif line[:1] in (" ", "\t") and lines:
             lines[-1] += line[1:]
         else:
             lines.append(line)
@@ -292,17 +473,41 @@ def parse_vcards(text):
         left, value = line.split(":", 1)
         bits = left.split(";"); prop = bits[0].upper()
         params = ";".join(bits[1:])
-        label_match = re.search(r"(?:^|;)TYPE=([^;,:]+)", params,
-                                re.IGNORECASE)
-        label = (label_match.group(1).split(",")[0].lower()
-                 if label_match else "home")
-        label = "mobile" if label == "cell" else label
-        if label not in VALUE_LABELS:
-            label = "home"
+        # What kind of number or address this is. vCard 3.0 spells it as a
+        # TYPE= parameter ("TEL;TYPE=CELL:"); vCard 2.1 — what older phones,
+        # Outlook and most phone-to-file exports write — spells it as a BARE
+        # parameter ("TEL;CELL:", "EMAIL;INTERNET;WORK:"). Only TYPE= was read,
+        # so every number in such a file imported as Home and an address book
+        # came across with no mobile numbers in it at all.
+        label = "home"
+        for part in re.split(r"[;,]", params):
+            got = part.strip().lower()
+            if got.startswith("type="):
+                got = got[5:].strip()
+            got = "mobile" if got == "cell" else got
+            if got in VALUE_LABELS:
+                label = got
+                break
+        if re.search(r"(?:^|;)ENCODING=QUOTED-PRINTABLE(?:;|$)", params,
+                     re.IGNORECASE):
+            charset_match = re.search(r"(?:^|;)CHARSET=([^;:]+)", params,
+                                      re.IGNORECASE)
+            charset = charset_match.group(1) if charset_match else "utf-8"
+            decoded = quopri.decodestring(value.encode("utf-8"))
+            try:
+                value = decoded.decode(charset, "replace")
+            except (LookupError, UnicodeError):
+                value = decoded.decode("utf-8", "replace")
         value = _vc_unescape(value)
-        if prop == "FN": current["name"] = value
+        if prop == "TITLE": current["role"] = value
+        # vCard also has ROLE (the function, where TITLE is the job title).
+        # Cards written elsewhere carry one or the other; take ROLE only
+        # when no TITLE has already named the same thing.
+        elif prop == "ROLE" and not current["role"]:
+            current["role"] = value
+        elif prop == "FN": current["name"] = value
         elif prop == "N" and not current["name"]:
-            n = _vc_split(line.split(":", 1)[1])
+            n = _vc_split(value)
             current["name"] = " ".join(x for x in (n[1], n[0]) if x)
         elif prop == "TEL": current["phones"].append({"label": label,
                                                         "value": value})
@@ -310,27 +515,65 @@ def parse_vcards(text):
                                                           "value": value})
         elif prop == "ORG": current["organization"] = value
         elif prop == "ADR":
-            current["address"] = "\n".join(x for x in _vc_split(
-                line.split(":", 1)[1]) if x)
+            current["address"] = "\n".join(x for x in _vc_split(value) if x)
         elif prop == "NOTE": current["notes"] = value
         elif prop == "BDAY": current["bday"] = value
     return cards
 
 
-def merge_contacts(existing, incoming):
-    """Merge exact-name imports, filling blanks and retaining list conflicts."""
+def read_vcard_text(path, limit=MAX_VCARD_BYTES):
+    """Read one selected vCard without letting it exhaust the GTK process."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("vCard is too large")
+    return raw.decode("utf-8-sig")
+
+
+def merge_contacts(existing, incoming, stats=None):
+    """Merge exact-name imports, filling blanks and retaining list conflicts.
+
+    `stats`, when a dict is passed, is filled with how many cards were "added"
+    and how many existing cards were "updated" by the merge. The import status
+    line used to count the cards in the FILE, so re-importing an export said
+    "Imported 11 contacts" while nothing at all had changed.
+    """
+    # Import runs on the GTK thread. Rescanning the whole address book for each
+    # vCard made a large but ordinary import quadratic (10,000 into 10,000 is
+    # 100 million name comparisons) and left the window apparently hung.
+    # setdefault preserves the old rule when the book already contains the
+    # same name twice: the first matching record receives the merge.
+    by_name = {}
+    added = updated = 0
+    for person in existing:
+        by_name.setdefault(person.get("name"), person)
     for got in incoming:
-        target = next((p for p in existing if p.get("name") == got.get("name")),
-                      None)
+        target = by_name.get(got.get("name"))
         if target is None:
-            existing.append(copy.deepcopy(got)); continue
+            target = copy.deepcopy(got)
+            existing.append(target)
+            by_name.setdefault(target.get("name"), target)
+            added += 1
+            continue
+        changed = False
         for key in FIELD_KEYS:
             if not target.get(key) and got.get(key):
                 target[key] = got[key]
+                changed = True
         for key in ("phones", "emails"):
             seen = {(v["label"], v["value"]) for v in target.get(key, [])}
-            target.setdefault(key, []).extend(copy.deepcopy(v)
-                for v in got.get(key, []) if (v["label"], v["value"]) not in seen)
+            values = target.setdefault(key, [])
+            for value in got.get(key, []):
+                identity = (value["label"], value["value"])
+                if identity in seen:
+                    continue
+                values.append(copy.deepcopy(value))
+                seen.add(identity)
+                changed = True
+        updated += 1 if changed else 0
+    if stats is not None:
+        stats["added"] = added
+        stats["updated"] = updated
     return existing
 
 
@@ -474,6 +717,7 @@ class Contacts(nbapp.AppWindow):
         self.search_text = ""
         self._entries = {}    # key -> Gtk.Entry, live only while editing
         self._notes_view = None       # multi-line Notes TextView, live while editing
+        self._addr_view = None        # multi-line Address TextView, ditto
         self._pending_new = False     # active card is a just-created, untouched one
         self._search_timer = 0        # pending search-debounce source (0 = none)
         self._status_timer = 0        # pending status-line clear source (0 = none)
@@ -496,6 +740,7 @@ class Contacts(nbapp.AppWindow):
         # Final flush on close so the last add/edit/delete is never lost — File
         # ▸ Close / the logo / Esc all route through "destroy".
         self._delete_pending = False
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
 
     # -------------------------------------------------------- persistence
@@ -506,9 +751,14 @@ class Contacts(nbapp.AppWindow):
         a malformed file all load as the "No contacts" state — no records are
         ever seeded."""
         try:
-            with open(CONTACTS_FILE) as fh:
-                data = json.load(fh)
+            data = _read_contacts_json()
         except FileNotFoundError:
+            return []
+        except ContactsStoreTooLarge:
+            # A valid oversized object evades the shared parse-damage guard;
+            # route it through this app's preservation gate before any empty
+            # fallback address book is allowed to replace it.
+            self._quarantine_pending = True
             return []
         except Exception:
             # Unreadable bytes. nbapp.atomic_write_json moves the original
@@ -566,6 +816,8 @@ class Contacts(nbapp.AppWindow):
         PARSE on every write; it deliberately cannot cover this case — valid
         JSON of the wrong shape parses perfectly, and only this app knows the
         shape is not an address book."""
+        if not os.path.exists(CONTACTS_FILE):
+            return True
         try:
             stamp = time.strftime("%Y%m%d-%H%M%S")
             dest = "%s.damaged-%s" % (CONTACTS_FILE, stamp)
@@ -575,20 +827,25 @@ class Contacts(nbapp.AppWindow):
                 n += 1
             os.replace(CONTACTS_FILE, dest)
         except OSError:
-            pass
+            return False
+        return True
 
     def _save(self):
         """Persist the full address book. Never raises, so a bad write cannot
         crash the app — but it does SAY when the write failed."""
         try:
             if getattr(self, "_quarantine_pending", False):
-                self._quarantine()
+                if not self._quarantine():
+                    raise OSError("could not preserve the unrecognized address book")
                 self._quarantine_pending = False
             payload = dict(getattr(self, "_extra", None) or {})
             payload["people"] = self.people
             nbapp.atomic_write_json(CONTACTS_FILE, payload)
             self._save_warned = False
+            self._last_store_error = None
+            return True
         except Exception as exc:
+            self._last_store_error = exc
             # See academics._save_to_disk. This used to be a bare `pass`, and a
             # full disk or a read-only filesystem then looked exactly like
             # "Contacts lost my address book": the file keeps whatever the last
@@ -601,6 +858,7 @@ class Contacts(nbapp.AppWindow):
                     self._flash(nbapp.save_failure_reason(exc, CONTACTS_FILE))
                 except Exception:
                     pass
+            return False
 
     def _on_destroy(self, *_):
         # Idempotent, and it runs first: "destroy" can reach this handler more
@@ -644,6 +902,15 @@ class Contacts(nbapp.AppWindow):
         except Exception:
             pass
         self._save()
+
+    def _on_delete(self, *_):
+        """Keep widget-only field edits alive when their final write fails --
+        and say why, with a way out (nbapp.close_unsaved_card). A bare veto
+        was a window that could not be closed on a full disk."""
+        if self.editing and not self._commit_edits():
+            return not nbapp.close_unsaved_card(
+                self, getattr(self, "_last_store_error", None), CONTACTS_FILE)
+        return False
 
     # ---------------------------------------------------------------- list
     def _build_list_pane(self):
@@ -768,13 +1035,19 @@ class Contacts(nbapp.AppWindow):
 
     @staticmethod
     def _sort_letter(p):
-        """The divider a card files under: its initial, or '#' for a name that
-        starts with a digit, a symbol or nothing at all."""
-        name = (p.get("name") or "").strip()
-        return name[0].upper() if name[:1].isalpha() else "#"
+        """The divider a card files under. The one the ORDER is built from
+        (sort_letter), so a name cannot be sorted under E and then given a
+        divider of its own two rows later."""
+        return sort_letter(p.get("name"))
 
     def _letter_head(self, letter):
-        lbl = Gtk.Label(label=letter, xalign=0)
+        # The divider is one letter of a name the user typed, and a single
+        # letter is a catalog key in every language: "B" is the Bold button,
+        # so an address book of 40+ contacts drew its B section as "G" in
+        # French, "Ж" in Russian and "דיק" in Yiddish. It is the user's
+        # alphabet, not ours.
+        lbl = Gtk.Label(xalign=0)
+        nbi18n.set_verbatim(lbl, letter)
         lbl.get_style_context().add_class("letterhead")
         return lbl
 
@@ -804,7 +1077,8 @@ class Contacts(nbapp.AppWindow):
         btn.get_style_context().add_class("bdayrow")
         btn.connect("clicked", lambda *_: self._select(idx))
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        name = Gtk.Label(label=person.get("name") or _t("Unnamed"), xalign=0)
+        name = Gtk.Label(xalign=0)
+        _set_person_text(name, person.get("name"), "Unnamed")
         name.set_ellipsize(Pango.EllipsizeMode.END)
         name.get_style_context().add_class("bdayname")
         col.pack_start(name, False, False, 0)
@@ -845,12 +1119,14 @@ class Contacts(nbapp.AppWindow):
         hb.pack_start(self._avatar(p, 34, 13), False, False, 0)
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         col.set_valign(Gtk.Align.CENTER)
-        name = Gtk.Label(label=p["name"] or "Unnamed", xalign=0)
+        name = Gtk.Label(xalign=0)
+        _set_person_text(name, p.get("name"), "Unnamed")
         name.set_ellipsize(Pango.EllipsizeMode.END)
         name.get_style_context().add_class("rowname")
         col.pack_start(name, False, False, 0)
         if p.get("role"):
-            role = Gtk.Label(label=p["role"], xalign=0)
+            role = Gtk.Label(xalign=0)
+            _set_person_text(role, p["role"])
             role.set_ellipsize(Pango.EllipsizeMode.END)
             role.get_style_context().add_class("rowrole")
             col.pack_start(role, False, False, 0)
@@ -863,7 +1139,8 @@ class Contacts(nbapp.AppWindow):
         return row
 
     def _avatar(self, p, size, fontsize):
-        lbl = Gtk.Label(label=self._initials(p["name"]))
+        lbl = Gtk.Label()
+        nbi18n.set_verbatim(lbl, self._initials(p["name"]))
         lbl.get_style_context().add_class("avatar")
         lbl.set_size_request(size, size)
         lbl.set_halign(Gtk.Align.CENTER); lbl.set_valign(Gtk.Align.CENTER)
@@ -924,6 +1201,7 @@ class Contacts(nbapp.AppWindow):
             self.detail_holder.remove(c)
         self._entries = {}    # rebuilt fresh; populated below when editing
         self._notes_view = None
+        self._addr_view = None
         self._card_col = None  # re-set below when a card (not the empty state)
 
         if not self.people:
@@ -968,13 +1246,15 @@ class Contacts(nbapp.AppWindow):
             rl.connect("activate", self._entry_activated)
             idcol.pack_start(rl, False, False, 0)
         else:
-            nm = Gtk.Label(label=a["name"] or "Unnamed", xalign=0)
+            nm = Gtk.Label(xalign=0)
+            _set_person_text(nm, a.get("name"), "Unnamed")
             nm.get_style_context().add_class("bigname")
             nm.set_line_wrap(True)                 # a long name wraps, never
             nm.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)  # overflows the pane
             idcol.pack_start(nm, False, False, 0)
             if a.get("role"):
-                rl = Gtk.Label(label=a["role"], xalign=0)
+                rl = Gtk.Label(xalign=0)
+                _set_person_text(rl, a["role"])
                 rl.get_style_context().add_class("bigrole")
                 rl.set_line_wrap(True)
                 rl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
@@ -984,18 +1264,24 @@ class Contacts(nbapp.AppWindow):
 
         btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btns.set_valign(Gtk.Align.START)
-        edit = Gtk.Button(label=_t("Done") if self.editing else "Edit")
+        edit = Gtk.Button(label=_t("Done") if self.editing else _t("Edit"))
         edit.set_relief(Gtk.ReliefStyle.NONE)
         edit.get_style_context().add_class("editbtn")
         if self.editing:
             edit.get_style_context().add_class("editon")
         edit.connect("clicked", self._toggle_edit)
         btns.pack_start(edit, False, False, 0)
-        fav = Gtk.Button(label="★" if a.get("favorite") else "☆")
+        fav = Gtk.ToggleButton(label="★" if a.get("favorite") else "☆")
         fav.set_relief(Gtk.ReliefStyle.NONE)
-        fav.set_tooltip_text(_t("Remove from favorites") if a.get("favorite")
-                             else _t("Add to favorites"))
-        fav.connect("clicked", self._toggle_favorite)
+        fav.set_active(bool(a.get("favorite")))
+        fav_action = (_t("Remove from favorites") if a.get("favorite")
+                      else _t("Add to favorites"))
+        fav.set_tooltip_text(fav_action)
+        fav.get_accessible().set_name(fav_action)
+        # Kept so the handler can be blocked around a programmatic set_active
+        # (see _sync_favorite_button).
+        self._favorite_handler = fav.connect("clicked", self._toggle_favorite)
+        self._favorite_button = fav
         btns.pack_start(fav, False, False, 0)
         head.pack_start(btns, False, False, 0)
         col.pack_start(head, False, False, 0)
@@ -1022,34 +1308,13 @@ class Contacts(nbapp.AppWindow):
             # A real multi-line area: the read view and the PDF already lay
             # notes out over several lines, so the editor has to let a novice
             # actually type them (a single-line Entry silently flattened newlines).
-            notes = Gtk.TextView()
-            notes.set_wrap_mode(Gtk.WrapMode.WORD)
-            notes.set_accepts_tab(False)   # Tab leaves the field, never indents
-            notes.get_style_context().add_class("notesedit")
-            notes.get_buffer().set_text(a.get("notes", "") or "")
-            self._notes_view = notes
-            # A bare TextView asks for its whole text as its MINIMUM width and
-            # never shrinks, so a wordy note made the card wider than the pane
-            # and carried the Done button off the right edge, with no scrollbar
-            # to reach it. Inside a ScrolledWindow the field can shrink to the
-            # card measure and wrap, exactly like the read view.
-            nscroll = Gtk.ScrolledWindow()
-            # NEVER would re-propagate that whole minimum; AUTOMATIC lets the
-            # view shrink and wrap to the card measure instead.
-            nscroll.set_policy(Gtk.PolicyType.AUTOMATIC,
-                               Gtk.PolicyType.AUTOMATIC)
-            nscroll.set_size_request(-1, 84)
-            nscroll.add(notes)
-            # GTK draws no border for a TextView's own CSS, so the notes area
-            # was an invisible field: the heading, then blank paper. Frame it in
-            # a box that carries the same outline the entries above have.
-            nframe = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            nframe.get_style_context().add_class("notesframe")
-            nframe.pack_start(nscroll, True, True, 0)
+            nframe, self._notes_view = self._text_area(
+                a.get("notes", "") or "", 84, "notesedit")
             nb.pack_start(nframe, False, False, 0)
         else:
             has_notes = bool((a.get("notes", "") or "").strip())
-            notes = Gtk.Label(label=a.get("notes", "") or "—", xalign=0)
+            notes = Gtk.Label(xalign=0)
+            _set_person_text(notes, a.get("notes", ""), "—")
             notes.set_line_wrap(True)
             notes.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
             notes.set_max_width_chars(48)
@@ -1068,6 +1333,33 @@ class Contacts(nbapp.AppWindow):
         self.detail_holder.pack_start(col, False, False, 0)
         self.detail_holder.show_all()
 
+    def _text_area(self, text, height, css_class):
+        """A framed multi-line editor — the shape Notes has always had, now
+        shared with Address. Returns (frame, view).
+
+        A bare TextView asks for its whole text as its MINIMUM width and never
+        shrinks, so a wordy note made the card wider than the pane and carried
+        the Done button off the right edge, with no scrollbar to reach it.
+        Inside a ScrolledWindow the field shrinks to the card measure and
+        wraps, exactly like the read view — NEVER would re-propagate that whole
+        minimum, so the policy is AUTOMATIC. And GTK draws no border for a
+        TextView's own CSS, so an unframed area is an invisible field: a
+        heading, then blank paper. The frame carries the outline the entries
+        have."""
+        view = Gtk.TextView()
+        view.set_wrap_mode(Gtk.WrapMode.WORD)
+        view.set_accepts_tab(False)    # Tab leaves the field, never indents
+        view.get_style_context().add_class(css_class)
+        view.get_buffer().set_text(text)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_size_request(-1, height)
+        scroll.add(view)
+        frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        frame.get_style_context().add_class("notesframe")
+        frame.pack_start(scroll, True, True, 0)
+        return frame, view
+
     def _field_row(self, a, label, key):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         row.get_style_context().add_class("fieldrow")
@@ -1076,11 +1368,22 @@ class Contacts(nbapp.AppWindow):
         lbl.set_size_request(200, -1)
         lbl.set_valign(Gtk.Align.START)
         row.pack_start(lbl, False, False, 0)
-        if self.editing:
+        if self.editing and key == "address":
+            # An address is several lines, and this app already knows it: the
+            # read view wraps one, the PDF prints one, and an imported ADR is
+            # joined with newlines. In a single-line Entry those breaks showed
+            # as "↵" glyphs, anything typed at the end glued itself onto the
+            # last line, and there was no way to start a new one at all. The
+            # same framed area Notes uses, where Enter breaks the line and Tab
+            # leaves the field.
+            frame, self._addr_view = self._text_area(a.get(key, "") or "",
+                                                     84, "fieldarea")
+            row.pack_start(frame, True, True, 0)
+        elif self.editing:
             ent = Gtk.Entry()
-            ent.set_text(labeled_text(a.get(key, [])) if key in
+            ent.set_text(labeled_text(a.get(key, []), key) if key in
                          ("phones", "emails") else (a.get(key, "") or ""))
-            ent.set_placeholder_text(label)
+            ent.set_placeholder_text(VALUE_EXAMPLES.get(key, label))
             ent.get_style_context().add_class("fieldentry")
             self._entries[key] = ent
             ent.connect("activate", self._entry_activated)
@@ -1096,15 +1399,29 @@ class Contacts(nbapp.AppWindow):
                 for item in values:
                     line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
                                    spacing=8)
-                    val = Gtk.Label(label="%s  %s" %
-                                    (_t(item["label"].capitalize()),
-                                     item["value"]), xalign=0)
+                    val = Gtk.Label(xalign=0)
+                    nbi18n.set_verbatim(
+                        val, item["value"] if key == "emails" else
+                        "%s  %s" % (value_label_name(key, item["label"]),
+                                    item["value"]))
                     val.set_selectable(True)
                     val.set_line_wrap(True)
+                    # ...and break INSIDE the word when the word is the whole
+                    # value. One long address has nowhere to break, so its
+                    # minimum width became the card's: the card grew past the
+                    # pane and carried Edit, the star and Copy off the right of
+                    # a 1024-wide screen, where nothing could scroll to them
+                    # (the pane deliberately has no horizontal scrollbar). The
+                    # other fields have broken this way all along.
+                    val.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
                     val.get_style_context().add_class("fieldval")
                     line.pack_start(val, True, True, 0)
                     copy_btn = Gtk.Button(label=_t("Copy"))
                     copy_btn.set_relief(Gtk.ReliefStyle.NONE)
+                    # Beside the first line of the value, not stretched down
+                    # the side of it: a long address now wraps to three lines,
+                    # and a button that fills them reads as a panel.
+                    copy_btn.set_valign(Gtk.Align.START)
                     copy_btn.set_tooltip_text(_t("Copy phone") if key ==
                                               "phones" else _t("Copy email"))
                     copy_btn.connect("clicked", self._copy_value, key,
@@ -1113,7 +1430,8 @@ class Contacts(nbapp.AppWindow):
                     col.pack_start(line, False, False, 0)
                 row.pack_start(col, True, True, 0)
                 return row
-            val = Gtk.Label(label=a.get(key, "") or "—", xalign=0)
+            val = Gtk.Label(xalign=0)
+            _set_person_text(val, a.get(key, ""), "—")
             val.get_style_context().add_class("fieldval")
             val.set_line_wrap(True)                 # long email / address wraps
             val.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)  # instead of clipping
@@ -1253,7 +1571,8 @@ class Contacts(nbapp.AppWindow):
 
     def _toggle_edit(self, *_):
         if self.editing:            # leaving edit mode: persist the entries
-            self._commit_edits()
+            if not self._commit_edits():
+                return
             self.editing = False
             self._finish_new_card()  # a New Contact tapped Done blank is dropped
         else:
@@ -1277,20 +1596,34 @@ class Contacts(nbapp.AppWindow):
 
     def _commit_edits(self):
         if not (0 <= self.active < len(self.people)):
-            return
+            return False
         a = self.people[self.active]
+        before = copy.deepcopy(a)
         for key, ent in self._entries.items():
             if key in ("phones", "emails"):
-                a[key] = parse_labeled_text(ent.get_text(),
-                    "mobile" if key == "phones" else "home")
+                values = parse_labeled_text(
+                    ent.get_text(), "mobile" if key == "phones" else "home",
+                    split_values=(key == "emails"))
+                a[key] = merge_labeled_values(a.get(key), values)
             else:
                 a[key] = ent.get_text()
-        nv = self._notes_view
-        if nv is not None:
-            buf = nv.get_buffer()
-            a["notes"] = buf.get_text(
-                buf.get_start_iter(), buf.get_end_iter(), False)
-        self._save()   # every edit (Done / switch-away / new / activate) sticks
+        # The two multi-line fields hold their text in a TextBuffer, not in
+        # self._entries: read them the same way.
+        for key, view in (("address", getattr(self, "_addr_view", None)),
+                          ("notes", self._notes_view)):
+            if view is None:
+                continue
+            buf = view.get_buffer()
+            a[key] = buf.get_text(buf.get_start_iter(), buf.get_end_iter(),
+                                  False)
+        if not self._save():
+            # Preserve object identity: selection and any open action retain a
+            # reference to this dictionary. Done stays in edit mode so the
+            # visible field values remain available for a retry.
+            a.clear()
+            a.update(before)
+            return False
+        return True
 
     def _is_blank(self, p):
         """True when a card carries no user content at all (every text field
@@ -1308,12 +1641,25 @@ class Contacts(nbapp.AppWindow):
         if (self._pending_new and 0 <= self.active < len(self.people)
                 and self._is_blank(self.people[self.active])):
             dropped = self.active
-            del self.people[self.active]
+            person = self.people.pop(self.active)
             if self.active >= len(self.people):
                 self.active = max(0, len(self.people) - 1)
-            self._save()
+            if not self._save():
+                self.people.insert(dropped, person)
+                self.active = dropped
+                # Keep ownership of this placeholder so a later Done/New can
+                # retry its removal. Clearing the flag here let a failed blank
+                # become an ordinary immortal "Unnamed" contact.
+                return None
         self._pending_new = False
         return dropped
+
+    def _edit_widget(self, key):
+        """The widget one edit field is typed into: an Entry for most of them,
+        the framed multi-line area for Address."""
+        if key == "address":
+            return getattr(self, "_addr_view", None)
+        return self._entries.get(key)
 
     def _entry_activated(self, entry, *_):
         """Enter advances to the next field (Tab-like) so a card fills in
@@ -1323,12 +1669,12 @@ class Contacts(nbapp.AppWindow):
         entry finishes emitting 'activate' before the pane is rebuilt under it."""
         if not self.editing:
             return
-        order = [k for k in EDIT_ORDER if k in self._entries]
+        order = [k for k in EDIT_ORDER if self._edit_widget(k) is not None]
         cur = next((k for k in order if self._entries.get(k) is entry), None)
         if cur is not None:
             i = order.index(cur)
             if i + 1 < len(order):
-                nxt = self._entries.get(order[i + 1])
+                nxt = self._edit_widget(order[i + 1])
                 if nxt is not None:
                     nxt.grab_focus()
                     try:
@@ -1352,11 +1698,20 @@ class Contacts(nbapp.AppWindow):
         # a new contact never silently discards the uncommitted edit. Commit
         # while self.active/self._entries still point at the card being left.
         if self.editing:
-            self._commit_edits()
+            if not self._commit_edits():
+                # The field widgets still contain the attempted edit. Keep
+                # this pane intact so the person can retry after fixing the
+                # storage problem instead of replacing their only copy with a
+                # blank New Contact form.
+                return
         # Replace an untouched New Contact rather than stacking a second blank
         # one, so a novice tapping "+" twice never ends up with duplicate empty
         # cards to clean up afterwards.
         self._finish_new_card()
+        if self._pending_new:
+            # The untouched placeholder could not be removed durably. Do not
+            # stack another blank card on top of it.
+            return
         # Start blank with a "Name" placeholder — no fabricated "New Contact"
         # string is ever written to disk (per the no-seed / no-placeholder rule);
         # an unnamed card reads as "Unnamed" until the user types.
@@ -1401,14 +1756,42 @@ class Contacts(nbapp.AppWindow):
     def _do_delete(self):
         if not (0 <= self.active < len(self.people)):
             return
+        # The form writes through only when editing is committed.  Capture its
+        # visible values before taking the undo snapshot, otherwise deleting
+        # mid-edit followed by Ctrl+Z silently restores the stale pre-edit card.
+        if self.editing and not self._commit_edits():
+            # The form deliberately retains its typed values after a failed
+            # save so Done can be retried.  Deleting now would rebuild the
+            # detail pane and destroy that only copy of the edit.
+            return
         index = self.active
+        # Where the highlight goes next. self.active is an index into the
+        # STORE and the list beside it is sorted by name, so keeping it landed
+        # the highlight wherever the store happened to shift: deleting the
+        # fifth row of six selected the second — a card the reader was not
+        # looking at, with its whole record on the pane beside it. Which row
+        # takes this one's place is a question about what is on screen, so it
+        # is asked of the visible order, and of nothing else about the window.
+        successor = next_after_delete(self.people, index,
+                                      getattr(self, "search_text", ""))
+        old_deleted = self._deleted
         person = self.people.pop(index)
         self._deleted = (index, copy.deepcopy(person))
-        if self.active >= len(self.people):
+        moved = next((i for i, p in enumerate(self.people) if p is successor),
+                     None) if successor is not None else None
+        if moved is not None:
+            self.active = moved
+        elif self.active >= len(self.people):
             self.active = max(0, len(self.people) - 1)
         self.editing = False
         self._pending_new = False
-        self._save()   # the deletion sticks (and an emptied book stays empty)
+        if not self._save():
+            self.people.insert(index, person)
+            self.active = index
+            self._deleted = old_deleted
+            self._rebuild_list()
+            self._rebuild_detail()
+            return
         self._rebuild_list()
         self._rebuild_detail()
         self._flash(_t("Contact deleted") + "  ·  " + _t("Ctrl+Z to undo"))
@@ -1418,25 +1801,83 @@ class Contacts(nbapp.AppWindow):
         if deleted is None:
             self._flash(_t("There is nothing to undo"))
             return
+        # Undo rebuilds both panes around the restored card. An edit open on
+        # ANOTHER card is the newest thing the person typed, so commit it here
+        # first — the same write Done performs — and drop back to the read
+        # view, exactly as selecting another contact does. Without this, Ctrl+Z
+        # threw the typed values away AND opened the restored card in a form
+        # nobody asked for.
+        if self.editing:
+            if not self._commit_edits():
+                # The form still holds the only copy of those values.
+                return
+            self.editing = False
         index, person = deleted
+        dropped = self._finish_new_card()
+        if dropped is not None and dropped < index:
+            index -= 1
         self._deleted = None
         self.people.insert(min(index, len(self.people)), copy.deepcopy(person))
         self.active = min(index, len(self.people) - 1)
-        self._save()
+        if not self._save():
+            self.people.pop(self.active)
+            self._deleted = deleted
+            self.active = min(index, len(self.people) - 1) if self.people else 0
+            self._rebuild_list()
+            self._rebuild_detail()
+            return
         self._rebuild_list()
         self._rebuild_detail()
         self._flash(_t("Contact restored"))
 
-    def _toggle_favorite(self, *_):
+    def _toggle_favorite(self, button=None, *_):
         if not (0 <= self.active < len(self.people)):
             return
+        restore_focus = bool(button is not None and button.has_focus())
         person = self.people[self.active]
+        # The star rebuilds the card, and a rebuilt form is re-filled from the
+        # record — so anything typed into the OPEN form and not yet committed
+        # was destroyed by a single click on a button that has nothing to do
+        # with it. Commit first, exactly as switching card / New / Delete do.
+        if self.editing and not self._commit_edits():
+            # The form deliberately keeps its typed values for a retry after a
+            # failed save; rebuilding now would throw away that only copy. Put
+            # the star back where the record says it is instead — GTK has
+            # already flipped the button, and nothing else here will.
+            self._sync_favorite_button(button, person)
+            return
         person["favorite"] = not person.get("favorite", False)
-        self._save()
+        if not self._save():
+            person["favorite"] = not person["favorite"]
+            self._rebuild_list()
+            self._rebuild_detail()
+            replacement = getattr(self, "_favorite_button", None)
+            if restore_focus and replacement is not None:
+                replacement.grab_focus()
+            return
         self._rebuild_list()
         self._rebuild_detail()
+        replacement = getattr(self, "_favorite_button", None)
+        if restore_focus and replacement is not None:
+            replacement.grab_focus()
         self._flash(_t("Added to favorites") if person["favorite"]
                     else _t("Removed from favorites"))
+
+    def _sync_favorite_button(self, button, person):
+        """Put the star back in step with the record without rebuilding the
+        pane. The handler is blocked around set_active: a ToggleButton emits
+        "clicked" for a programmatic change too, so re-entering this handler
+        would flip the record straight back (the set_active re-entrancy that
+        has bitten four apps in this OS)."""
+        handler = getattr(self, "_favorite_handler", 0)
+        if button is None or not handler:
+            return
+        try:
+            button.handler_block(handler)
+            button.set_active(bool(person.get("favorite")))
+            button.handler_unblock(handler)
+        except Exception:                                      # noqa: BLE001
+            pass
 
     def _copy_value(self, _button, kind, value):
         Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(value, -1)
@@ -1449,20 +1890,75 @@ class Contacts(nbapp.AppWindow):
                                   patterns=("*.vcf", "*.vcard"))
         if not path:
             return
+        # An import rebuilds both panes, and a rebuilt form is re-filled from
+        # the record — so anything typed into an OPEN form and not yet
+        # committed was destroyed, and the form was then re-pointed at
+        # whatever card sat at index 0, still in edit mode, over somebody
+        # else's card. Commit first and drop back to the read view, exactly as
+        # switching card / New / Delete / the star already do. The picker is
+        # opened before this, so cancelling it leaves the form untouched.
+        if self.editing:
+            if not self._commit_edits():
+                return    # the form holds the only copy of those values
+            self.editing = False
+        # ...and an untouched New Contact open here became a permanent blank
+        # "Unnamed" row: self.active moved off it, so nothing ever came back
+        # to drop it.
+        self._finish_new_card()
         try:
-            with open(path, encoding="utf-8-sig") as fh:
-                incoming = parse_vcards(fh.read())
+            incoming = parse_vcards(read_vcard_text(path))
             if not incoming:
                 self._flash(_t("No contacts found")); return
-            merge_contacts(self.people, incoming)
-            self.active = 0
-            self._save()
+            keep = (self.people[self.active]
+                    if 0 <= self.active < len(self.people) else None)
+            before = copy.deepcopy(self.people)
+            before_active = self.active
+            stats = {}
+            merge_contacts(self.people, incoming, stats)
+            # Stay on the card the reader was looking at. merge_contacts fills
+            # existing records in place, so that record is still the same
+            # object; index 0 was only whichever card happened to be first.
+            self.active = next((i for i, p in enumerate(self.people)
+                                if p is keep), 0)
+            if not self._save():
+                self.people = before
+                self.active = min(before_active, len(self.people) - 1) \
+                    if self.people else 0
+                self._rebuild_list(); self._rebuild_detail()
+                return
             self._rebuild_list(); self._rebuild_detail()
-            self._flash(_t("Imported %d contacts") % len(incoming))
+            # What happened, not how many cards the file held: importing an
+            # export of this same book said "Imported 11 contacts" while it
+            # had added nothing, which is the one thing the reader wanted to
+            # know.
+            added, updated = stats["added"], stats["updated"]
+            said = []
+            if added:
+                said.append(_t("Added 1 contact") if added == 1
+                            else _t("Added %d contacts") % added)
+            if updated:
+                said.append(_t("Updated 1 contact") if updated == 1
+                            else _t("Updated %d contacts") % updated)
+            self._flash("  ·  ".join(said) if said
+                        else _t("Every contact in that file is already here"))
         except Exception:
             self._flash(_t("Import failed"))
 
     def _export_vcard(self, whole_book=True):
+        # The file has to hold the card that is on screen. Export to PDF and
+        # Print both commit an open form first; this one did not, so a vCard
+        # written mid-edit carried the values from BEFORE the edit — a person
+        # exporting a card they had just corrected got the copy they were
+        # correcting, and nothing on screen said so.
+        if self.editing and not self._commit_edits():
+            # The commit failed, so the card on screen is not on disk and an
+            # export now would write the stale copy. _commit_edits already
+            # says why the SAVE failed; this says what it cost — the person
+            # asked to export, and silence would read as an export that
+            # happened. The form keeps its typed values for the retry.
+            self._flash(_t("Export failed") + "  ·  "
+                        + _t("The card could not be saved first"))
+            return
         if not self.people:
             return
         default = "contacts.vcf" if whole_book else \
@@ -1567,18 +2063,26 @@ class Contacts(nbapp.AppWindow):
                 cr.stroke()
             pt.y += 18
 
-        people = sorted(self.people, key=lambda p: p.get("name", "").lower())
-        # Cover header, then each contact alphabetically.
-        emit("CONTACTS", 9.5, False, "#6E695E", gap_after=6)
-        emit("%d %s" % (len(people),
-                        "contact" if len(people) == 1 else "contacts"),
+        # Filed the way the list files it (fold_name), so the printed book
+        # is in the order the screen is: sorting the raw string put "Émile"
+        # past "Zed" on the page and beside "Eve" on screen.
+        people = sorted(self.people,
+                        key=lambda p: fold_name(p.get("name", "")).lower())
+        # Cover header, then each contact alphabetically. Every word on this
+        # page is the app's, not the reader's, and every one of them was
+        # printed in English whatever language the app was running in: a
+        # Japanese address book exported a document headed CONTACTS with
+        # ORGANIZATION and BIRTHDAY down the side of it.
+        emit(_t("Contacts").upper(), 9.5, False, "#6E695E", gap_after=6)
+        emit(_t("1 contact") if len(people) == 1
+             else _t("%d contacts") % len(people),
              26, True, "#1A1916", serif=True, gap_after=3)
         rule()
         for idx, p in enumerate(people):
             if idx:
                 pt.y += 8
                 rule()
-            emit(p.get("name", "") or "Unnamed", 20, True, "#1A1916",
+            emit(p.get("name", "") or _t("Unnamed"), 20, True, "#1A1916",
                  serif=True, gap_before=6, gap_after=2)
             role = p.get("role", "")
             if role:
@@ -1588,16 +2092,18 @@ class Contacts(nbapp.AppWindow):
             for label, key in FIELDS:
                 val = p.get(key, "")
                 if val:
-                    emit("%s   %s" % (label.upper(), val), 10.5, False,
+                    emit("%s   %s" % (_t(label).upper(), val), 10.5, False,
                          "#2A2620", gap_after=2)
-            for label, key in (("PHONE", "phones"), ("EMAIL", "emails")):
+            for key in ("phones", "emails"):
                 for item in p.get(key, []):
-                    emit("%s %s   %s" % (label, item["label"].upper(),
-                                          item["value"]), 10.5, False,
-                         "#2A2620", gap_after=2)
+                    emit(item["value"] if key == "emails" else
+                         "%s   %s" % (value_label_name(
+                             key, item["label"]).upper(), item["value"]),
+                         10.5, False, "#2A2620", gap_after=2)
             notes = p.get("notes", "")
             if notes:
-                emit("NOTES", 9, False, "#9A9484", gap_before=6, gap_after=2)
+                emit(_t("Notes").upper(), 9, False, "#9A9484",
+                     gap_before=6, gap_after=2)
                 for raw in notes.split("\n"):
                     emit(raw, 11, False, "#2A2620", serif=True)
 
@@ -1696,7 +2202,18 @@ class Contacts(nbapp.AppWindow):
             # contacts to export".
             has = bool(self.people)
             return [
-                ("New Contact…", lambda: self._new_contact()),
+                # NO ELLIPSIS. Rule 1 reads "a dialog, a picker or a confirm
+                # BEFORE ANYTHING HAPPENS", and nothing is asked here at any
+                # point: _new_contact appends the person, sets self.active,
+                # enters edit mode and calls self._save() -- the record is on
+                # disk before a single field has been typed. What follows is
+                # the ordinary detail pane with the caret in the name box, the
+                # same pane that is there for every other contact. This is
+                # also what MENU-CONVENTIONS §2B prints for a single-store
+                # app: "New <Thing>" plain, "Delete <Thing>…" with the mark.
+                # Journal, Cookbook, Academics and Tasks all word it that way;
+                # only this app promised a form that never comes.
+                ("New Contact", lambda: self._new_contact()),
                 nbapp.SEP,
                 (_vc_menu("Import vCard…"), self._import_vcard),
                 (_vc_menu("Export Contact vCard…"),
@@ -1717,7 +2234,8 @@ class Contacts(nbapp.AppWindow):
         if name == "Card":
             has = bool(self.people)
             return [
-                ("New Contact…", lambda: self._new_contact()),
+                # Same item, same promise: see the File menu's note above.
+                ("New Contact", lambda: self._new_contact()),
                 ("Done Editing" if self.editing else "Edit Card",
                  (lambda: self._toggle_edit()) if has else None),
                 nbapp.SEP,
@@ -1777,7 +2295,12 @@ class Contacts(nbapp.AppWindow):
         .statusline { padding: 12px 16px; font-size: 12px; color: %(muted2)s;
                       border-top: 1px solid #C9C4B6; }
         .detailwrap { background: %(paper)s; }
-        .detailwrap > * { background: %(paper)s; }
+        /* The card pane's paper is painted on the ScrolledWindow, NOT on the
+           GtkViewport inside it. With a background of its own the viewport
+           left a band the height of the menu bar unpainted along the bottom
+           of the pane: the last row of a long card was cut through the middle
+           of its glyphs and anything below it was invisible until you
+           scrolled, while the list pane beside it drew to the very edge. */
         .bigname { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 40px; font-weight: 500; color: %(ink)s;
                    letter-spacing: -0.01em; }
@@ -1820,6 +2343,10 @@ class Contacts(nbapp.AppWindow):
         .notesedit { font-family: "Newsreader","Liberation Serif",serif;
                      font-size: 17px; color: #2A2620; background: %(paper)s; }
         .notesedit text { background: %(paper)s; color: #2A2620; }
+        /* Address reads back as one of the fields above it, so its editor is
+           set in the same face and size the field entries are. */
+        .fieldarea { font-size: 17px; color: %(ink)s; background: %(paper)s; }
+        .fieldarea text { background: %(paper)s; color: %(ink)s; }
         /* confirm dialog for destructive actions — papertone card, darker-beige
            border; signage-red ONLY on the destructive primary button */
         .cdlg { background: %(paper)s; border: 1px solid #C9C4B6; }

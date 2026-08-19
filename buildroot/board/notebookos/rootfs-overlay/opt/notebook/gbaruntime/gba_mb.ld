@@ -14,9 +14,16 @@ ENTRY(_start)
 
 MEMORY {
 	rom   : ORIGIN = 0x08000000, LENGTH = 32M
-	iwram : ORIGIN = 0x03000000, LENGTH = 32K
+	/* Match gba.ld exactly: allocations stop below the descending system and
+	 * IRQ stacks rather than merely below the initial stack pointers. */
+	iwram : ORIGIN = 0x03000000, LENGTH = 0x7B00
 	ewram : ORIGIN = 0x02000000, LENGTH = 256K
 }
+
+__sp_sys = 0x03007F00;
+__sp_irq = 0x03007FA0;
+ASSERT(__bss_end <= ORIGIN(iwram) + LENGTH(iwram),
+       "IWRAM data overlaps the reserved stacks")
 
 SECTIONS {
 	.gbaheader : { KEEP(*(.gbaheader)) } > ewram

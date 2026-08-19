@@ -26,8 +26,9 @@ this way).
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
+gi.require_version("Atk", "1.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo, Atk  # noqa: E402
 try:
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf                        # noqa: E402
@@ -65,7 +66,9 @@ import os
 import re
 import sys
 import json
+import codecs
 import math
+import copy
 import posixpath
 import time
 import zipfile
@@ -83,12 +86,41 @@ import nbstate
 import nbpicker
 import nbicons
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 DOCUMENTS_DIR = os.path.join(HOME, "Documents")
 CONFIG_DIR = os.path.join(HOME, ".config", "notebook")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "ebook.json")
+
+# EPUB members are external input. A tiny archive can advertise a chapter or
+# image that expands to gigabytes; ZipFile.read would allocate it all before
+# the parser/decoder had a chance to reject it.
+EPUB_XML_MAX = 2 * 1024 * 1024
+EPUB_CHAPTER_MAX = 8 * 1024 * 1024
+EPUB_TEXT_TOTAL_MAX = 64 * 1024 * 1024
+EPUB_IMAGE_MAX = 32 * 1024 * 1024
+EPUB_MEMBER_MAX = 10000
+
+
+def _epub_read_limited(zf, name, limit):
+    """Read one archive member only when its expanded size is bounded."""
+    info = zf.getinfo(name)
+    if info.file_size < 0 or info.file_size > limit:
+        raise ValueError("EPUB member is too large")
+    data = zf.read(info)
+    if len(data) > limit:  # defensive against inconsistent archive metadata
+        raise ValueError("EPUB member expanded past its limit")
+    return data
+
+
+def _epub_names_bounded(zf, limit=EPUB_MEMBER_MAX):
+    """Return archive names only when the central directory is reasonable."""
+    infos = zf.infolist()
+    if len(infos) > limit:
+        raise ValueError("EPUB contains too many files")
+    return {info.filename for info in infos}
 
 
 def _holds_books(data):
@@ -149,14 +181,22 @@ def set_reading_text(label, markup):
     reader must still SEE the paragraph — losing the italics is a blemish,
     losing the sentence is a bug — so the tags are stripped and the text set
     directly rather than allowed to raise."""
+    # The words belong to the BOOK, never to the interface. nbi18n looks up
+    # every label it is shown, and a book is full of short blocks that collide:
+    # a chapter called "Contents", a table cell reading "Name" or "Date", a
+    # one-word paragraph. Translating those edits the contents of a file the
+    # system does not own. set_verbatim stamps the widget so both the setter
+    # and the show_all walk leave it alone; the markup is applied after the
+    # stamp so the tags still render.
     try:
         Pango.parse_markup(markup, -1, "\0")
+        nbi18n.set_verbatim(label, markup)
         label.set_markup(markup)
     except Exception:
-        label.set_text(_MARKUP_TEXT_RE.sub("", markup)
-                       .replace("&amp;", "&").replace("&lt;", "<")
-                       .replace("&gt;", ">").replace("&quot;", '"')
-                       .replace("&apos;", "'"))
+        nbi18n.set_verbatim(label, _MARKUP_TEXT_RE.sub("", markup)
+                            .replace("&amp;", "&").replace("&lt;", "<")
+                            .replace("&gt;", ">").replace("&quot;", '"')
+                            .replace("&apos;", "'"))
 
 
 class _EpubBlocks(HTMLParser):
@@ -389,7 +429,26 @@ class _EpubBlocks(HTMLParser):
 def _epub_extract(data):
     """Decode one XHTML document (bytes) and return its (kind, text) blocks."""
     text = None
-    for enc in ("utf-8", "latin-1"):
+    declared = None
+    try:
+        head = data[:256].decode("ascii", "ignore")
+        match = re.search(r"encoding\s*=\s*['\"]([A-Za-z0-9._-]+)", head,
+                          re.IGNORECASE)
+        if match:
+            candidate = match.group(1).lower()
+            if candidate in {"utf-8", "utf-16", "utf-16le", "utf-16be",
+                             "iso-8859-1", "windows-1252"}:
+                declared = candidate
+    except Exception:
+        pass
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        encodings = ["utf-16"]
+    elif data.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        encodings = ["utf-32"]
+    else:
+        encodings = [declared] if declared else []
+        encodings += ["utf-8", "latin-1"]
+    for enc in encodings:
         try:
             text = data.decode(enc)
             break
@@ -419,12 +478,13 @@ def _epub_load(path):
         return None, "This file could not be read as an EPUB archive."
     chapters = []
     try:
-        names = set(zf.namelist())
+        names = _epub_names_bounded(zf)
 
         # META-INF/container.xml points at the .opf package document.
         opf_path = None
         try:
-            root = ET.fromstring(zf.read("META-INF/container.xml"))
+            root = ET.fromstring(_epub_read_limited(
+                zf, "META-INF/container.xml", EPUB_XML_MAX))
             for el in root.iter():
                 if _epub_localname(el.tag) == "rootfile" and el.get("full-path"):
                     opf_path = el.get("full-path")
@@ -438,19 +498,37 @@ def _epub_load(path):
             return None, "This EPUB is missing its package document."
 
         try:
-            opf = ET.fromstring(zf.read(opf_path))
+            opf = ET.fromstring(_epub_read_limited(
+                zf, opf_path, EPUB_XML_MAX))
         except Exception:
             return None, "This EPUB's package document could not be parsed."
 
         # manifest id -> href, then the spine's reading order of those ids.
         manifest = {}
+        nav_ids = set()
         for el in opf.iter():
             if _epub_localname(el.tag) == "item":
                 iid, href = el.get("id"), el.get("href")
                 if iid and href:
                     manifest[iid] = href
-        spine = [el.get("idref") for el in opf.iter()
+                    if "nav" in (el.get("properties") or "").split():
+                        nav_ids.add(iid)
+        # A spine itemref marked linear="no" is auxiliary content — a table of
+        # contents, a notes page — that EPUB puts OUTSIDE the default reading
+        # order, and so is the manifest's properties="nav" document. Counting
+        # either as a chapter opened the book on a dead list of links titled
+        # "CHAPTER 1" and numbered every real chapter one too high, so the
+        # eyebrow over "Chapter One" read "CHAPTER 2".
+        every = [el.get("idref") for el in opf.iter()
                  if _epub_localname(el.tag) == "itemref" and el.get("idref")]
+        spine = [el.get("idref") for el in opf.iter()
+                 if _epub_localname(el.tag) == "itemref" and el.get("idref")
+                 and (el.get("linear") or "").strip().lower() != "no"
+                 and el.get("idref") not in nav_ids]
+        if not spine:
+            # A book that marks its WHOLE spine auxiliary still has to be
+            # readable: better an off-by-one eyebrow than an empty reader.
+            spine = every
         opf_dir = posixpath.dirname(opf_path)
 
         def _resolve(href):
@@ -469,12 +547,15 @@ def _epub_load(path):
                         (".xhtml", ".html", ".htm")):
                     order.append(_resolve(href))
 
+        text_left = EPUB_TEXT_TOTAL_MAX
         for full in order:
             data = None
             for cand in (full, unquote(full)):
                 if cand in names:
                     try:
-                        data = zf.read(cand)
+                        limit = min(EPUB_CHAPTER_MAX, text_left)
+                        data = _epub_read_limited(zf, cand, limit)
+                        text_left -= len(data)
                     except Exception:
                         data = None
                     break
@@ -530,10 +611,11 @@ def _epub_meta(path):
         return None, None
     title = author = None
     try:
-        names = set(zf.namelist())
+        names = _epub_names_bounded(zf)
         opf_path = None
         try:
-            root = ET.fromstring(zf.read("META-INF/container.xml"))
+            root = ET.fromstring(_epub_read_limited(
+                zf, "META-INF/container.xml", EPUB_XML_MAX))
             for el in root.iter():
                 if _epub_localname(el.tag) == "rootfile" and el.get("full-path"):
                     opf_path = el.get("full-path")
@@ -544,7 +626,8 @@ def _epub_meta(path):
             opf_path = next(
                 (n for n in names if n.lower().endswith(".opf")), None)
         if opf_path and opf_path in names:
-            opf = ET.fromstring(zf.read(opf_path))
+            opf = ET.fromstring(_epub_read_limited(
+                zf, opf_path, EPUB_XML_MAX))
             for el in opf.iter():
                 ln = _epub_localname(el.tag)
                 txt = (el.text or "").strip()
@@ -617,6 +700,7 @@ class EbookReader(nbapp.AppWindow):
         # into a document of _page_total pages. All initialised before any UI is
         # built so the nav/size handlers are always safe to call.
         self._mode = "message"
+        self._closed = False
         self._page = 0
         self._page_total = 0
         # Bumped every time the reading surface is swapped (_set_reader_widget)
@@ -626,6 +710,10 @@ class EbookReader(nbapp.AppWindow):
         # window invalidates whatever is still queued (see _on_destroy).
         self._nav = nbstate.Generation("reader")
         self._epub_chapters = []
+        # (path, chapters) handed on by _open_book, which parses an EPUB before
+        # it will shelve it (see there); consumed once by _open_epub so opening
+        # a book never parses the same archive twice.
+        self._epub_parsed = None
         # (chapter index, first block, last block + 1) for each reading page
         self._epub_pages = []
         self._epub_col = None
@@ -652,6 +740,7 @@ class EbookReader(nbapp.AppWindow):
         # (or None). Both are restored from disk so the shelf is never fabricated.
         self._books = []
         self._open_path = None
+        self._store_extra = {}
         # Set by _load_state when the store on disk exists but could not be
         # read. The session then persists NOTHING: the reader's records stay
         # exactly where they are, at the path they would look for.
@@ -739,6 +828,17 @@ class EbookReader(nbapp.AppWindow):
             # wrong. Nothing to read, and nothing may overwrite it either.
             self._store_damaged = True
             return
+        self._store_extra = {k: copy.deepcopy(v) for k, v in data.items()
+                             if k not in ("books", "open", "read_pt")}
+        # The reading size is a preference the reader set on purpose with
+        # A-/A+, so it comes back with the shelf (Interaction Constitution
+        # section 3, Restoration). Junk or an out-of-range value falls back to
+        # the default rather than opening a book at 3pt.
+        try:
+            self._read_pt = max(self.READ_PT_MIN,
+                                min(self.READ_PT_MAX, int(data["read_pt"])))
+        except (KeyError, TypeError, ValueError):
+            pass
         books = self._as_books(data.get("books"))
         if not books:
             # The wrapper key is gone or was written under another name. The
@@ -762,7 +862,18 @@ class EbookReader(nbapp.AppWindow):
                     frac = float(b.get("frac") or 0.0)
                 except (TypeError, ValueError):
                     frac = 0.0
-                self._books.append({
+                # Python's JSON decoder accepts NaN/Infinity even though they
+                # are not valid JSON numbers.  A NaN survives the ordinary
+                # min/max clamp below, then the resume path's reversed clamp
+                # turns it into 1.0 and drops the reader at the bottom of the
+                # page.  Treat every non-finite position as no saved scroll.
+                if not math.isfinite(frac):
+                    frac = 0.0
+                known = {"path", "title", "fmt", "pos", "frac", "total",
+                         "author"}
+                rec = {k: copy.deepcopy(v) for k, v in b.items()
+                       if k not in known}
+                rec.update({
                     "path": str(b["path"]),
                     "title": str(b["title"]),
                     "fmt": str(b["fmt"]),
@@ -772,6 +883,7 @@ class EbookReader(nbapp.AppWindow):
                     if str(b.get("total") or 0).lstrip("-").isdigit() else 0,
                     "author": str(b.get("author") or ""),
                 })
+                self._books.append(rec)
         op = data.get("open")
         if isinstance(op, str) and any(b["path"] == op for b in self._books):
             self._open_path = op
@@ -804,25 +916,54 @@ class EbookReader(nbapp.AppWindow):
 
     def _save_state(self):
         """Persist the shelf and open book under $NB_HOME (best effort)."""
-        # NOT gated on the damaged flag, deliberately. Refusing to save for
-        # the session is the cure Journal and Contacts both shipped and both
-        # had caught: it keeps the bytes and leaves an app that silently never
-        # saves again, "which is its own lie" (journal.py). The split across
-        # this OS is principled — Comics, Animation, Composer and Novel go
-        # read-only because their store is only a RECOVERY cache and the real
-        # work is in separate documents, while Calendar, Contacts and Journal
-        # keep saving because the store IS the data. A reader's shelf and its
-        # reading positions are the data, so this belongs with the latter:
-        # nbapp.atomic_write_json moves the unreadable file aside before it
-        # replaces anything, so the old bytes survive AND the reader can
-        # rebuild a shelf that persists. What was actually missing was never
-        # the refusal — it was telling them, which _show_damaged_store does.
+        protecting = False
         try:
-            nbapp.atomic_write_json(
-                CONFIG_PATH, {"books": self._books, "open": self._open_path},
-                ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+            # Generic atomic writing preserves syntax-damaged JSON, but cannot
+            # recognize valid JSON in a foreign shelf shape. Preserve either
+            # kind explicitly before replacing it; a failed protective move
+            # keeps the reader in retryable read-only mode.
+            if getattr(self, "_store_damaged", False):
+                protecting = True
+                if not self._quarantine_store():
+                    raise OSError("could not preserve unrecognized reader shelf")
+                self._store_damaged = False
+                protecting = False
+            payload = copy.deepcopy(getattr(self, "_store_extra", {}))
+            payload.update({"books": self._books, "open": self._open_path,
+                            "read_pt": getattr(self, "_read_pt",
+                                               self.READ_PT_DEFAULT)})
+            nbapp.atomic_write_json(CONFIG_PATH, payload,
+                                    ensure_ascii=False, indent=2)
+            return True
+        except Exception as exc:
+            # A failed shelf write otherwise looks exactly like success until
+            # the next launch restores the old library and reading position.
+            # Use the shared notification path: this reader has no persistent
+            # status strip of its own where the warning could remain visible.
+            if protecting:
+                # Stay read-only and retain the retry flag. Do not enqueue a
+                # notification here: its own store write would violate this
+                # branch's promise that no replacement write is attempted.
+                self._save_error = nbapp.save_failure_reason(exc, CONFIG_PATH)
+            else:
+                nbapp.note_save_failure(self, exc, CONFIG_PATH)
+            return False
+
+    @staticmethod
+    def _quarantine_store():
+        if not os.path.exists(CONFIG_PATH):
+            return True
+        try:
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            dest = "%s.damaged-%s" % (CONFIG_PATH, stamp)
+            n = 2
+            while os.path.exists(dest):
+                dest = "%s.damaged-%s-%d" % (CONFIG_PATH, stamp, n)
+                n += 1
+            os.replace(CONFIG_PATH, dest)
+            return True
+        except OSError:
+            return False
 
     def _short_path(self, path):
         """Render a path under $NB_HOME as ~/… so rows stay compact."""
@@ -847,6 +988,7 @@ class EbookReader(nbapp.AppWindow):
         left.set_valign(Gtk.Align.CENTER)
         lib_btn = self._tool_icon("library", "Library")
         lib_btn.connect("clicked", self._on_library_open)
+        self._library_trigger = lib_btn
         left.pack_start(lib_btn, False, False, 0)
         bar.pack_start(left, False, False, 0)
 
@@ -990,8 +1132,10 @@ class EbookReader(nbapp.AppWindow):
 
         # The empty state told the reader to open a book but gave her nothing to
         # press for it — the only way in was an unlabelled icon in the corner.
-        # This is that button; notices (unreadable file, unsupported format)
-        # hide it, so the card never offers an action that doesn't apply.
+        # This is that button. The notices (unsupported format, a file that has
+        # gone, an archive that will not parse) carry it too: each of them ends
+        # by telling the reader to choose a file, and an instruction with no
+        # control under it is the empty state's own bug again.
         self._card_action = Gtk.Button(label=_t("Open Book…"))
         self._card_action.set_relief(Gtk.ReliefStyle.NONE)
         self._card_action.get_style_context().add_class("readaction")
@@ -1031,14 +1175,20 @@ class EbookReader(nbapp.AppWindow):
             else:
                 self._show_empty()
             return
-        self._title_lbl.set_text(book["title"])
+        # A book's title is the filename the reader chose, or the EPUB's own
+        # metadata — "Notes.pdf" became "Notas" on a Spanish install while
+        # ebook.json went on naming Notes.pdf.
+        nbi18n.set_verbatim(self._title_lbl, book["title"])
         # Show the author when we have it (EPUB metadata), else the format.
-        self._subtitle_lbl.set_text(book.get("author") or book["fmt"])
+        if book.get("author"):
+            nbi18n.set_verbatim(self._subtitle_lbl, book["author"])
+        else:
+            self._subtitle_lbl.set_text(book["fmt"])
         # The file may have gone (a USB stick removed since it was added) — say
         # so plainly rather than letting the engine report a bogus parse error.
         if not os.path.isfile(book["path"]):
-            self._show_message(
-                book["fmt"], book["title"], self._short_path(book["path"]),
+            self._unreadable_message(
+                book["path"], book["title"], book["fmt"],
                 _t("This file is no longer at that location."))
             return
         if book["fmt"] == "PDF":
@@ -1046,8 +1196,8 @@ class EbookReader(nbapp.AppWindow):
         elif book["fmt"] == "EPUB":
             self._open_epub(book)
         else:
-            self._show_message(
-                book["fmt"], book["title"], self._short_path(book["path"]),
+            self._unreadable_message(
+                book["path"], book["title"], book["fmt"],
                 _t("This document format is not supported."))
 
     def _show_damaged_store(self):
@@ -1100,7 +1250,8 @@ class EbookReader(nbapp.AppWindow):
         self._page = 0
         self._page_total = 0
         self._card_eyebrow.set_text(eyebrow)
-        self._card_heading.set_text(heading)
+        # The heading is the book's title on every unreadable-file path.
+        nbi18n.set_verbatim(self._card_heading, heading)
         self._card_detail.set_text(detail)
         self._card_note.set_text(note)
         self._card_action.set_visible(action)
@@ -1160,8 +1311,15 @@ class EbookReader(nbapp.AppWindow):
         Closing it invalidates every scroll restore still sitting on the main
         loop: those sources are dispatched even after the window is gone, and
         each of them would otherwise reach into a torn-down reading view."""
+        # GTK teardown can be requested through nested close paths. Capture
+        # exactly once: a second pass sees an already-destroyed scroller,
+        # computes fraction 0, and would overwrite the real place saved here.
+        if self._closed:
+            return False
+        self._closed = True
         self._remember_pos(force=True)
         self._nav.close()
+        return False
 
     def _current_scroll(self):
         """The scroller of whichever reading view is showing, or None."""
@@ -1211,18 +1369,28 @@ class EbookReader(nbapp.AppWindow):
         reading = self._mode in ("epub", "pdf")
         self._prev_btn.set_sensitive(has_pages and n > 0)
         self._next_btn.set_sensitive(has_pages and n < total - 1)
-        self._smaller_btn.set_sensitive(reading)
-        self._larger_btn.set_sensitive(reading)
+        # At either end of the size range the stepper stays live and does
+        # nothing, which is the one thing a control must never do: gate it on
+        # the clamp too.
+        pt = getattr(self, "_read_pt", self.READ_PT_DEFAULT)
+        self._smaller_btn.set_sensitive(reading and pt > self.READ_PT_MIN)
+        self._larger_btn.set_sensitive(reading and pt < self.READ_PT_MAX)
         # Both modes now turn pages: an EPUB chapter is cut into reading pages
         # (see EPUB_PAGE_BLOCKS), so "chapter" would no longer be true.
-        self._prev_btn.set_tooltip_text(
+        prev_message = (
             _t("Previous page") if has_pages and n > 0 else
             (_t("This is the first page.") if has_pages else
              _t("No document is open.")))
-        self._next_btn.set_tooltip_text(
+        next_message = (
             _t("Next page") if has_pages and n < total - 1 else
             (_t("This is the last page.") if has_pages else
              _t("No document is open.")))
+        for btn, message in ((self._prev_btn, prev_message),
+                             (self._next_btn, next_message)):
+            btn.set_tooltip_text(message)
+            acc = btn.get_accessible()
+            if acc is not None:
+                acc.set_name(message)
         if has_pages:
             self._page_lbl.set_text(_t("Page %d / %d") % (n + 1, total))
         else:
@@ -1270,10 +1438,14 @@ class EbookReader(nbapp.AppWindow):
     def _open_epub(self, book):
         """Parse the EPUB and show the page it was left on (pure Python, always
         available). Parse failures fall back to a neutral notice."""
-        chapters, err = _epub_load(book["path"])
+        cached = getattr(self, "_epub_parsed", None)
+        self._epub_parsed = None
+        if cached is not None and cached[0] == book["path"]:
+            chapters, err = cached[1], None
+        else:
+            chapters, err = _epub_load(book["path"])
         if chapters is None:
-            self._show_message("EPUB", book["title"],
-                               self._short_path(book["path"]), err)
+            self._unreadable_message(book["path"], book["title"], "EPUB", err)
             return
         self._epub_chapters = chapters
         self._epub_pages = self._paginate(chapters)
@@ -1393,11 +1565,22 @@ class EbookReader(nbapp.AppWindow):
             y += row_h
         return geometry
 
-    def _epub_table(self, rows, cap):
+    def _epub_table(self, rows):
         table = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         table.get_style_context().add_class("readtable")
+        # The table is as wide as its columns and no wider. Left alone it was
+        # allocated the whole reading column, so every row's bottom rule ran on
+        # past the last cell as an empty phantom column.
+        table.set_halign(Gtk.Align.START)
         sizing_rows = rows[0]["table"] if rows else []
-        widths = self._epub_table_widths(sizing_rows, min(560, cap * 9),
+        # The measure is the reading COLUMN's width (620px less its rules),
+        # exactly as it is for the paragraphs, and it does not change with the
+        # type size — the column does not either. It used to be derived from
+        # the paragraph character cap (min(560, cap * 9)), which is a cap on a
+        # LABEL's natural width and shrinks as the type grows: at A+ maximum
+        # that squeezed the columns to 342px inside a 620px page while the
+        # prose beside them still filled it.
+        widths = self._epub_table_widths(sizing_rows, 560,
                                          font_pt=self._read_pt)
         for descriptor in rows:
             row_data = descriptor["cells"]
@@ -1413,6 +1596,16 @@ class EbookReader(nbapp.AppWindow):
                 lbl.get_style_context().add_class("readbody")
                 lbl.get_style_context().add_class("readtablecell")
                 width = sum(widths) if full else widths[min(ci, len(widths)-1)]
+                # A size request only raises a widget's MINIMUM width, and a
+                # wrapping label's NATURAL width is its text unwrapped — so the
+                # row box handed a long cell the whole sentence on one line,
+                # which pushed the columns out of line with every other row and
+                # dragged the table (and the reading column with it) past the
+                # measure to the screen edge. Capping max-width-chars collapses
+                # the natural width onto the minimum, so the cell asks for
+                # exactly the column width _epub_table_widths computed and the
+                # text wraps inside it.
+                lbl.set_max_width_chars(1)
                 lbl.set_size_request(max(1, int(width)), -1)
                 row.pack_start(lbl, full, full, 0)
             table.pack_start(row, False, False, 0)
@@ -1501,7 +1694,7 @@ class EbookReader(nbapp.AppWindow):
             return None
         try:
             with zipfile.ZipFile(path) as zf:
-                data = zf.read(entry)
+                data = _epub_read_limited(zf, entry, EPUB_IMAGE_MAX)
         except Exception:                                      # noqa: BLE001
             return None
         try:
@@ -1569,7 +1762,7 @@ class EbookReader(nbapp.AppWindow):
         table_rows = []
         def flush_table():
             if table_rows:
-                col.pack_start(self._epub_table(list(table_rows), cap),
+                col.pack_start(self._epub_table(list(table_rows)),
                                False, False, 0)
                 del table_rows[:]
         for kind, text in blocks:
@@ -1638,8 +1831,8 @@ class EbookReader(nbapp.AppWindow):
         unavailable (guarded import) or the file cannot be opened, fall back to a
         neutral notice — the app never crashes."""
         if not POPPLER_OK:
-            self._show_message(
-                "PDF", book["title"], self._short_path(book["path"]),
+            self._unreadable_message(
+                book["path"], book["title"], "PDF",
                 _t("The PDF engine is unavailable in this build."))
             return
         try:
@@ -1650,13 +1843,13 @@ class EbookReader(nbapp.AppWindow):
             doc = Poppler.Document.new_from_file(uri, None)
             npages = doc.get_n_pages()
         except Exception:
-            self._show_message(
-                "PDF", book["title"], self._short_path(book["path"]),
+            self._unreadable_message(
+                book["path"], book["title"], "PDF",
                 _t("This PDF could not be opened for rendering."))
             return
         if npages <= 0:
-            self._show_message(
-                "PDF", book["title"], self._short_path(book["path"]),
+            self._unreadable_message(
+                book["path"], book["title"], "PDF",
                 _t("This PDF has no pages to render."))
             return
         self._pdf_doc = doc
@@ -1714,9 +1907,8 @@ class EbookReader(nbapp.AppWindow):
                     if self._open_path else None)
             if book is not None:
                 gone = not os.path.isfile(book["path"])
-                self._show_message(
-                    book["fmt"], book["title"],
-                    self._short_path(book["path"]),
+                self._unreadable_message(
+                    book["path"], book["title"], book["fmt"],
                     _t("This file is no longer at that location.") if gone
                     else _t("This PDF could not be opened for rendering."))
                 return
@@ -1860,17 +2052,29 @@ class EbookReader(nbapp.AppWindow):
                ".readcap { font-size: %dpx; }" % (self._read_pt, cap))
         self._read_css.load_from_data(css.encode("utf-8"))
 
-    def _on_text_larger(self, *_):
-        """Step the reading size up one point, clamped at READ_PT_MAX."""
-        self._read_pt = min(self.READ_PT_MAX, self._read_pt + 1)
+    def _set_read_size(self, points):
+        """Set the reading size to `points` (clamped) and remember it.
+
+        The size is a preference the reader set deliberately, so it is written
+        with the shelf and restored on the next launch; it used to live only in
+        this process, so every relaunch put the type back to 17pt and someone
+        who needs large text had to set it again every single time."""
+        points = max(self.READ_PT_MIN, min(self.READ_PT_MAX, int(points)))
+        if points == self._read_pt:
+            return
+        self._read_pt = points
         self._apply_read_size()
         self._resize_reader()
+        self._update_nav()
+        self._save_state()
+
+    def _on_text_larger(self, *_):
+        """Step the reading size up one point, clamped at READ_PT_MAX."""
+        self._set_read_size(self._read_pt + 1)
 
     def _on_text_smaller(self, *_):
         """Step the reading size down one point, clamped at READ_PT_MIN."""
-        self._read_pt = max(self.READ_PT_MIN, self._read_pt - 1)
-        self._apply_read_size()
-        self._resize_reader()
+        self._set_read_size(self._read_pt - 1)
 
     def _resize_reader(self):
         """Re-fit the open document to the new reading size: zoom the PDF
@@ -1891,6 +2095,8 @@ class EbookReader(nbapp.AppWindow):
             return False
         # Bank the place in the book being left before the new one replaces it.
         self._remember_pos(force=True)
+        before_books = copy.deepcopy(self._books)
+        before_open = self._open_path
         existing = self._book_by_path(path)
         # Prefer a title/author already derived for this volume; only recompute
         # from the file (EPUB metadata) when the file is actually present, so a
@@ -1902,6 +2108,20 @@ class EbookReader(nbapp.AppWindow):
                 title = existing["title"]
             author = existing.get("author", "")
         if fmt == "EPUB" and os.path.isfile(path):
+            # Read the book BEFORE shelving it. A file that will not parse used
+            # to be added to the library AND made the open book, so the notice
+            # came back as the whole reader on every launch and the shelf
+            # listed a volume that can never be opened, with nothing on its row
+            # saying why. Nothing is shelved unless the reader can be given the
+            # book. The parse is kept for _open_epub, a few lines below, so a
+            # long book is still read exactly once.
+            chapters, err = _epub_load(path)
+            if chapters is None:
+                self._title_lbl.set_text(_t("No document"))
+                self._subtitle_lbl.set_text("")
+                self._unreadable_message(path, title, fmt, err)
+                return True
+            self._epub_parsed = (path, chapters)
             mt, ma = _epub_meta(path)
             if mt:
                 title = mt
@@ -1909,7 +2129,16 @@ class EbookReader(nbapp.AppWindow):
                 author = ma
         self._add_book(path, title, fmt, author)
         self._open_path = path
-        self._save_state()
+        if not self._save_state():
+            # Do not present a library/open-book change that the next launch
+            # will silently undo. The save helper has already posted the
+            # actionable storage failure; restore the last durable shelf and
+            # reading surface in place.
+            self._books = before_books
+            self._open_path = before_open
+            self._show_current()
+            self._populate_shelf()
+            return True
         self._show_current()
         self._populate_shelf()
         return True
@@ -1923,7 +2152,19 @@ class EbookReader(nbapp.AppWindow):
             _t("READER"), _t("Unsupported format"),
             _t("%s can't be opened. Supported formats: EPUB, PDF.")
             % os.path.basename(path),
-            _t("Choose an EPUB or PDF file."))
+            _t("Choose an EPUB or PDF file."), action=True)
+
+    def _unreadable_message(self, path, title, fmt, reason):
+        """Neutral notice for a volume that cannot be put on the reading
+        surface — the file has gone, the format is not one this build renders,
+        the archive will not parse.
+
+        WHAT WENT WRONG is the card's own line and the file sits under it in
+        the caption. These notices used to be the other way round, so the
+        largest text on the card was a file path the reader already knew and
+        the reason was the smallest grey line beneath it."""
+        self._show_message(fmt, title, reason, self._short_path(path),
+                           action=True)
 
     def _add_book(self, path, title, fmt, author=""):
         """Insert a book at the front of the shelf, de-duplicating by path so
@@ -1966,6 +2207,11 @@ class EbookReader(nbapp.AppWindow):
         sheet.set_halign(Gtk.Align.CENTER)
         sheet.set_valign(Gtk.Align.CENTER)
         sheet.set_size_request(520, -1)
+        try:
+            sheet.get_accessible().set_role(Atk.Role.DIALOG)
+            sheet.get_accessible().set_name(_t("Library"))
+        except Exception:
+            pass
         inner = Gtk.EventBox()  # swallow clicks so the sheet doesn't close
         # Input-only: no GdkWindow of its own to paint, so the sheet's opaque
         # paper shows through it (a visible-window EventBox with no background
@@ -2026,11 +2272,13 @@ class EbookReader(nbapp.AppWindow):
         add_btn.get_style_context().add_class("sheetbtn2")
         add_btn.set_tooltip_text(_t("Add an EPUB or PDF file to the library"))
         add_btn.connect("clicked", lambda *_: self._on_library_add())
+        self._library_add_btn = add_btn
         foot.pack_start(add_btn, False, False, 0)
         done = Gtk.Button(label=_t("Done"))
         done.set_relief(Gtk.ReliefStyle.NONE)
         done.get_style_context().add_class("sheetbtn")
         done.connect("clicked", lambda *_: self._close_library())
+        self._library_done_btn = done
         foot.pack_start(done, False, False, 0)
         box.pack_start(foot, False, False, 0)
 
@@ -2054,7 +2302,8 @@ class EbookReader(nbapp.AppWindow):
         target that opens the volume, with a trailing Remove control (its own
         button, so a remove click never also opens the book)."""
         entry = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        bt = Gtk.Label(label=book["title"], xalign=0)
+        bt = Gtk.Label(xalign=0)
+        nbi18n.set_verbatim(bt, book["title"])
         bt.get_style_context().add_class("sheetbookttl")
         bt.set_ellipsize(3)  # PANGO_ELLIPSIZE_END — a long title never overflows
         bt.set_max_width_chars(40)
@@ -2156,10 +2405,26 @@ class EbookReader(nbapp.AppWindow):
         # Rebuild the shelf before showing so newly opened books and the current
         # open-book highlight are reflected each time the sheet is shown.
         self._populate_shelf()
+        self._library_restore_focus = self.get_focus()
         self._library_sheet.show()
-        child = self._library_sheet.get_child()
-        if child is not None:
-            child.show_all()
+        # The scrim carries set_no_show_all(True) — it must never be revealed
+        # by an ancestor show_all() — and gtk_widget_show_all() RETURNS
+        # IMMEDIATELY on such a widget. So show_all() on the scrim showed
+        # nothing at all: the Library icon and Library ▸ Open Library… reported
+        # a revealed revealer over an unmapped 1x1 scrim, and the sheet never
+        # appeared. show() ignores the flag: show the scrim itself, then
+        # show_all the sheet inside it.
+        scrim = self._library_sheet
+        if getattr(self, "_library_sheet_revealer", False):
+            scrim = self._library_sheet.get_child()
+            if scrim is not None:
+                scrim.show()
+        sheet = scrim.get_child() if scrim is not None else None
+        if sheet is not None:
+            sheet.show_all()
+        focusables = self._library_focusables()
+        if focusables:
+            focusables[0].grab_focus()
         if not getattr(self, "_library_sheet_revealer", False):
             return
         try:
@@ -2187,6 +2452,13 @@ class EbookReader(nbapp.AppWindow):
         return True
 
     def _close_library(self):
+        restore = getattr(self, "_library_restore_focus", None)
+        self._library_restore_focus = None
+        if restore is not None:
+            try:
+                restore.grab_focus()
+            except Exception:
+                pass
         def hidden(_completed=True):
             self._library_sheet.hide()
         if not getattr(self, "_library_sheet_revealer", False):
@@ -2206,6 +2478,24 @@ class EbookReader(nbapp.AppWindow):
             hidden(False)
         return True
 
+    def _library_focusables(self):
+        """Visible controls belonging to the modal Library sheet, in order."""
+        out = []
+
+        def walk(widget):
+            if isinstance(widget, Gtk.Button):
+                try:
+                    if widget.get_visible() and widget.get_sensitive():
+                        out.append(widget)
+                except Exception:
+                    pass
+            if isinstance(widget, Gtk.Container):
+                for child in widget.get_children():
+                    walk(child)
+
+        walk(self._library_sheet)
+        return out
+
     # ---------------------------------------------- remove from library
     def _on_book_remove(self, _btn, book):
         self._open_confirm_remove(book)
@@ -2215,6 +2505,7 @@ class EbookReader(nbapp.AppWindow):
         action, so it is never one stray click. The file itself is left alone;
         only the library entry is removed."""
         self._close_confirm()
+        self._confirm_restore_focus = self.get_focus()
         # Size + centre against the LIVE window allocation, never a hardcoded
         # 1920x1080: on a smaller real panel a 1920-wide scrim overflows the
         # surface and the card lands off-centre/off-screen. nbapp.screen_size()
@@ -2264,6 +2555,10 @@ class EbookReader(nbapp.AppWindow):
 
         holder = Gtk.EventBox()   # own GdkWindow so the card blits over the sheet
         holder.add(card)
+        dialog_acc = holder.get_accessible()
+        dialog_acc.set_role(Atk.Role.DIALOG)
+        dialog_acc.set_name(_t("Remove from library"))
+        dialog_acc.notify_state_change(Atk.StateType.MODAL, True)
         layer.put(holder, 0, 0)
         self._overlay.add_overlay(layer)
         layer.show_all()
@@ -2283,15 +2578,37 @@ class EbookReader(nbapp.AppWindow):
         except Exception:
             pass
         self._confirm_layer = layer
+        self._confirm_accessible = dialog_acc
+        self._confirm_cancel = cancel
+        self._confirm_remove = remove
+        # Destructive confirmations always begin on the safe action. Deferring
+        # until after show_all lets GTK map the button before it receives focus.
+        GLib.idle_add(lambda: (cancel.grab_focus(), False)[1]
+                      if self._confirm_layer is layer else False)
 
     def _close_confirm(self):
         layer = self._confirm_layer
         if layer is not None:
             try:
+                self._confirm_accessible.notify_state_change(
+                    Atk.StateType.MODAL, False)
+            except Exception:
+                pass
+            try:
                 self._overlay.remove(layer)
             except Exception:
                 pass
             self._confirm_layer = None
+            self._confirm_accessible = None
+            self._confirm_cancel = None
+            self._confirm_remove = None
+            prior = getattr(self, "_confirm_restore_focus", None)
+            self._confirm_restore_focus = None
+            if prior is not None:
+                try:
+                    prior.grab_focus()
+                except Exception:
+                    pass
             return True
         return False
 
@@ -2301,11 +2618,21 @@ class EbookReader(nbapp.AppWindow):
         disk is untouched."""
         self._close_confirm()
         path = book["path"]
+        previous_books = self._books
+        previous_open = self._open_path
         self._books = [b for b in self._books if b["path"] != path]
         if self._open_path == path:
             self._open_path = None
+        if not self._save_state():
+            # Do not show a shelf removal that the next launch will undo, and
+            # do not blank a document whose durable library record still says
+            # it is open.
+            self._books = previous_books
+            self._open_path = previous_open
+            self._populate_shelf()
+            return
+        if previous_open == path:
             self._show_empty()
-        self._save_state()
         self._populate_shelf()
 
     # --------------------------------------------------------- keyboard
@@ -2316,6 +2643,30 @@ class EbookReader(nbapp.AppWindow):
         app. Left/Right turn the page (PDF) or chapter (EPUB) while reading, when
         nothing is layered over the document."""
         kv = ev.keyval
+        if self._confirm_layer is not None and kv in (
+                Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab):
+            cancel = getattr(self, "_confirm_cancel", None)
+            remove = getattr(self, "_confirm_remove", None)
+            if cancel is not None and remove is not None:
+                backwards = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
+                current = self.get_focus()
+                target = (cancel if backwards and current is remove else
+                          remove if not backwards and current is cancel else
+                          remove if backwards else cancel)
+                target.grab_focus()
+                return True
+        if (self._confirm_layer is None and self._library_sheet.get_visible()
+                and kv in (Gdk.KEY_Tab, Gdk.KEY_ISO_Left_Tab)):
+            controls = self._library_focusables()
+            if controls:
+                current = self.get_focus()
+                try:
+                    i = controls.index(current)
+                except ValueError:
+                    i = 0
+                step = -1 if ev.state & Gdk.ModifierType.SHIFT_MASK else 1
+                controls[(i + step) % len(controls)].grab_focus()
+                return True
         if kv == Gdk.KEY_Escape:
             if self._close_confirm():
                 return True
@@ -2383,7 +2734,14 @@ class EbookReader(nbapp.AppWindow):
                    background: transparent; border: none; box-shadow: none;
                    border-radius: 8px; color: #1A1916; }
         .toolbtn:hover { background: #F1EEE6; }
-        .toolbtn:disabled { background: transparent; }
+        /* A control that cannot be used says so by its INK WEIGHT (Papertone's
+           unavailable family): same shape, same place in the row, printed
+           faintly. The nav glyphs are drawn pixbufs, so no CSS colour can
+           reach them and only opacity dims the icon and its button together:
+           without it the page arrows on the first/last page, and the size
+           steppers with no document at all, were the same solid ink as a live
+           control. */
+        .toolbtn:disabled { background: transparent; opacity: 0.45; }
         .sizebtn { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                    font-weight: 600; color: #1A1916; padding: 0 8px;
                    min-width: 26px; min-height: 32px; }
@@ -2398,7 +2756,7 @@ class EbookReader(nbapp.AppWindow):
         .readscroll, .readscroll viewport { background: #F1EEE6; }
         .readpage { background: #F1EEE6; }
         .readeyebrow { font-family: "Nimbus Sans","Helvetica",sans-serif;
-                       font-size: 11px; letter-spacing: 0.22em; color: #9A9484;
+                       font-size: 11px; letter-spacing: 0.22em; color: #6E695E;
                        font-weight: 600; }
         .readh1 { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                   font-size: 30px; color: #1A1916; }
@@ -2435,15 +2793,15 @@ class EbookReader(nbapp.AppWindow):
                  box-shadow: 4px 4px 0 rgba(26,25,22,0.15); }
         .sheet * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sheetttl { font-size: 17px; font-weight: 700; color: #1A1916; }
-        .sheetsub { font-size: 13px; color: #9A9484; }
+        .sheetsub { font-size: 13px; color: #6E695E; }
         .sheetscroll, .sheetscroll viewport { background: #FCFBF8; }
         .sheetshelf { border-top: 1px solid #D7D2C5; }
-        .sheetempty { font-size: 13px; color: #9A9484; padding: 18px 2px; }
+        .sheetempty { font-size: 13px; color: #6E695E; padding: 18px 2px; }
         .sheetbook { border-bottom: 1px solid #D7D2C5; padding: 14px 2px; }
         .sheetbookopen { border-left: 2px solid #C8341E; padding-left: 10px; }
         .sheetbookttl { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                         font-size: 17px; color: #1A1916; }
-        .sheetbooksub { font-size: 12px; color: #9A9484; }
+        .sheetbooksub { font-size: 12px; color: #6E695E; }
         .bookopen { padding: 0; border: none; background: transparent;
                     background-image: none; box-shadow: none; }
         /* The label node needs the colour too: the Papertone theme sets

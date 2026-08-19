@@ -17,7 +17,7 @@
 # would bake an INCOMPLETE cache that the runtime trusts, hiding those fonts.
 # The target-native fc-cache below scans the full tree correctly.
 #
-STAMP=/var/cache/fontconfig/.notebookos-seeded
+STAMP=${NB_FONT_CACHE_STAMP:-/var/cache/fontconfig/.notebookos-seeded}
 
 start() {
 	# Already seeded on an earlier boot: nothing to do.
@@ -29,9 +29,9 @@ start() {
 	# lowest CPU + IO priority so the scan never competes with desktop startup on
 	# a slow software-rendered machine (the desktop must feel instant regardless).
 	(
-		nice -n 19 fc-cache -f >/dev/null 2>&1
-		mkdir -p /var/cache/fontconfig
-		: > "$STAMP"
+		if nice -n 19 fc-cache -f >/dev/null 2>&1; then
+			mkdir -p "$(dirname "$STAMP")" && : > "$STAMP"
+		fi
 	) &
 	echo "OK"
 }

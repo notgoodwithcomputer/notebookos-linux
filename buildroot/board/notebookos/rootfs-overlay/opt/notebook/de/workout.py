@@ -8,17 +8,25 @@ question: have I done today's work yet? So today's progress is the biggest
 thing on screen, the week beside it shows which days you hit, and logging a
 set is a single click.
 
-Optionally the same day's progress appears as a card on the desktop, so the
-answer is visible without opening anything — View > Show on Desktop.
+Optionally the same day's progress appears as a card on the desktop; desktop
+tile visibility is managed centrally in Widget Settings.
 
 Data lives in $NB_HOME/.config/notebook/workout.json:
 
     {"exercises": [{"id": .., "name": .., "sets": 5, "reps": 10}],
      "log": {"2026-07-28": {"<id>": [10, 10, 8]}},
+     "goals": {"2026-07-28": 8},
+     "goal_sets": {"2026-07-28": {"<id>": 5}},
      "show_widget": false}
 
 A set is stored as the number of reps actually done, so the log keeps its
 meaning if the goal changes later. widgets.py reads this same file.
+
+"goals" is the day's goal as a TOTAL and "goal_sets" the same goal exercise by
+exercise, both stamped for the day they were run against (_stamp_today_goal).
+Two shapes for one fact because they answer different questions: the total is
+what the desktop card reads, while whether the day COUNTS is decided exercise
+by exercise — six sets of push-ups do not finish the squats that were skipped.
 """
 import os
 import time
@@ -29,14 +37,50 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gdk, Gtk, Pango  # noqa: E402
+gi.require_version("Atk", "1.0")
+from gi.repository import Atk, Gdk, GLib, Gtk, Pango  # noqa: E402
 
 import nbapp  # noqa: E402
 import nbicons  # noqa: E402
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 STORE = os.path.join(os.environ.get("NB_HOME", os.path.expanduser("~")),
                      ".config", "notebook", "workout.json")
+MAX_STORE_BYTES = 16 * 1024 * 1024
+
+
+def _set_user_text(label, text, fallback=""):
+    """Put an exercise the USER named on a label, exactly as they named it.
+
+    "Push-ups" is a catalog key; so are "Reading", "Practice" and "Set". On a
+    French install the card read "Pompes" while workout.json went on saying
+    "Push-ups" — the exercise on screen was not the exercise in the file."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)
+    except AttributeError:
+        label.set_label(empty)
+
+
+class WorkoutStoreTooLarge(ValueError):
+    pass
+
+
+def _read_store_json(path=None, limit=MAX_STORE_BYTES):
+    """Read workout history without allowing a damaged store to stall launch."""
+    import json
+    if path is None:
+        path = STORE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise WorkoutStoreTooLarge("workout store is too large")
+    return json.loads(data)
 
 SIDEBAR_W = 240
 # The reading column the exercise list is held to, so one short row does not
@@ -236,7 +280,13 @@ class Ring(Gtk.DrawingArea):
 
 class Workout(nbapp.AppWindow):
     app_name = "Workout"
-    menus = ("File", "Edit", "Workout", "View")
+    # The actions menu is named for what it acts on, never for the app itself:
+    # nbapp keys its menu-bar buttons by name, so a menu called "Workout" was
+    # stored over the app-name button and took its place — the bar read
+    # "Workout File Edit Workout", both of them opened the exercise actions,
+    # About Workout could not be reached at all, and the app-name button kept
+    # the open menu's shading for the rest of the session.
+    menus = ("File", "Edit", "Exercise")
 
     def __init__(self):
         super().__init__()
@@ -248,6 +298,11 @@ class Workout(nbapp.AppWindow):
         self._build()
         self._install_css()
         self._refresh()
+        self._closed = False
+        self._shown_day = today_key()
+        self._day_rollover_id = GLib.timeout_add_seconds(
+            30, self._check_day_rollover)
+        self.connect("destroy", self._on_destroy)
 
     # -- store ---------------------------------------------------------------
 
@@ -258,12 +313,23 @@ class Workout(nbapp.AppWindow):
         written by nothing else, but a truncated or hand-edited one must open
         the app empty instead of stopping it from opening at all.
         """
-        blank = {"exercises": [], "log": {}, "goals": {}, "show_widget": False}
+        blank = {"exercises": [], "log": {}, "goals": {}, "goal_sets": {},
+                 "show_widget": False}
         self._load_error = ""
+        self._quarantine_pending = False
+        had_store = os.path.exists(STORE)
         try:
-            import json
-            with open(STORE, "r", encoding="utf-8") as fh:
-                raw = json.load(fh)
+            raw = _read_store_json()
+        except WorkoutStoreTooLarge:
+            # A valid but pathological object would not be moved by the shared
+            # parse-damage guard. Preserve it through the app-aware path before
+            # any blank fallback history is allowed to save.
+            self._damaged_path = nbapp.quarantine_unrecognized(STORE)
+            self._quarantine_pending = had_store and os.path.exists(STORE)
+            self._load_error = (_t("Your workout history could not be read. "
+                                  "The records were kept.")
+                                if self._damaged_path else _t("Not saved"))
+            return blank
         except (OSError, ValueError):
             # THE BYTES GO ASIDE BEFORE THE BLANK CAN REPLACE THEM. Opening on
             # `blank` is right; leaving the unreadable file where it is was not,
@@ -274,23 +340,32 @@ class Workout(nbapp.AppWindow):
             # OS has produced before, and this was the last store with no
             # protection against it.
             self._damaged_path = nbapp.preserve_damaged(STORE)
+            self._quarantine_pending = had_store and os.path.exists(STORE)
             if self._damaged_path:
                 self._load_error = _t(
                     "Your workout history could not be read. "
                     "The records were kept.")
+            elif self._quarantine_pending:
+                self._load_error = _t("Not saved")
             return blank
         if not isinstance(raw, dict):
             # Valid JSON of a shape this app does not recognise parses fine, so
             # preserve_damaged cannot see it — only the app knows its own shape.
             self._damaged_path = nbapp.quarantine_unrecognized(STORE)
+            self._quarantine_pending = os.path.exists(STORE)
             if self._damaged_path:
                 self._load_error = _t(
                     "Your workout history could not be read. "
                     "The records were kept.")
+            elif self._quarantine_pending:
+                self._load_error = _t("Not saved")
             return blank
 
-        out = {"exercises": [], "log": {}, "goals": {}, "show_widget": bool(
-            raw.get("show_widget", False))}
+        known_root = {"exercises", "log", "goals", "goal_sets", "show_widget"}
+        out = {k: copy.deepcopy(v) for k, v in raw.items()
+               if k not in known_root}
+        out.update({"exercises": [], "log": {}, "goals": {}, "goal_sets": {},
+                    "show_widget": bool(raw.get("show_widget", False))})
         seen = set()
         # A section of the wrong type must cost only itself. `raw.get(...) or []`
         # was not enough: a number here raised TypeError straight out of this
@@ -308,12 +383,16 @@ class Workout(nbapp.AppWindow):
             if not isinstance(eid, str) or not eid or eid in seen:
                 eid = "e%d%s" % (len(out["exercises"]), os.urandom(3).hex())
             seen.add(eid)
-            out["exercises"].append({
+            known_exercise = {"id", "name", "sets", "reps"}
+            exercise = {k: copy.deepcopy(v) for k, v in item.items()
+                        if k not in known_exercise}
+            exercise.update({
                 "id": eid,
                 "name": name.strip()[:60],
                 "sets": _clamp_int(item.get("sets"), 1, MAX_SETS, 3),
                 "reps": _clamp_int(item.get("reps"), 1, MAX_REPS, 10),
             })
+            out["exercises"].append(exercise)
         for day, entry in _daymap(raw.get("log")):
             if not isinstance(entry, dict):
                 continue
@@ -335,14 +414,38 @@ class Workout(nbapp.AppWindow):
         for day, total in _daymap(raw.get("goals")):
             if _ordinal(day) is not None:
                 out["goals"][day] = _clamp_int(total, 0, MAX_SETS * 200, 0)
+        for day, per in _daymap(raw.get("goal_sets")):
+            if _ordinal(day) is None or not isinstance(per, dict):
+                continue
+            # A goal this reader cannot make sense of costs only itself: it
+            # reads as nothing asked of that exercise, so the day falls back to
+            # being judged on the total it was stamped with rather than being
+            # made impossible to have completed.
+            clean = {eid: _clamp_int(want, 0, MAX_SETS, 0)
+                     for eid, want in per.items() if isinstance(eid, str)}
+            if clean:
+                out["goal_sets"][day] = clean
         return out
 
     def _save(self):
         self._stamp_today_goal()
         try:
+            if getattr(self, "_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(STORE)
+                if os.path.exists(STORE):
+                    raise OSError("could not preserve unreadable workout history")
+                self._quarantine_pending = False
             os.makedirs(os.path.dirname(STORE), exist_ok=True)
             nbapp.atomic_write_json(STORE, self.data, indent=1)
             self._save_error = ""
+            # The damage notice explains an app that opened EMPTY. The person's
+            # own work is now on disk under a healthy file, so the strip goes
+            # back to reporting today (the preserved bytes are still beside it).
+            # Left set, the notice outranked every later line, and a session
+            # that started on a damaged store never showed its sets, reps or
+            # streak again — not even "Today is done" — however much was done.
+            self._load_error = ""
+            return True
         except OSError as exc:
             # A read-only home must never stop the app working — but it must not
             # be silent either. See academics._save_to_disk: without this, a full
@@ -352,16 +455,37 @@ class Workout(nbapp.AppWindow):
             # until a save succeeds, because the status strip is rewritten on
             # every refresh and a one-shot message would be wiped immediately.
             self._save_error = nbapp.save_failure_reason(exc, STORE)
+            return False
 
     def _undo_snapshot(self):
         return {"data": copy.deepcopy(self.data), "sel": self.sel}
 
     def _restore_undo_snapshot(self, state):
+        before = self._undo_snapshot()
         self.data = copy.deepcopy(state.get("data", {}))
         self.sel = state.get("sel", -1)
-        self._save()
+        if not self._save():
+            reason = getattr(self, "_save_error", "")
+            self.data = before["data"]
+            self.sel = before["sel"]
+            self._save_error = reason
+            if hasattr(self, "list_box"):
+                self._refresh()
+            return False
         if hasattr(self, "list_box"):
             self._refresh()
+        return True
+
+    def _save_or_rollback(self, before):
+        """Make persistence the commit point for a visible workout edit."""
+        if self._save():
+            return True
+        reason = getattr(self, "_save_error", "")
+        self.data = copy.deepcopy(before["data"])
+        self.sel = before["sel"]
+        self._save_error = reason
+        self._refresh()
+        return False
 
     def _stamp_today_goal(self):
         """Record what the goal IS today, so that once today is in the past it
@@ -370,18 +494,30 @@ class Workout(nbapp.AppWindow):
         Without this the streak is computed against whatever the goal happens
         to be right now, so adding a fourth exercise this morning would reach
         back and un-complete every day of a run you had already earned. Only
-        today is ever stamped — a past day's number is frozen — and a day with
-        nothing logged carries no stamp, so the map stays the same size as the
+        today is ever stamped — a past day's numbers are frozen — and a day with
+        nothing logged carries no stamp, so the maps stay the same size as the
         log rather than growing forever.
+
+        The goal is stamped twice: as a total, which is what the desktop card
+        reads, and exercise by exercise, which is what decides whether the day
+        counted (see _day_progress). Without the second one a past day could
+        only ever be judged on its total, so a day that skipped an exercise
+        stayed banked forever.
         """
         goals = self.data.setdefault("goals", {})
+        per_day = self.data.setdefault("goal_sets", {})
         today = today_key()
         if self.data["log"].get(today):
             goals[today] = self._goal_total()
+            per_day[today] = {ex["id"]: ex["sets"]
+                              for ex in self.data["exercises"]}
         else:
             goals.pop(today, None)
+            per_day.pop(today, None)
         for day in [d for d in goals if d not in self.data["log"]]:
             goals.pop(day, None)
+        for day in [d for d in per_day if d not in self.data["log"]]:
+            per_day.pop(day, None)
 
     # -- data helpers --------------------------------------------------------
 
@@ -407,10 +543,52 @@ class Workout(nbapp.AppWindow):
             return done, self._goal_total()
         return done, self.data.get("goals", {}).get(day, self._goal_total())
 
+    def _goal_sets_for(self, day):
+        """{exercise id: sets that exercise asked for} on a day.
+
+        Today is measured against the live goal, so an exercise added this
+        morning is part of today. A PAST day keeps the per-exercise goal it was
+        logged against (see _stamp_today_goal); a day stamped before those were
+        kept has no map at all, and its total is the only thing the store still
+        remembers about it.
+        """
+        if day == today_key():
+            return {ex["id"]: ex["sets"] for ex in self.data["exercises"]}
+        stamped = self.data.get("goal_sets", {}).get(day)
+        return dict(stamped) if isinstance(stamped, dict) else {}
+
+    def _day_progress(self, day):
+        """(sets that counted toward the goal, sets in the goal) for a day.
+
+        A set counts for the exercise it was done for, and only up to that
+        exercise's own target: six sets of push-ups are six sets done, but they
+        are not the three squats that were skipped. This — not the day's total
+        — is what the week ring fills with and what _day_complete asks, because
+        the promise the streak makes is that a day counts only when the WHOLE
+        goal was done. Comparing totals let one exercise pay for another: a day
+        with an exercise untouched read "Today is done", filled its ring and
+        started a streak. The score keeps the raw total, because going past a
+        target is a win and reads as one (see Pips).
+        """
+        per = self._goal_sets_for(day)
+        goal = sum(per.values())
+        if not goal:
+            # Nothing records which exercises that day held, so its total is
+            # all there is to judge it by. Judging it harshly instead would
+            # reach back and un-earn days already banked.
+            done, total = self._day_totals(day)
+            return min(done, total), total
+        entry = self.data["log"].get(day, {})
+        counted = 0
+        for eid, want in per.items():
+            sets = entry.get(eid)
+            counted += min(len(sets) if isinstance(sets, list) else 0, want)
+        return counted, goal
+
     def _day_complete(self, day):
         """Was the WHOLE goal done that day? Nothing partial counts — that is
-        the point of the streak."""
-        done, goal = self._day_totals(day)
+        the point of the streak — and no exercise pays for another."""
+        done, goal = self._day_progress(day)
         return goal > 0 and done >= goal
 
     def _streak(self):
@@ -460,7 +638,7 @@ class Workout(nbapp.AppWindow):
         .wo-side { background: #F1EEE6; border-right: 1px solid #C9C4B6; }
         .wo-side * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .wo-eyebrow { font-size: 11px; letter-spacing: 0.14em; font-weight: 700;
-                      color: #9A9484; padding: 22px 16px 12px 16px; }
+                      color: #6E695E; padding: 22px 16px 12px 16px; }
         .wo-day { padding: 7px 16px; }
         /* TODAY is marked in INK, not the accent. Two reasons, both hard:
            (1) on this screen the accent means GOAL MET (.wo-hit, the live
@@ -478,7 +656,7 @@ class Workout(nbapp.AppWindow):
         .wo-sidefoot { border-top: 1px solid #D7D2C5; padding: 14px 16px; }
         .wo-footnum { font-size: 20px; color: #1A1916; }
         .wo-footlabel { font-size: 11px; letter-spacing: 0.12em;
-                        font-weight: 700; color: #9A9484; }
+                        font-weight: 700; color: #6E695E; }
         /* A live streak carries the accent for the same reason a met goal
            does: it IS a run of met goals, not a second meaning for the
            colour. At zero it is an ordinary number and says nothing. */
@@ -491,7 +669,7 @@ class Workout(nbapp.AppWindow):
         .wo-date { font-size: 14px; color: #6E695E; }
         .wo-score { font-size: 30px; font-weight: 700; color: #1A1916; }
         .wo-scorelabel { font-size: 11px; letter-spacing: 0.12em;
-                         font-weight: 700; color: #9A9484; }
+                         font-weight: 700; color: #6E695E; }
         .wo-rule { background: #D7D2C5; }
 
         .wo-card { background: #F8F7F2; border: 1px solid #D7D2C5;
@@ -537,6 +715,17 @@ class Workout(nbapp.AppWindow):
         .wo-cta:hover { background: #EFEBE0; }
         .wo-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
                      border-top: 1px solid #D7D2C5; background: #F8F7F2; }
+
+        /* A Save that cannot be pressed must not LOOK pressable. The theme
+           paints .suggested-action solid ink in every state, so the sheet's
+           Save, held until the exercise has a name, still came up as the
+           filled black button and read as broken rather than as waiting. The
+           label is named beside the button because a colour set on a button
+           never reaches the label inside it. */
+        button.suggested-action:disabled { background: #EFEBE0;
+                                           border-color: #D7D2C5;
+                                           color: #9A9484; box-shadow: none; }
+        button.suggested-action:disabled label { color: #9A9484; }
         """
         try:
             prov = Gtk.CssProvider()
@@ -660,6 +849,27 @@ class Workout(nbapp.AppWindow):
         self._refresh_today()
         self._refresh_status()
 
+    def _check_day_rollover(self):
+        """Move the Today screen and week/streak summaries to the new day."""
+        if self._closed:
+            return False
+        day = today_key()
+        if day != self._shown_day:
+            self._shown_day = day
+            self._refresh()
+        return True
+
+    def _on_destroy(self, *_):
+        self._closed = True
+        source_id = getattr(self, "_day_rollover_id", 0)
+        self._day_rollover_id = 0
+        if source_id:
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass
+        return False
+
     def _refresh_week(self):
         for ch in self.week_box.get_children():
             self.week_box.remove(ch)
@@ -668,13 +878,19 @@ class Workout(nbapp.AppWindow):
         total = 0
         for i in range(7):
             day = days[i]
-            done, goal = self._day_totals(day)
+            # SETS THIS WEEK counts every set that was actually done, past a
+            # target or not. The ring beside it asks the stricter question, by
+            # the same rule the streak counts by, so a full ring and a banked
+            # day always mean the same thing: sets count for the exercise they
+            # were done for, and only up to its own target.
+            done = self._day_totals(day)[0]
             total += done
+            counted, want = self._day_progress(day)
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             row.get_style_context().add_class("wo-day")
             if day == now:
                 row.get_style_context().add_class("today")
-            row.pack_start(Ring(done / goal if goal else 0.0,
+            row.pack_start(Ring(counted / want if want else 0.0,
                                 today=(day == now)), False, False, 0)
             name = Gtk.Label(label=_t(DAY_NAMES[i]), xalign=0)
             name.get_style_context().add_class("wo-dayname")
@@ -711,6 +927,8 @@ class Workout(nbapp.AppWindow):
         done, goal = self._day_totals(today_key())
         self.score.set_text("%d/%d" % (done, goal) if goal else "0")
 
+        self._exercise_hits = {}
+        self._exercise_actions = {}
         if not self.data["exercises"]:
             self.list_box.pack_start(self._empty_state(), False, False, 0)
         else:
@@ -718,6 +936,17 @@ class Workout(nbapp.AppWindow):
                 self.list_box.pack_start(self._exercise_card(idx, ex),
                                          False, False, 0)
         self.list_box.show_all()
+        if getattr(self, "_restore_card_focus", False):
+            self._restore_card_focus = False
+            hit = self._exercise_hits.get(self.sel)
+            if hit is not None:
+                hit.grab_focus()
+        action_focus = getattr(self, "_restore_action_focus", None)
+        self._restore_action_focus = None
+        if action_focus is not None:
+            action = self._exercise_actions.get(action_focus)
+            if action is not None:
+                action.grab_focus()
 
     def _empty_state(self):
         wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -746,7 +975,8 @@ class Workout(nbapp.AppWindow):
 
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        nm = Gtk.Label(label=ex["name"], xalign=0)
+        nm = Gtk.Label(xalign=0)
+        _set_user_text(nm, ex["name"])
         nm.get_style_context().add_class("wo-name")
         nm.set_ellipsize(Pango.EllipsizeMode.END)
         nm.set_max_width_chars(30)
@@ -780,11 +1010,13 @@ class Workout(nbapp.AppWindow):
         add = Gtk.Button(label=_t("Log a set"))
         add.get_style_context().add_class("wo-add")
         add.connect("clicked", self._on_log, idx)
+        self._exercise_actions[(idx, "log")] = add
         btns.pack_start(add, False, False, 0)
         undo = Gtk.Button(label=_t("Undo"))
         undo.get_style_context().add_class("wo-undo")
         undo.set_sensitive(bool(sets))
         undo.connect("clicked", self._on_undo, idx)
+        self._exercise_actions[(idx, "undo")] = undo
         btns.pack_start(undo, False, False, 0)
         card.pack_start(btns, False, False, 0)
 
@@ -807,6 +1039,13 @@ class Workout(nbapp.AppWindow):
         hit.set_can_focus(True)
         hit.get_style_context().add_class("wo-cardhit")
         hit.set_tooltip_text(_t("Select %s") % ex["name"])
+        accessible = hit.get_accessible()
+        accessible.set_role(Atk.Role.RADIO_BUTTON)
+        accessible.set_name(_t("Select %s") % ex["name"])
+        selected = idx == self.sel
+        accessible.notify_state_change(Atk.StateType.CHECKED, selected)
+        accessible.notify_state_change(Atk.StateType.SELECTED, selected)
+        self._exercise_hits[idx] = hit
         hit.add(card)
         hit.connect("button-press-event", self._on_select, idx)
         hit.connect("key-press-event", self._on_card_key, idx)
@@ -827,7 +1066,7 @@ class Workout(nbapp.AppWindow):
             return
         if not self.data["exercises"]:
             self.status.set_text(_t("No exercises"))
-        elif goal and done >= goal:
+        elif self._day_complete(today_key()):
             # The day is banked, so the sets count is old news (it is the big
             # number on screen); what changed is the streak.
             # A whole sentence per count, not a "%s" glued to "rep": the line
@@ -852,6 +1091,7 @@ class Workout(nbapp.AppWindow):
 
     def _on_select(self, _w, _ev, idx):
         self.sel = idx
+        self._restore_card_focus = True
         self._refresh_today()
         return False
 
@@ -870,26 +1110,46 @@ class Workout(nbapp.AppWindow):
             return True
         return False
 
+    # Logging a set is an edit like any other, so it is a step of its own —
+    # the checkpoint/commit pair around every structural edit below. Without it
+    # the history never saw a set: Ctrl+Z then pushed the whole day's logging
+    # as ONE unnamed step and stepped back over it (nbapp.UndoHistory.undo),
+    # while the Edit menu still offered the last thing it HAD recorded. An
+    # afternoon of sets disappeared under an item that read "Undo Delete
+    # Exercise", and the exercise stayed deleted. Any path that writes
+    # self.data and saves belongs between checkpoint() and commit().
     def _on_log(self, _b, idx):
+        self.undo.checkpoint("Log a Set")
+        before = self._undo_snapshot()
         ex = self.data["exercises"][idx]
         day = self.data["log"].setdefault(today_key(), {})
         day.setdefault(ex["id"], []).append(ex["reps"])
         self.sel = idx
-        self._save()
-        self._refresh()
+        saved = self._save_or_rollback(before)
+        self.undo.commit()
+        if saved:
+            if getattr(_b, "has_focus", lambda: False)():
+                self._restore_action_focus = (idx, "log")
+            self._refresh()
 
     def _on_undo(self, _b, idx):
         ex = self.data["exercises"][idx]
         day = self.data["log"].get(today_key(), {})
         if day.get(ex["id"]):
+            self.undo.checkpoint("Remove Set")
+            before = self._undo_snapshot()
             day[ex["id"]].pop()
             if not day[ex["id"]]:
                 del day[ex["id"]]
             if not day:
                 self.data["log"].pop(today_key(), None)
             self.sel = idx
-            self._save()
-            self._refresh()
+            saved = self._save_or_rollback(before)
+            self.undo.commit()
+            if saved:
+                if getattr(_b, "has_focus", lambda: False)():
+                    self._restore_action_focus = (idx, "undo")
+                self._refresh()
 
     def _exercise_dialog(self, title, name="", sets=3, reps=10):
         """Shared add/edit sheet. Returns (name, sets, reps) or None."""
@@ -917,6 +1177,15 @@ class Workout(nbapp.AppWindow):
         ent.set_placeholder_text(_t("Push-ups"))
         ent.set_activates_default(True)
         box.add(_field(_t("Exercise"), ent))
+        # An exercise IS its name, so there is nothing to save without one.
+        # Save stays out of reach until one is typed rather than closing the
+        # sheet on a press that quietly did nothing — which is what an edit
+        # whose name had been cleared did, taking a changed goal down with it.
+        # Return activates the same default, so it simply leaves the sheet open.
+        def _named(entry, *_a):
+            ok.set_sensitive(bool(entry.get_text().strip()))
+        ent.connect("changed", _named)
+        _named(ent)
 
         s_adj = Gtk.Adjustment(value=sets, lower=1, upper=MAX_SETS,
                                step_increment=1, page_increment=1)
@@ -943,13 +1212,17 @@ class Workout(nbapp.AppWindow):
         got = self._exercise_dialog(_t("New Exercise"))
         if not got:
             return
+        self.undo.checkpoint("New Exercise")
+        before = self._undo_snapshot()
         name, sets, reps = got
         self.data["exercises"].append({
             "id": "e%s" % os.urandom(5).hex(), "name": name,
             "sets": sets, "reps": reps})
         self.sel = len(self.data["exercises"]) - 1
-        self._save()
-        self._refresh()
+        saved = self._save_or_rollback(before)
+        self.undo.commit()
+        if saved:
+            self._refresh()
 
     def _edit_exercise(self):
         ex = self._active()
@@ -959,50 +1232,55 @@ class Workout(nbapp.AppWindow):
                                     ex["sets"], ex["reps"])
         if not got:
             return
+        self.undo.checkpoint("Edit Exercise")
+        before = self._undo_snapshot()
         ex["name"], ex["sets"], ex["reps"] = got
-        self._save()
-        self._refresh()
+        saved = self._save_or_rollback(before)
+        self.undo.commit()
+        if saved:
+            self._refresh()
 
     def _delete_exercise(self):
         ex = self._active()
         if not ex:
             return
+        if not _confirm(
+                self, _t("Delete Exercise"),
+                _t("Delete %s and all of its logged sets?") % ex["name"],
+                _t("Delete")):
+            return
         self.undo.checkpoint("Delete Exercise")
+        before = self._undo_snapshot()
         eid = ex["id"]
         del self.data["exercises"][self.sel]
         for entry in self.data["log"].values():
             entry.pop(eid, None)
         self.data["log"] = {d: e for d, e in self.data["log"].items() if e}
         self.sel = min(self.sel, len(self.data["exercises"]) - 1)
-        self._save()
+        saved = self._save_or_rollback(before)
         self.undo.commit()
-        self._refresh()
+        if saved:
+            self._refresh()
 
     def _clear_today(self):
         if not self.data["log"].get(today_key()):
             return
+        if not _confirm(
+                self, _t("Clear Today"),
+                _t("Remove all sets logged today?"), _t("Clear")):
+            return
         self.undo.checkpoint("Clear Today")
+        before = self._undo_snapshot()
         self.data["log"].pop(today_key(), None)
-        self._save()
+        saved = self._save_or_rollback(before)
         self.undo.commit()
-        self._refresh()
+        if saved:
+            self._refresh()
 
     def _on_key(self, w, ev):
         if hasattr(self, "undo") and nbapp.undo_keys(self.undo, ev):
             return True
         return super()._on_key(w, ev)
-
-    def _toggle_widget(self):
-        self.data["show_widget"] = not self.data.get("show_widget")
-        self._save()
-        self._refresh_status()
-        # ...unless the save just failed, in which case _refresh_status has put
-        # the reason there and confirming the change would be a lie.
-        if not getattr(self, "_save_error", ""):
-            self.status.set_text(
-                _t("Shown on the desktop")
-                if self.data["show_widget"]
-                else _t("Removed from the desktop"))
 
     # -- menus ---------------------------------------------------------------
 
@@ -1016,7 +1294,7 @@ class Workout(nbapp.AppWindow):
             ]
         if name == "Edit":
             return nbapp.undo_menu_items(self.undo)
-        if name == "Workout":
+        if name == "Exercise":
             sets = self._sets_for(self._active()["id"]) if have else []
             return [
                 ("Log a Set", (lambda: self._on_log(None, self.sel))
@@ -1033,13 +1311,6 @@ class Workout(nbapp.AppWindow):
                 ("Clear Today…", self._clear_today
                  if self.data["log"].get(today_key()) else None),
             ]
-        if name == "View":
-            # Branch on a plain `if` so BOTH labels are literals: a label
-            # written `(a if on else b)` is invisible to i18n_check's chrome
-            # scan, which is how a menu item ships untranslated.
-            if self.data.get("show_widget"):
-                return [("Hide from Desktop", self._toggle_widget)]
-            return [("Show on Desktop", self._toggle_widget)]
         return super().menu_items(name)
 
 

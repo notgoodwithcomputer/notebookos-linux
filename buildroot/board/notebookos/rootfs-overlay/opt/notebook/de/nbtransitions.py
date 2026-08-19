@@ -55,6 +55,8 @@ Four rules run through every function here:
     nbt.replace(holder, new_view)    # crossfade content in place
     nbt.highlight(row, "justsaved")  # brief, self-clearing
 """
+import math
+
 import nbmotion
 
 # GTK is optional for the same reason it is optional in nbmotion: tools/ runs
@@ -437,6 +439,10 @@ def _on_child_revealed(revealer, revealed, gen, on_done):
     try:
         state["handler"] = revealer.connect("notify::child-revealed", _notify)
         state["destroy"] = revealer.connect("destroy", _destroyed)
+        # Setting reveal-child to the state it already has emits no notify.
+        # Check once after both handlers are installed so an idempotent request
+        # still has the same completion contract as an animated one.
+        _notify()
     except Exception:                                             # noqa: BLE001
         _disconnect()
         _fire(on_done, True)     # no signal to wait for: report the end state
@@ -717,20 +723,31 @@ def smooth_fraction(bar, fraction, duration=None, on_done=None):
     if bar is None:
         return 0
     try:
-        target = max(0.0, min(1.0, float(fraction)))
+        target = float(fraction)
     except Exception:                                             # noqa: BLE001
+        _fire(on_done, False)
         return 0
+    if not math.isfinite(target):
+        _fire(on_done, False)
+        return 0
+    target = max(0.0, min(1.0, target))
     dur = nbmotion.FEEDBACK if duration is None else duration
     sc = getattr(bar, "_nbt_frac", None)
     if sc is None:
         try:
-            start = max(0.0, min(1.0, float(bar.get_fraction())))
+            start = float(bar.get_fraction())
+            if not math.isfinite(start):
+                start = target
+            else:
+                start = max(0.0, min(1.0, start))
         except Exception:                                         # noqa: BLE001
             start = target
 
         def _frame(v):
             try:
-                bar.set_fraction(max(0.0, min(1.0, float(v))))
+                value = float(v)
+                if math.isfinite(value):
+                    bar.set_fraction(max(0.0, min(1.0, value)))
             except Exception:                                     # noqa: BLE001
                 pass          # a destroyed bar raises here; nothing to paint
 
@@ -1018,12 +1035,33 @@ def present_card(overlay, box, anchor, on_close=None, on_shown=None,
     if css_class:
         card_win.get_style_context().add_class(css_class)
     card_win.add(box)
+    # The content is the caller's; a caller that already showed it (and hid
+    # a row on purpose) is left alone, one that hands over a freshly built
+    # tree gets it revealed here. card_win is no-show-all so the reveal on
+    # landing stays a plain show() -- which would otherwise leave an unshown
+    # box invisible inside a visible card: an empty paper frame where About
+    # should say the app's name.
+    if not box.get_visible():
+        box.show_all()
     card_win.set_no_show_all(True)
     layer.put(card_win, 0, 0)
     overlay.add_overlay(layer)
+    # The LAYER itself has to be shown: add_overlay parents it and nothing
+    # more, and a hidden Fixed keeps every visible child unmapped -- scrim,
+    # grow frame and card alike. Without this line About and Get Info drew
+    # NOTHING in every app while their handles, callbacks and "card visible"
+    # checks all reported success (a visible child under a hidden parent).
+    layer.show()
     scrim.show()
     grow_da.show()
+    # Measure the card SHOWN: GTK reports 0x0 for a hidden widget, so the
+    # hidden card_win always fell through to the 340x220 fallback -- the
+    # paper frame grew to that box while the real card (a 247x110 About)
+    # revealed top-left inside it. Shown for the measurement only, hidden
+    # again before any frame can paint it; the reveal on landing is unchanged.
+    card_win.show()
     _min, nat = card_win.get_preferred_size()
+    card_win.hide()
     cw = nat.width if nat.width > 1 else 340
     ch = nat.height if nat.height > 1 else 220
     tx, ty = max((W - cw) // 2, 0), max((H - ch) // 2, 0)
@@ -1047,7 +1085,12 @@ def present_card(overlay, box, anchor, on_close=None, on_shown=None,
     except Exception:                                             # noqa: BLE001
         pass
     target = (float(tx), float(ty), float(cw), float(ch))
-    layer.put(card_win, tx, ty)
+    # MOVE, not put: the card was put at (0, 0) above so it could be
+    # measured inside the hierarchy, and gtk_fixed_put on a widget that
+    # already has a parent is a Gtk-CRITICAL that does NOTHING -- every
+    # About card in the OS sat in the top-left corner from that line, and
+    # the assertion was in every app's stderr.
+    layer.move(card_win, tx, ty)
 
     state = {"grow": None, "closing": False}
 

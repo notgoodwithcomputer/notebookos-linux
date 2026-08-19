@@ -31,6 +31,7 @@ from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 
 import os
 import json
+import copy
 import math
 import time
 import random
@@ -40,6 +41,7 @@ from datetime import date, timedelta
 import nbapp
 import nbicons
 import nbtransitions
+import nbi18n
 from nbi18n import _t, ltr  # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -142,10 +144,33 @@ AWARDS = [
 ]
 
 
+def _set_course_text(widget, text):
+    """Put a word from the COURSE on a widget, exactly as the course wrote it.
+
+    Course data is authored, not typed by the learner — but it is no more the
+    interface's to rewrite than a name would be. Two things went wrong when it
+    was: the English column of a vocabulary list came out in the interface
+    language ("Monday" shown as "Lundi", so the flashcard taught nothing), and
+    an answer assembled from word tiles was READ BACK off those tiles to grade
+    it, so a correctly built sentence containing a catalog word would be marked
+    wrong and cost a heart and the skill's crown."""
+    value = str(text or "")
+    nbi18n.set_verbatim(widget, value)
+    try:
+        child = widget.get_child()
+    except Exception:
+        child = None
+    if isinstance(child, Gtk.Label):
+        nbi18n.set_verbatim(child, value)
+
+
 def _quarantine(path):
     """Move a store this app could not make sense of aside, under the same
-    <name>.damaged-<timestamp> name nbapp.preserve_damaged uses. Never raises."""
+    <name>.damaged-<timestamp> name nbapp.preserve_damaged uses. Never raises;
+    returns whether the original is safely out of the replacement path."""
     try:
+        if not os.path.lexists(path):
+            return True
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = "%s.damaged-%s" % (path, stamp)
         n = 2
@@ -154,7 +179,8 @@ def _quarantine(path):
             n += 1
         os.replace(path, dest)
     except OSError:
-        pass
+        return False
+    return True
 
 
 def _strip_accents(s):
@@ -171,6 +197,21 @@ def _norm(s):
         if ch.isalnum() or ch.isspace():
             out.append(ch)
     return " ".join("".join(out).split())
+
+
+def _answer_norm(s, code=""):
+    """Answer comparison with the target language's keyboard conventions."""
+    raw = (s or "")
+    if code == "zh":
+        # In Pinyin, ü is a distinct vowel, conventionally typed as `v` on a
+        # keyboard (and in this OS's own Pinyin IME). Accent stripping alone
+        # turned lǜ into `lu`, accepting a different syllable and rejecting
+        # the standard `lv`. NFC first also covers decomposed u+diaeresis.
+        raw = unicodedata.normalize("NFC", raw).translate(str.maketrans({
+            "ü": "v", "ǖ": "v", "ǘ": "v", "ǚ": "v", "ǜ": "v",
+            "Ü": "v", "Ǖ": "v", "Ǘ": "v", "Ǚ": "v", "Ǜ": "v",
+        }))
+    return _norm(raw)
 
 
 def _toks(s):
@@ -312,6 +353,8 @@ class Language(nbapp.AppWindow):
         self._pager.switch("home", direction=nbtransitions.NONE)
 
         self.connect("destroy", self._on_destroy)
+        self._day_rollover_id = GLib.timeout_add_seconds(
+            30, self._check_day_rollover)
 
     # ==================================================================
     # owned lesson timers
@@ -372,6 +415,13 @@ class Language(nbapp.AppWindow):
         if getattr(self, "_closed", False):
             return
         self._closed = True
+        rollover_id = getattr(self, "_day_rollover_id", 0)
+        self._day_rollover_id = 0
+        if rollover_id:
+            try:
+                GLib.source_remove(rollover_id)
+            except Exception:
+                pass
         self._cancel_lesson_callbacks()
         self._save_progress()
 
@@ -423,10 +473,13 @@ class Language(nbapp.AppWindow):
         out["_extra"] = extra
         for key in ("xp", "streak", "day_xp"):
             v = out.get(key)
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or not math.isfinite(v)):
                 try:
                     v = int(str(v).strip())      # "250" is still 250 XP
-                except (TypeError, ValueError):
+                    if not math.isfinite(v):
+                        v = 0
+                except (TypeError, ValueError, OverflowError):
                     v = 0
             out[key] = max(0, int(v))
         # Hearts are the one counter whose ABSENCE must not mean zero: a file
@@ -434,17 +487,21 @@ class Language(nbapp.AppWindow):
         # from, would otherwise open the app with a learner locked out of every
         # lesson and no way to see why.
         h = out.get("hearts")
-        if isinstance(h, bool) or not isinstance(h, (int, float)):
+        if (isinstance(h, bool) or not isinstance(h, (int, float))
+                or not math.isfinite(h)):
             try:
                 h = int(str(h).strip())
-            except (TypeError, ValueError):
+                if not math.isfinite(h):
+                    h = HEARTS_MAX
+            except (TypeError, ValueError, OverflowError):
                 h = HEARTS_MAX
         out["hearts"] = max(0, min(HEARTS_MAX, int(h)))
         for key in ("streak_day", "day"):
             v = out.get(key)
             out[key] = v if isinstance(v, str) else ""
         ht = out.get("heart_time")
-        if isinstance(ht, bool) or not isinstance(ht, (int, float)):
+        if (isinstance(ht, bool) or not isinstance(ht, (int, float))
+                or not math.isfinite(ht)):
             ht = 0
         out["heart_time"] = float(max(0, ht))
         goal = out.get("goal")
@@ -469,7 +526,7 @@ class Language(nbapp.AppWindow):
                     continue
                 try:
                     clean[k] = max(0, min(CROWN_MAX, int(v)))
-                except (TypeError, ValueError):
+                except (TypeError, ValueError, OverflowError):
                     continue
         out["crowns"] = clean
 
@@ -512,9 +569,13 @@ class Language(nbapp.AppWindow):
         clean_stats = {}
         for k in ("lessons", "perfect", "best_streak"):
             v = (stats or {}).get(k) if isinstance(stats, dict) else None
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
+            if (isinstance(v, bool) or not isinstance(v, (int, float))
+                    or not math.isfinite(v)):
                 v = 0
-            clean_stats[k] = max(0, int(v))
+            try:
+                clean_stats[k] = max(0, int(v))
+            except (TypeError, ValueError, OverflowError):
+                clean_stats[k] = 0
         out["stats"] = clean_stats
 
         awards = out.get("awards")
@@ -550,11 +611,18 @@ class Language(nbapp.AppWindow):
     def _save_progress(self):
         try:
             if getattr(self, "_quarantine_pending", False):
+                # Do not overwrite the only copy when permissions, a full
+                # filesystem or a read-only mount prevents the protective
+                # move. Keep pending raised so the next save retries after the
+                # storage problem is fixed.
+                if not _quarantine(CFG_FILE):
+                    raise OSError("could not preserve unrecognized progress")
                 self._quarantine_pending = False
-                _quarantine(CFG_FILE)
             nbapp.atomic_write_json(CFG_FILE, self.progress)
+            return True
         except Exception as exc:
             nbapp.note_save_failure(self, exc, CFG_FILE)
+            return False
 
     def _roll_day(self):
         """Start today's XP ledger. The daily goal is what the streak is scored
@@ -565,6 +633,27 @@ class Language(nbapp.AppWindow):
         if self.progress.get("day") != t:
             self.progress["day"] = t
             self.progress["day_xp"] = 0
+
+    def _check_day_rollover(self):
+        """Refresh daily-goal chrome when a session crosses local midnight."""
+        if getattr(self, "_closed", False):
+            return False
+        before = self.progress.get("day")
+        self._roll_day()
+        if self.progress.get("day") == before:
+            return True
+        self._save_progress()
+        try:
+            where = self.stack.get_visible_child_name()
+            if where == "home":
+                self._refresh_home_stats()
+            elif where == "course":
+                self._render_course(keep_scroll=True)
+            # Never rebuild an exercise in progress merely because midnight
+            # passed; scoring already calls _roll_day before awarding XP.
+        except Exception:
+            pass
+        return True
 
     # ---------------- XP, goal, streak ----------------
     def _goal(self):
@@ -658,12 +747,42 @@ class Language(nbapp.AppWindow):
     def _skey(self, code, term):
         return "%s:%s" % (code, _norm(term))
 
-    def _strength(self, term, code=None):
+    def _item_skey(self, code, item):
+        """Stable lexical identity; Mandarin homophones include their Hanzi."""
+        base = self._skey(code, item.get("t", ""))
+        note = _norm(item.get("note", ""))
+        return "%s:%s" % (base, note) if code == "zh" and note else base
+
+    def _term_is_unambiguous(self, code, term):
+        course = next((c for c in self.courses if c.get("code") == code), None)
+        if not course:
+            return True
+        identities = set()
+        for unit in course.get("units", []):
+            for skill in unit.get("skills", []):
+                for item in list(skill.get("words", [])) + list(skill.get("phrases", [])):
+                    if isinstance(item, dict) and _norm(item.get("t", "")) == _norm(term):
+                        identities.add(self._item_skey(code, item))
+        return len(identities) <= 1
+
+    def _item_progress_key(self, code, item, table):
+        key = self._item_skey(code, item)
+        if key in table:
+            return key
+        legacy = self._skey(code, item.get("t", ""))
+        if legacy in table and self._term_is_unambiguous(code, item.get("t", "")):
+            return legacy
+        return key
+
+    def _strength(self, term, code=None, item=None):
         """A word's strength right now: what it was last set to, less one point
         for every DECAY_S it has sat untouched. This is the only thing that ever
         makes an old word come back round in Practice."""
         code = code or self.course["code"]
-        row = self.progress.get("strength", {}).get(self._skey(code, term))
+        table = self.progress.get("strength", {})
+        key = (self._item_progress_key(code, item, table)
+               if item is not None else self._skey(code, term))
+        row = table.get(key)
         if not isinstance(row, dict):
             return 0
         s = row.get("s", 0)
@@ -674,10 +793,12 @@ class Language(nbapp.AppWindow):
             decay = 0
         return max(0, min(STRENGTH_MAX, int(s) - decay))
 
-    def _bump_strength(self, term, ok):
+    def _bump_strength(self, term, ok, key=None):
         code = self.course["code"]
-        k = self._skey(code, term)
-        cur = self._strength(term, code)
+        k = key or self._skey(code, term)
+        row = self.progress.get("strength", {}).get(k)
+        cur = self._strength(term, code) if row is None else max(0, min(
+            STRENGTH_MAX, int(row.get("s", 0))))
         new = min(STRENGTH_MAX, cur + 1) if ok else max(0, cur - 1)
         self.progress.setdefault("strength", {})[k] = {"s": new,
                                                        "t": time.time()}
@@ -722,27 +843,71 @@ class Language(nbapp.AppWindow):
                                     for i in range(len(skills)))
 
     # ---------------- counting, for cards and awards ----------------
+    def _skill_keys(self, c):
+        """The progress keys each skill of a course can carry, in path order,
+        built once per course.
+
+        Both key shapes go in, so reading this never walks the whole course to
+        disambiguate a homophone the way _item_progress_key does -- a card only
+        needs to know the skill was opened. Cached because _norm normalises
+        every one of a course's 640 words: doing that for five cards on every
+        home render cost more than drawing them. The course files are read once
+        at startup and never change under it."""
+        code = c.get("code", "")
+        cache = getattr(self, "_skillkeys", None)
+        if cache is None:
+            cache = self._skillkeys = {}
+        rows = cache.get(code)
+        if rows is None:
+            rows = []
+            for unit in c.get("units", []):
+                for skill in unit.get("skills", []):
+                    keys = set()
+                    for it in (list(skill.get("words") or [])
+                               + list(skill.get("phrases") or [])):
+                        if not isinstance(it, dict) or not it.get("t"):
+                            continue
+                        keys.add(self._skey(code, it["t"]))
+                        keys.add(self._item_skey(code, it))
+                    rows.append(keys)
+            cache[code] = rows
+        return rows
+
     def _course_progress(self, c):
         """(skills finished, skills started, crowns) for a course. Keyed off the
         course code directly, because the picker runs before any course is open
-        and _pkey reads self.course."""
+        and _pkey reads self.course.
+
+        STARTED is counted from the words the skill has met, not from its crown.
+        A crown needs a lesson with NO mistakes, so a learner who had finished
+        lessons here still met a card reading "10 units - 40 skills" like the
+        courses they had never opened, and an Explorer award reading "Courses
+        started: 0"."""
         crowns = self.progress.get("crowns", {})
         if not isinstance(crowns, dict):
-            return 0, 0, 0
-        prefix = "%s:" % c.get("code", "")
+            crowns = {}
+        code = c.get("code", "")
+        seen = set(self.progress.get("seen", []))
+        prefix = "%s:" % code
+        # A course with no word met has no started skill either, and that is
+        # every card on a fresh picker: don't index 640 words to find it out.
+        rows = (self._skill_keys(c)
+                if any(k.startswith(prefix) for k in seen) else None)
         done = started = total = 0
-        for k, v in crowns.items():
-            if not k.startswith(prefix):
-                continue
-            try:
-                v = int(v)
-            except (TypeError, ValueError):
-                continue
-            total += v
-            if v > 0:
-                started += 1
-            if v >= CROWN_MAX:
-                done += 1
+        i = -1
+        for ui, unit in enumerate(c.get("units", [])):
+            for si, skill in enumerate(unit.get("skills", [])):
+                i += 1
+                try:
+                    v = int(crowns.get("%s%d:%d" % (prefix, ui, si), 0) or 0)
+                except (TypeError, ValueError):
+                    v = 0
+                total += v
+                if v >= CROWN_MAX:
+                    done += 1
+                if v > 0 or (rows is not None and i < len(rows)
+                             and not seen.isdisjoint(rows[i])):
+                    started += 1
         return done, started, total
 
     def _words_learned(self, code=None):
@@ -853,7 +1018,10 @@ class Language(nbapp.AppWindow):
                 lbl.set_text("")
                 lbl.get_style_context().remove_class("toastshown")
             return False
-        GLib.timeout_add(3200, clear)
+        # Own this delay just like lesson feedback: closing the window while a
+        # toast is visible must cancel the source rather than retain the whole
+        # window and call back into a label already being torn down.
+        self._lesson_later(3200, clear)
 
     # ==================================================================
     # home: the course picker
@@ -1010,7 +1178,8 @@ class Language(nbapp.AppWindow):
         except Exception:
             pass
         card.pack_start(badge, False, False, 0)
-        nm = Gtk.Label(label=c.get("name", "?"))
+        nm = Gtk.Label()
+        _set_course_text(nm, c.get("name", "?"))
         nm.get_style_context().add_class("coursename")
         card.pack_start(nm, False, False, 0)
         sub = Gtk.Label(label=_t("from %s") % c.get("from", "English"))
@@ -1118,7 +1287,8 @@ class Language(nbapp.AppWindow):
         back = self._flat_button(_t("Courses"), "backbtn", self._show_home,
                                  "back")
         bar.pack_start(back, False, False, 0)
-        title = Gtk.Label(label=self.course.get("name", ""))
+        title = Gtk.Label()
+        _set_course_text(title, self.course.get("name", ""))
         title.get_style_context().add_class("coursetitle")
         bar.pack_start(title, False, False, 0)
         # A course may carry one line about what it does and doesn't cover --
@@ -1129,7 +1299,14 @@ class Language(nbapp.AppWindow):
             note = Gtk.Label(label=self.course["note"])
             note.get_style_context().add_class("coursenote")
             note.set_ellipsize(Pango.EllipsizeMode.END)
-            note.set_max_width_chars(40)
+            # A 40-character cap cut both shipped notes off mid-word at EVERY
+            # width -- at 1366 with a third of the bar empty beside them -- so
+            # the one line explaining that Mandarin teaches pinyin and not the
+            # characters could not be read anywhere. The cap now clears the
+            # longest of them; ellipsis still shortens it when the bar really is
+            # crowded, and the tooltip carries the whole line either way.
+            note.set_max_width_chars(70)
+            note.set_tooltip_text(self.course["note"])
             bar.pack_start(note, False, False, 0)
         bar.pack_start(Gtk.Box(), True, True, 0)
 
@@ -1444,12 +1621,16 @@ class Language(nbapp.AppWindow):
     def _why_locked(self, ui, si):
         """Name the ONE thing that opens this node. 'Locked' is not an answer to
         a tap -- it is the observation the learner just made."""
+        # What opens the next node is a CROWN, and a crown needs a lesson with
+        # no mistakes. Naming only "a lesson" told a learner who had just
+        # finished one to go and do the thing they had done.
         if not self._unit_open(ui):
             prev = self.course["units"][ui - 1]
-            return _t("Finish a lesson in every skill of %s first") \
-                % prev.get("title", _t("the unit before"))
+            return _t("Finish a lesson with no mistakes in every skill of %s "
+                      "first") % prev.get("title", _t("the unit before"))
         prev = self.course["units"][ui]["skills"][si - 1]
-        return _t("Finish a lesson in %s first") % prev.get("name", "")
+        return _t("Finish a lesson in %s with no mistakes first") \
+            % prev.get("name", "")
 
     def _tap_test(self, ui, state):
         if state == "locked":
@@ -1545,8 +1726,10 @@ class Language(nbapp.AppWindow):
         card.pack_start(pips, False, False, 0)
 
         words, phrases = self._skill_items(skill)
-        met = sum(1 for it in words + phrases if self._seen_key(it["t"])
-                  in set(self.progress.get("seen", [])))
+        seen_table = set(self.progress.get("seen", []))
+        met = sum(1 for it in words + phrases
+                  if self._item_progress_key(self.course["code"], it,
+                                             seen_table) in seen_table)
         meta = Gtk.Label(label=_t("%d of %d words and phrases met")
                          % (met, len(words) + len(phrases)))
         meta.get_style_context().add_class("cardmeta")
@@ -1567,8 +1750,11 @@ class Language(nbapp.AppWindow):
         # reusable as its narrowest existing sense. Same reason the words
         # button says Vocabulary: "Words" was already taken by the word
         # COUNT in the text editors, and rendered as such in ja/ko/zh.
+        # "Start lesson" until the skill has been TOUCHED, not until it has a
+        # crown: a lesson finished with a mistake in it earns no crown, and the
+        # card went back to offering a start as if it had never been sat.
         label = (_t("Practice") if crowns >= CROWN_MAX
-                 else _t("Start lesson") if not crowns else _t("Continue"))
+                 else _t("Continue") if (crowns or met) else _t("Start lesson"))
         row.pack_start(self._flat_button(
             label, "checkbtn",
             lambda: (self._hide_card(), self._start_lesson(ui, si))[-1]),
@@ -1745,7 +1931,8 @@ class Language(nbapp.AppWindow):
             if not tips:
                 continue
             any_tip = True
-            hd = Gtk.Label(label=skill.get("name", ""), xalign=0)
+            hd = Gtk.Label(xalign=0)
+            _set_course_text(hd, skill.get("name", ""))
             hd.get_style_context().add_class("sectionhead")
             hd.set_margin_top(14)
             col.pack_start(hd, False, False, 0)
@@ -1807,7 +1994,8 @@ class Language(nbapp.AppWindow):
         box.get_style_context().add_class("vocabrow")
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         left.set_size_request(230, -1)
-        t = Gtk.Label(label=it["t"], xalign=0)
+        t = Gtk.Label(xalign=0)
+        _set_course_text(t, it["t"])
         t.get_style_context().add_class("vocabt")
         t.set_line_wrap(True)
         left.pack_start(t, False, False, 0)
@@ -1819,18 +2007,21 @@ class Language(nbapp.AppWindow):
         box.pack_start(left, False, False, 0)
 
         mid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
-        e = Gtk.Label(label=it["e"], xalign=0)
+        e = Gtk.Label(xalign=0)
+        _set_course_text(e, it["e"])
         e.get_style_context().add_class("vocabe")
         e.set_line_wrap(True)
         mid.pack_start(e, False, False, 0)
         if it.get("note"):
-            n = Gtk.Label(label=it["note"], xalign=0)
+            n = Gtk.Label(xalign=0)
+            _set_course_text(n, it["note"])
             n.get_style_context().add_class("vocabnote")
             mid.pack_start(n, False, False, 0)
         box.pack_start(mid, True, True, 0)
 
-        seen = self._skey(code, it["t"]) in self.progress.get("strength", {})
-        s = self._strength(it["t"], code)
+        strength = self.progress.get("strength", {})
+        seen = self._item_progress_key(code, it, strength) in strength
+        s = self._strength(it["t"], code, it)
         bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         bar.set_valign(Gtk.Align.CENTER)
         if seen:
@@ -1873,9 +2064,13 @@ class Language(nbapp.AppWindow):
                 body.pack_start(hd, False, False, 0)
                 for it in mine:
                     body.pack_start(self._vocab_row(it, code), False, False, 0)
-        sub = Gtk.Label(label=_t("%d of %d met. The bars show how well each "
-                                 "one is holding; they fade with time away.")
-                        % (met, total), xalign=0)
+        # The bars sentence used to be unconditional, so the first thing a new
+        # learner read on this page described an element that was not on it.
+        sub = Gtk.Label(label=(
+            _t("%d of %d met. The bars show how well each "
+               "one is holding; they fade with time away.") % (met, total)
+            if met else
+            _t("%d of %d words and phrases met") % (met, total)), xalign=0)
         sub.get_style_context().add_class("pagesub")
         sub.set_line_wrap(True)
         col.pack_start(sub, False, False, 0)
@@ -2082,7 +2277,7 @@ class Language(nbapp.AppWindow):
         seen = set(self.progress.get("seen", []))
 
         def key(it):
-            return "%s:%s" % (code, _norm(it["t"]))
+            return self._item_skey(code, it)
 
         # TEACH FIRST: introduce a batch of the skill's not-yet-seen terms this
         # lesson (the rest wait for a repeat), and drill ONLY terms that are now
@@ -2114,7 +2309,8 @@ class Language(nbapp.AppWindow):
         taught_words = [it for it in taught if not it["phrase"]]
         taught_phrases = [it for it in taught if it["phrase"]]
 
-        ex = [self._make_exercise("intro", it, taught_words) for it in intro_items]
+        ex = [self._identified_exercise("intro", it, taught_words)
+              for it in intro_items]
         if plan["match"] and len(taught_words) >= 4:
             ex.append(self._make_exercise("match", None, taught_words))
 
@@ -2128,8 +2324,8 @@ class Language(nbapp.AppWindow):
             random.shuffle(extra)
             drill_items.extend(extra)
         for it in drill_items[:plan["drills"]]:
-            ex.append(self._make_exercise(self._pick_kind(level, it), it,
-                                          taught_words, taught_phrases))
+            ex.append(self._identified_exercise(self._pick_kind(level, it), it,
+                                                taught_words, taught_phrases))
         return self._lesson_state(ex, ui=ui, si=si, kind="lesson",
                                   new_keys=new_keys,
                                   title=skill.get("name", ""))
@@ -2168,10 +2364,12 @@ class Language(nbapp.AppWindow):
             for si, skill in enumerate(unit.get("skills", [])):
                 w, p = self._skill_items(skill)
                 for it in w + p:
-                    if "%s:%s" % (code, _norm(it["t"])) in seen:
-                        row = self.progress.get("strength", {}).get(
-                            self._skey(code, it["t"]), {})
-                        pool.append((self._strength(it["t"], code),
+                    seen_key = self._item_progress_key(code, it, seen)
+                    if seen_key in seen:
+                        strength = self.progress.get("strength", {})
+                        strength_key = self._item_progress_key(code, it, strength)
+                        row = strength.get(strength_key, {})
+                        pool.append((self._strength(it["t"], code, it),
                                      row.get("t", 0) if isinstance(row, dict)
                                      else 0, it))
         if not pool:
@@ -2187,8 +2385,8 @@ class Language(nbapp.AppWindow):
         if len(allw) >= 4:
             ex.append(self._make_exercise("match", None, allw[:8]))
         for it in picks:
-            ex.append(self._make_exercise(self._pick_kind(2, it), it,
-                                          allw, phrases))
+            ex.append(self._identified_exercise(self._pick_kind(2, it), it,
+                                                allw, phrases))
         return self._lesson_state(ex, kind="practice", new_keys=[],
                                   title=_t("Practice"))
 
@@ -2208,7 +2406,7 @@ class Language(nbapp.AppWindow):
         picks = items[:TEST_LEN]
         while len(picks) < TEST_LEN and items:
             picks.append(random.choice(items))
-        ex = [self._make_exercise(self._pick_kind(3, it), it, words, phrases)
+        ex = [self._identified_exercise(self._pick_kind(3, it), it, words, phrases)
               for it in picks]
         return self._lesson_state(ex, ui=ui, kind="test", new_keys=[],
                                   title=_t("%s test") % unit.get("title", ""))
@@ -2231,6 +2429,11 @@ class Language(nbapp.AppWindow):
         return random.choice(kinds)
 
     # ---------------- exercise construction ----------------
+    def _identified_exercise(self, kind, item, words, phrases=None):
+        exercise = self._make_exercise(kind, item, words, phrases)
+        exercise["lex"] = self._item_skey(self.course["code"], item)
+        return exercise
+
     def _distractors(self, it, n, field="e", pool=None):
         """`n` wrong options for a question about `it`, drawn from words of the
         SAME PART OF SPEECH first.
@@ -2281,8 +2484,30 @@ class Language(nbapp.AppWindow):
                     "lit": it.get("lit", ""),
                     "phrase": it.get("phrase", False)}
         if kind == "match":
-            picks = random.sample(words, min(4, len(words)))
+            # The buttons expose only the target/meaning text, while grading
+            # uses the hidden row index.  Homographs/homophones such as
+            # Mandarin shì ("yes" / "to be") therefore cannot coexist in one
+            # round: two visually identical choices would have only one
+            # secretly accepted pairing.  Keep both columns unambiguous and
+            # refill from the remaining candidates.
+            candidates = list(words)
+            random.shuffle(candidates)
+            picks, targets, meanings = [], set(), set()
+            for word in candidates:
+                target = _norm(word.get("t", ""))
+                meaning = _norm(word.get("e", ""))
+                if not target or not meaning:
+                    continue
+                if target in targets or meaning in meanings:
+                    continue
+                picks.append(word)
+                targets.add(target)
+                meanings.add(meaning)
+                if len(picks) == 4:
+                    break
             return {"kind": "match", "term": picks[0]["t"] if picks else "",
+                    "lex": (self._item_skey(self.course["code"], picks[0])
+                            if picks else ""),
                     "pairs": [(w["t"], w["e"], w.get("ipa", "")) for w in picks]}
         if kind == "translate_to_en":
             # Accept EVERY meaning this course records for the prompt, not just
@@ -2420,7 +2645,14 @@ class Language(nbapp.AppWindow):
         top.pack_start(quit_b, False, False, 0)
         prog = Gtk.ProgressBar()
         prog.get_style_context().add_class("lessonprog")
-        prog.set_fraction(L["i"] / max(1, len(L["ex"])))
+        exercise_count = max(1, len(L["ex"]))
+        prog.set_fraction(L["i"] / exercise_count)
+        # ProgressBar already exposes its numeric value role; give that value
+        # the current lesson's identity and a stable 1-based position so it is
+        # meaningful without the visual bar.
+        prog.get_accessible().set_name(str(L.get("title") or self.app_name))
+        prog.get_accessible().set_description(
+            "%d / %d" % (min(L["i"] + 1, exercise_count), exercise_count))
         prog.set_valign(Gtk.Align.CENTER)
         top.pack_start(prog, True, True, 0)
         if L["combo"] >= 3:
@@ -2543,7 +2775,7 @@ class Language(nbapp.AppWindow):
         b.connect("clicked", lambda *_: action())
         foot.pack_end(b, False, False, 0)
         body.pack_start(foot, False, False, 0)
-        GLib.idle_add(b.grab_focus)
+        self._lesson_later(0, b.grab_focus)
 
     # ---- exercise: type the translation ----
     def _ex_type(self, body, ex):
@@ -2558,12 +2790,13 @@ class Language(nbapp.AppWindow):
         self._check_footer(body, lambda: self._check_type(entry, ex))
         entry.connect("changed",
                       lambda e: self._arm_check(bool(e.get_text().strip())))
-        GLib.idle_add(entry.grab_focus)
+        self._lesson_later(0, entry.grab_focus)
 
     def _check_type(self, entry, ex):
-        typed = _norm(entry.get_text())
-        ok = typed == _norm(ex["answer"]) or \
-            typed in [_norm(a) for a in ex.get("alts", [])]
+        code = self.course.get("code", "")
+        typed = _answer_norm(entry.get_text(), code)
+        ok = typed == _answer_norm(ex["answer"], code) or \
+            typed in [_answer_norm(a, code) for a in ex.get("alts", [])]
         self._grade(ok, ex)
 
     # ---- exercise: multiple choice (also select and fill-in-the-blank) ----
@@ -2579,7 +2812,9 @@ class Language(nbapp.AppWindow):
         btns = []
         grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for opt in ex["options"]:
-            b = Gtk.Button(label=opt)
+            b = Gtk.Button()
+            b._word = opt               # what this option MEANS, for _mark
+            _set_course_text(b, opt)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("choicebtn")
             b.connect("clicked", lambda w, o=opt: self._pick_choice(w, o, btns))
@@ -2624,7 +2859,9 @@ class Language(nbapp.AppWindow):
         btns = []
         grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         for opt in ex["options"]:
-            b = Gtk.Button(label=opt)
+            b = Gtk.Button()
+            b._word = opt               # what this option MEANS, for _mark
+            _set_course_text(b, opt)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("choicebtn")
             b.connect("clicked", lambda w, o=opt: self._pick_choice(w, o, btns))
@@ -2660,10 +2897,33 @@ class Language(nbapp.AppWindow):
         bank_box.set_max_children_per_line(12)
         bank_box.set_homogeneous(False)
         body.pack_start(bank_box, False, False, 0)
+        # The tiles in the answer row ARE the answer. This used to keep the
+        # answer twice -- the tiles, and a parallel list of words -- and the two
+        # parted company the moment a repeated tile was taken back: removing a
+        # word from a list drops its FIRST copy, while the screen loses the tile
+        # that was tapped. A sentence with a word in it twice then read
+        # correctly on screen and was graded wrong, costing a heart and the
+        # skill's crown. `chosen` is kept, refreshed from the row, for the
+        # Check button.
         self._bank_state = {"chosen": []}
 
+        def built():
+            """The words the answer row spells, left to right."""
+            out = []
+            for ch in answer_box.get_children():
+                b = ch.get_child() if isinstance(ch, Gtk.FlowBoxChild) else ch
+                if isinstance(b, Gtk.Button):
+                    # The WORD this tile was built from, not the text the
+                    # widget ended up holding: the label is translatable, and
+                    # a bank word that collided with a catalog key would have
+                    # been read back translated and graded wrong.
+                    out.append(getattr(b, "_word", None) or b.get_label() or "")
+            return out
+
         def add_tile(container, word, from_bank):
-            b = Gtk.Button(label=word)
+            b = Gtk.Button()
+            b._word = word              # what this tile MEANS, for built()
+            _set_course_text(b, word)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("banktile")
             b.connect("clicked", lambda w: move(w, word, from_bank))
@@ -2674,23 +2934,16 @@ class Language(nbapp.AppWindow):
             if self._graded:        # the answer is in; don't let it be edited
                 return
             parent = widget.get_parent()   # FlowBoxChild
-            if from_bank:
-                self._bank_state["chosen"].append(word)
-                widget.destroy() if parent is None else parent.destroy()
-                add_tile(answer_box, word, False)
-            else:
-                if word in self._bank_state["chosen"]:
-                    self._bank_state["chosen"].remove(word)
-                parent.destroy() if parent else widget.destroy()
-                add_tile(bank_box, word, True)
+            parent.destroy() if parent else widget.destroy()
+            add_tile(answer_box if from_bank else bank_box, word, not from_bank)
+            self._bank_state["chosen"] = built()
             self._arm_check(bool(self._bank_state["chosen"]))
 
         for word in ex["bank"]:
             add_tile(bank_box, word, True)
         body.pack_start(Gtk.Box(), True, True, 0)
         self._check_footer(body, lambda: self._grade(
-            _norm(" ".join(self._bank_state["chosen"])) == _norm(ex["answer"]),
-            ex))
+            _norm(" ".join(built())) == _norm(ex["answer"]), ex))
 
     # ---- exercise: match pairs ----
     def _ex_match(self, body, ex):
@@ -2710,7 +2963,9 @@ class Language(nbapp.AppWindow):
         random.shuffle(tvals)
         random.shuffle(evals)
         for text, idx, ipa in tvals:
-            b = Gtk.Button(label=text)
+            b = Gtk.Button()
+            b._word = text
+            _set_course_text(b, text)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("matchtile")
             if ipa:
@@ -2718,15 +2973,21 @@ class Language(nbapp.AppWindow):
                 # whole transcription uses one phonetic typeface (the UI face
                 # carries no IPA extensions, so an unpinned transcription would
                 # be assembled from two type designs by the fallback).
-                b.get_child().set_markup(
-                    GLib.markup_escape_text(text)
-                    + '\n<span face="DejaVu Sans" size="small">/'
-                    + GLib.markup_escape_text(ipa) + '/</span>')
+                # The stamp has to carry the MARKUP string: _t_markup
+                # translates each text run inside it, so stamping the plain
+                # word left the marked-up copy of that same word unprotected.
+                _markup = (GLib.markup_escape_text(text)
+                           + '\n<span face="DejaVu Sans" size="small">/'
+                           + GLib.markup_escape_text(ipa) + '/</span>')
+                nbi18n.set_verbatim(b.get_child(), _markup)
+                b.get_child().set_markup(_markup)
                 b.get_child().set_justify(Gtk.Justification.CENTER)
             b.connect("clicked", lambda w, i=idx: self._match_tap(w, i, "t"))
             left.pack_start(b, False, False, 0)
         for text, idx in evals:
-            b = Gtk.Button(label=text)
+            b = Gtk.Button()
+            b._word = text
+            _set_course_text(b, text)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("matchtile")
             b.connect("clicked", lambda w, i=idx: self._match_tap(w, i, "e"))
@@ -2818,7 +3079,7 @@ class Language(nbapp.AppWindow):
         L = self._lesson
         L["answered"] += 1
         if ex.get("term"):
-            self._bump_strength(ex["term"], ok)
+            self._bump_strength(ex["term"], ok, ex.get("lex"))
         self._mark_choices(ok, ex)
         if ok:
             L["combo"] += 1
@@ -2831,7 +3092,15 @@ class Language(nbapp.AppWindow):
         L["wrong"] += 1
         answer = ex.get("answer") or ""
         if ex.get("term") and ex["kind"] != "match":
-            L["missed"].append((ex.get("prompt") or ex["term"], answer))
+            if ex["kind"] == "listen":
+                # A listening exercise's prompt IS the transcription, so this
+                # row read as bare IPA in the interface face -- the one place
+                # in the app a transcription is shown without /slashes/, its
+                # word, or what it means.
+                L["missed"].append((ex["term"], ex.get("meaning") or answer,
+                                    ex.get("prompt") or ""))
+            else:
+                L["missed"].append((ex.get("prompt") or ex["term"], answer))
         if L["kind"] != "practice":
             left = self._lose_heart()
             self._refresh_lesson_hearts()
@@ -2867,7 +3136,7 @@ class Language(nbapp.AppWindow):
             try:
                 c = b.get_style_context()
                 c.remove_class("choicesel")
-                label = _norm(b.get_label() or "")
+                label = _norm(getattr(b, "_word", None) or b.get_label() or "")
                 if label in accepted:
                     c.add_class("choiceright")
                 elif not ok and label == picked:
@@ -2978,6 +3247,7 @@ class Language(nbapp.AppWindow):
     def _lesson_complete(self):
         self._cancel_lesson_callbacks()
         L = self._lesson
+        progress_before = copy.deepcopy(self.progress)
         code = self.course["code"]
         # remember the words we just introduced so a later lesson doesn't
         # re-teach them
@@ -3032,7 +3302,13 @@ class Language(nbapp.AppWindow):
         hit_goal = self._award_xp(xp)
         new_awards = [n for k, _m, n, _w, _t2 in AWARDS
                       if self._award_level(k)[0] > before_awards[k]]
-        self._save_progress()
+        if not self._save_progress():
+            # Completion is a durable boundary.  Keep the finished lesson
+            # available for retry and restore every crown/test/XP mutation;
+            # never replace it with a misleading success screen.
+            self.progress = progress_before
+            self._toast(_t("Not saved"))
+            return
         self._lesson = None
 
         if L["kind"] == "test" and not passed:
@@ -3111,12 +3387,22 @@ class Language(nbapp.AppWindow):
             grid.set_row_spacing(3)
             grid.set_halign(Gtk.Align.CENTER)
             shown, done = 0, set()
-            for prompt, answer in L["missed"]:
+            for row in L["missed"]:
+                prompt, answer = row[0], row[1]
+                ipa = row[2] if len(row) > 2 else ""
                 if (prompt, answer) in done or shown >= 6:
                     continue
                 done.add((prompt, answer))
                 a = Gtk.Label(label=prompt, xalign=1)
                 a.get_style_context().add_class("misspro")
+                if ipa:
+                    # the transcription pinned to DejaVu Sans and shown in
+                    # slashes, as it is on every other surface (_ex_match,
+                    # _prompt_block): the UI face carries no IPA extensions.
+                    a.set_markup(
+                        GLib.markup_escape_text(prompt)
+                        + '  <span face="DejaVu Sans" size="small">/'
+                        + GLib.markup_escape_text(ipa) + '/</span>')
                 b = Gtk.Label(label=answer, xalign=0)
                 b.get_style_context().add_class("missans")
                 grid.attach(a, 0, shown, 1, 1)
@@ -3228,11 +3514,15 @@ class Language(nbapp.AppWindow):
         return super().menu_items(name)
 
     def _toggle_hearts(self):
+        before = copy.deepcopy(self.progress)
         on = not self.progress.get("hearts_on", True)
         self.progress["hearts_on"] = on
         if on:
             self._fill_hearts()
-        self._save_progress()
+        if not self._save_progress():
+            # Turning hearts on refills the count and resets its timer too, so
+            # restore the complete profile rather than only the switch.
+            self.progress = before
         self._refresh_after_setting()
 
     def _refresh_after_setting(self):
@@ -3328,9 +3618,21 @@ class Language(nbapp.AppWindow):
         if self._dialog(_t("Daily Goal"),
                         _t("The streak counts a day once this much XP is "
                            "banked."), _t("Set"), rows=rows):
-            self.progress["goal"] = picked["v"]
-            self._save_progress()
+            self._set_goal(picked["v"])
+
+    def _set_goal(self, goal):
+        """Persist the daily goal, restoring the durable goal on failure."""
+        previous = self.progress.get("goal")
+        self.progress["goal"] = goal
+        if not self._save_progress():
+            if previous is None:
+                self.progress.pop("goal", None)
+            else:
+                self.progress["goal"] = previous
             self._refresh_after_setting()
+            return False
+        self._refresh_after_setting()
+        return True
 
     def _reset_progress(self):
         """Wiping every crown, the XP and the streak has no undo, so ask first.
@@ -3344,9 +3646,14 @@ class Language(nbapp.AppWindow):
             return
         keep_goal = self._goal()
         keep_hearts = self.progress.get("hearts_on", True)
+        before = copy.deepcopy(self.progress)
         self.progress = self.norm_progress({"goal": keep_goal,
                                             "hearts_on": keep_hearts})
-        self._save_progress()
+        if not self._save_progress():
+            self.progress = before
+            self._refresh_home_stats()
+            self._refresh_after_setting()
+            return
         self._refresh_home_stats()
         self._refresh_after_setting()
 
@@ -3362,7 +3669,7 @@ class Language(nbapp.AppWindow):
         * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .homepage, stack { background: #FCFBF8; }
         .hometitle { font-size: 24px; font-weight: 700; color: #1A1916; }
-        .homesub { font-size: 13px; color: #9A9484; }
+        .homesub { font-size: 13px; color: #6E695E; }
         .statchip { background: #F1EEE6; border: 1px solid #D7D2C5;
                     border-radius: 100px; padding: 4px 11px; }
         .statchiptext { font-size: 12px; color: #3A362E; }
@@ -3383,7 +3690,7 @@ class Language(nbapp.AppWindow):
                      background: #4F7A3A; border-radius: 50%;
                      min-width: 54px; min-height: 54px; padding: 0; }
         .coursename { font-size: 17px; font-weight: 600; color: #1A1916; }
-        .coursefrom { font-size: 11px; color: #9A9484; }
+        .coursefrom { font-size: 11px; color: #6E695E; }
         .coursemeta { font-size: 11px; color: #6E695E; margin-top: 4px; }
         .cardprog trough { min-height: 6px; background: #DED4C2;
                            border-radius: 100px; border: none; }
@@ -3432,8 +3739,8 @@ class Language(nbapp.AppWindow):
         .coursebar { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                      padding: 9px 14px; }
         .coursetitle { font-size: 16px; font-weight: 600; color: #1A1916; }
-        .coursenote { font-size: 12px; color: #9A9484; margin-left: 4px; }
-        .heartwait { font-size: 11px; color: #9A9484; margin-left: 4px; }
+        .coursenote { font-size: 12px; color: #6E695E; margin-left: 4px; }
+        .heartwait { font-size: 11px; color: #6E695E; margin-left: 4px; }
         /* --- the path --- */
         .unitbanner { border-radius: 12px; padding: 11px 14px; }
         .unittitle { font-size: 13px; letter-spacing: 0.09em;
@@ -3445,8 +3752,8 @@ class Language(nbapp.AppWindow):
         .testnode { background: #FCFBF8; border: 3px solid #C9C4B6;
                     border-radius: 12px; }
         .skillname { font-size: 12px; font-weight: 600; color: #3A362E; }
-        .skillnamelocked { color: #9A9484; font-weight: 400; }
-        .skilllevel { font-size: 10px; color: #9A9484; }
+        .skillnamelocked { color: #6E695E; font-weight: 400; }
+        .skilllevel { font-size: 10px; color: #6E695E; }
         .toastshown { font-size: 13px; color: #FCFBF8; background: #3A362E;
                       border-radius: 100px; padding: 8px 18px; }
         /* --- the card over the path --- */
@@ -3455,7 +3762,7 @@ class Language(nbapp.AppWindow):
                      border-radius: 12px; padding: 22px 26px; }
         .cardtitle { font-size: 20px; font-weight: 700; color: #1A1916; }
         .cardsub { font-size: 13px; color: #6E695E; }
-        .cardmeta { font-size: 12px; color: #9A9484; }
+        .cardmeta { font-size: 12px; color: #6E695E; }
         .cardsecond { font-size: 14px; padding: 9px 18px; border-radius: 6px;
                       background: #FCFBF8; border: 1px solid #C9C4B6;
                       box-shadow: none; }
@@ -3464,8 +3771,8 @@ class Language(nbapp.AppWindow):
         /* --- pages --- */
         .pagesub { font-size: 13px; color: #6E695E; }
         .sectionhead { font-size: 12px; letter-spacing: 0.07em;
-                       font-weight: 700; color: #9A9484; }
-        .emptynote { font-size: 13px; color: #9A9484; }
+                       font-weight: 700; color: #6E695E; }
+        .emptynote { font-size: 13px; color: #6E695E; }
         .tipcard { background: #F4F2EC; border-radius: 6px;
                    padding: 14px 16px; }
         .tiph { font-size: 15px; font-weight: 700; color: #1A1916; }
@@ -3479,14 +3786,14 @@ class Language(nbapp.AppWindow):
         .vocabrow { padding: 6px 4px; border-bottom: 1px solid #D7D2C5; }
         .vocabt { font-size: 14px; font-weight: 600; color: #1A1916; }
         .vocabe { font-size: 13px; color: #3A362E; }
-        .vocabnote { font-size: 11px; color: #9A9484; }
-        .vocabnew { font-size: 11px; color: #B3AD9E; }
+        .vocabnote { font-size: 11px; color: #6E695E; }
+        .vocabnew { font-size: 11px; color: #6E695E; }
         .pipon { background: #4F7A3A; border-radius: 4px; }
         .pipoff { background: #DED4C2; border-radius: 4px; }
         .awardrow { padding: 10px 4px; border-bottom: 1px solid #D7D2C5; }
         .awardname { font-size: 15px; font-weight: 600; color: #1A1916; }
-        .awardlevel { font-size: 11px; color: #B8912E; font-weight: 600; }
-        .awardlocked { font-size: 11px; color: #B3AD9E; }
+        .awardlevel { font-size: 11px; color: #4F7A3A; font-weight: 600; }
+        .awardlocked { font-size: 11px; color: #6E695E; }
         .awarddetail { font-size: 12px; color: #6E695E; }
         /* --- lesson --- */
         .lessonbar { padding: 12px 16px; }
@@ -3494,7 +3801,7 @@ class Language(nbapp.AppWindow):
                              border-radius: 6px; border: none; }
         .lessonprog progress { min-height: 12px; background: #4F7A3A;
                                border-radius: 6px; border: none; }
-        .exask { font-size: 13px; letter-spacing: 0.06em; color: #9A9484;
+        .exask { font-size: 13px; letter-spacing: 0.06em; color: #6E695E;
                  font-weight: 700; }
         .exprompt { font-size: 24px; font-weight: 600; color: #1A1916; }
         .exhint { font-size: 13px; color: #6E695E; font-style: italic; }
@@ -3517,7 +3824,7 @@ class Language(nbapp.AppWindow):
            well as gender marks and derivations, and Han glyphs need the extra
            couple of pixels to stay readable. */
         .exnote { font-size: 15px; color: #6E695E; }
-        .exlit { font-size: 13px; color: #9A9484; font-style: italic; }
+        .exlit { font-size: 13px; color: #6E695E; font-style: italic; }
         .exentry { font-size: 17px; padding: 10px 12px; border-radius: 4px;
                    border: 1px solid #C9C4B6; background: #FCFBF8; }
         .choicebtn { font-size: 16px; padding: 12px 16px; border-radius: 6px;

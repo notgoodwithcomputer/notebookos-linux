@@ -27,9 +27,18 @@ import bisect      # noqa: E402
 import nbapp       # noqa: E402
 import nbicons     # noqa: E402
 import nbmotion    # noqa: E402
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 MAPS_DIR = "/opt/notebook/maps"
+# The live installation medium, which the live init mounts read-only and leaves
+# mounted for the whole session. Big packs (a continent is 2.7 GB) ride the ISO
+# as plain files at /maps rather than inside the squashfs root — the ISO carries
+# that root twice, so an in-root pack would be stored twice — which makes this
+# the place North America actually IS during a live session. There is no such
+# directory on an installed machine: the installer copies the packs to
+# /data/maps as it installs, so they keep working once the stick is unplugged.
+LIVE_MAPS_DIR = "/run/live/medium/maps"
 
 
 # Every string on this canvas goes through Pango, never cairo's toy text API
@@ -85,7 +94,58 @@ LAND = (0.96, 0.95, 0.92)
 MINZOOM = {1: 0, 4: 0, 5: 0, 9: 0, 10: 0, 7: 0, 8: 2500, 2: 7000, 3: 18000, 0: 8000}
 LABEL_MINZOOM = {1: 0, 2: 1400, 3: 6000, 4: 16000, 5: 9000}
 LABEL_SIZE = {1: 15, 2: 13, 3: 11, 4: 10, 5: 11}
+
+# A view's ZOOM TIER: how many of the distinct MINZOOM thresholds its scale has
+# passed. The tier -- not the scale -- decides which categories are drawn, so it
+# is also what the reader keys its cell cache on and what it tells the parser to
+# SKIP. That skip is the single biggest lever in this app: a dense-city cell
+# holds ~35k features and a regional view draws 6% of them, so decoding the
+# other 94% into Python objects was ~85% of every frame.
+_ZOOM_STEPS = tuple(sorted({z for z in MINZOOM.values() if z > 0}))
+# tier -> the categories that are hidden at it. A scale in tier t sits in
+# [_ZOOM_STEPS[t-1], _ZOOM_STEPS[t]), so a category is hidden exactly when its
+# threshold is above the tier's floor. Categories with no MINZOOM entry (place
+# labels, anything a future encoder adds) are never hidden.
+_TIER_HIDDEN = tuple(
+    frozenset(c for c, mz in MINZOOM.items()
+              if mz > (_ZOOM_STEPS[t - 1] if t else 0))
+    for t in range(len(_ZOOM_STEPS) + 1))
+
+
+def _zoom_tier(scale):
+    t = 0
+    for z in _ZOOM_STEPS:
+        if scale >= z:
+            t += 1
+    return t
+
+
+MAX_ROAD_LABELS = 80      # bounded so a dense downtown cannot stall a frame
+MAX_LABEL_CANDIDATES = 700
+# Categories whose NAME is worth drawing on the map: roads and paths get their
+# name set along the line, water and green areas across their middle. The pack
+# has carried a name per feature since the first encoder — the renderer simply
+# never drew any of them, so a street map of Chicago came out as correct,
+# handsome, unlabelled geometry that you cannot navigate by.
+LABELLED_CATS = frozenset((1, 2, 3, 4, 5, 7, 9))
+AREA_LABEL_CATS = frozenset((4, 7))
+ROAD_LABEL_SIZE = {1: 12, 2: 11, 3: 10, 5: 10, 9: 10}
+LABEL_INK_ROAD = (0.20, 0.19, 0.17)
+LABEL_INK_AREA = (0.30, 0.36, 0.26)
 MAXCELLS = 200          # zoom-out is clamped so a view never spans more than this
+PACK_COMPRESSED_MAX = 32 * 1024 * 1024
+PACK_CELL_MAX = 32 * 1024 * 1024
+PACK_PLACES_MAX = 64 * 1024 * 1024
+PACK_PLACES_COUNT_MAX = 500000
+
+
+def _lzma_limited(data, limit):
+    """Decompress one pack member without allowing an expansion bomb."""
+    dec = lzma.LZMADecompressor()
+    raw = dec.decompress(data, max_length=limit + 1)
+    if len(raw) > limit or not dec.eof:
+        raise ValueError("map member expands past its limit")
+    return raw
 
 
 def _merc(lat, lon):
@@ -115,11 +175,117 @@ def _rz(buf, i):                          # read zigzag varint
     return (v >> 1) ^ -(v & 1), i
 
 
+def _rev_flat(pts):
+    """A flat [lat, lon, lat, lon, ...] list, point order reversed."""
+    out = []
+    for k in range(len(pts) - 2, -1, -2):
+        out.append(pts[k])
+        out.append(pts[k + 1])
+    return out
+
+
+def _join_ways(fs):
+    """Chain features that meet end to end into the longest lines they make.
+
+    Called on the ways that share one name, so the result is that street as a
+    street rather than as the block-by-block pieces OSM stores. Endpoints are
+    quantised integers straight out of the pack, so ways meeting at a junction
+    compare EQUAL — no tolerance, no rounding, and nothing joined that does not
+    actually touch."""
+    # A pointless feature is dropped here rather than indexed into: a pack with
+    # a zero point count is a pack this must not raise on, because the caller is
+    # the draw handler.
+    fs = [f for f in fs if len(f[3]) >= 2]
+    if not fs:
+        return []
+    if len(fs) == 1:
+        return [fs[0][3]]
+    ends = {}
+    for i, f in enumerate(fs):
+        p = f[3]
+        ends.setdefault((p[0], p[1]), []).append(i)
+        ends.setdefault((p[-2], p[-1]), []).append(i)
+    used = [False] * len(fs)
+    out = []
+    for i in range(len(fs)):
+        if used[i]:
+            continue
+        used[i] = True
+        pts = list(fs[i][3])
+        # Grow from the tail; then reverse and grow from what was the head, so
+        # a way picked up in the middle of a street still reaches both ends.
+        for _side in (0, 1):
+            while True:
+                tail = (pts[-2], pts[-1])
+                nxt = None
+                for j in ends.get(tail, ()):
+                    if not used[j]:
+                        nxt = j
+                        break
+                if nxt is None:
+                    break
+                used[nxt] = True
+                w = fs[nxt][3]
+                if (w[0], w[1]) == tail:
+                    pts.extend(w[2:])
+                else:
+                    pts.extend(_rev_flat(w)[2:])
+            pts = _rev_flat(pts)
+        out.append(pts)
+    return out
+
+
+def _straight_run(P, tol=0.34):
+    """The longest nearly-straight run of a projected polyline, as
+    ((x0, y0), (x1, y1), chord_length).
+
+    A name has to sit on a straight piece of road: set across a bend it reads
+    as crossing the street rather than naming it. A run is extended while each
+    new segment stays within `tol` radians (~20 degrees) of the run's own
+    direction, which keeps a gently curving avenue in one piece and cuts at a
+    real corner."""
+    n = len(P)
+    if n < 2:
+        return None
+    best = None
+    bestlen = -1.0
+    i0 = 0
+    for i in range(1, n):
+        x, y = P[i]
+        px, py = P[i - 1]
+        if i - i0 >= 2:
+            dx = x - px
+            dy = y - py
+            cx = px - P[i0][0]
+            cy = py - P[i0][1]
+            dot = dx * cx + dy * cy
+            if dot <= 0 or abs(dx * cy - dy * cx) > tol * dot:
+                i0 = i - 1                  # the run bends here: start a new one
+        ax, ay = P[i0]
+        d = math.hypot(x - ax, y - ay)
+        if d > bestlen:
+            bestlen = d
+            best = ((ax, ay), (x, y))
+    if best is None:
+        return None
+    return best[0], best[1], bestlen
+
+
 class NBM2:
     """Streaming .nbm2 reader: header + directory in RAM; cells decoded on
     demand (mercator-projected) with a small LRU cache; a places index for
     search and low-zoom labels."""
     CACHE = 64
+    # A ceiling on the DIRECTORY, so a pack claiming a wild cell count cannot
+    # make the reader allocate its way to death before the first cell is drawn.
+    # It has to clear the real packs by a wide margin: North America is 272,226
+    # cells at 0.1 degrees, and this was set to 250,000 -- UNDER the one pack the
+    # app ships and documents, so Maps refused the continent outright ("map
+    # directory is too large") and the release image would have shipped with the
+    # bundled map unopenable. A limit that no real input may reach is the only
+    # kind worth having; the truncation check below is what actually bounds this
+    # against the file, and 1,000,000 cells is a 20 MB directory.
+    MAX_DIRECTORY_CELLS = 1000000
 
     def __init__(self, path):
         """Read the header + directory. Raises ValueError — and ONLY ValueError,
@@ -149,12 +315,24 @@ class NBM2:
             (ncells,) = struct.unpack("<I", f.read(4))
             self.places_off, self.places_zlen, self.places_cnt = \
                 struct.unpack("<QII", f.read(16))
+            if (not all(math.isfinite(v) for v in
+                        (self.minlat, self.minlon, self.maxlat, self.maxlon,
+                         self.cell_deg))
+                    or self.cell_deg <= 0 or self.quant <= 0
+                    or self.minlat >= self.maxlat
+                    or self.minlon >= self.maxlon):
+                raise ValueError("map header has invalid bounds or scale")
+            if ncells > self.MAX_DIRECTORY_CELLS:
+                raise ValueError("map directory is too large")
+            directory_end = f.tell() + ncells * 20
+            if directory_end > os.fstat(f.fileno()).st_size:
+                raise ValueError("map directory is truncated")
             self.dir = {}
             for _ in range(ncells):
                 cy, cx, off, zl = struct.unpack("<iiQI", f.read(20))
+                if (cy, cx) in self.dir:
+                    raise ValueError("map directory has duplicate cells")
                 self.dir[(cy, cx)] = (off, zl)
-            if not self.cell_deg:
-                raise ValueError("pack declares a zero cell size")
         except ValueError:
             raise
         except Exception as exc:      # struct.error, MemoryError from a bad count
@@ -164,27 +342,66 @@ class NBM2:
         self._order = []
         self._places = None
 
-    def cell(self, cy, cx):
-        """The features in one cell, or () when it holds none — or when its
-        payload is unreadable.
+    def close(self):
+        """Release the pack handle; safe across repeated teardown paths."""
+        f, self.f = getattr(self, "f", None), None
+        if f is not None:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+    def cell(self, cy, cx, tier=None):
+        """The features in one cell that are DRAWN AT `tier`, or () when it
+        holds none — or when its payload is unreadable.
+
+        `tier` is a zoom tier from _zoom_tier(); the features of categories that
+        tier hides are skipped in the parser instead of being decoded and then
+        thrown away by the renderer. The cache is keyed by tier as well as by
+        cell, because the answer differs between them: a tier-0 decode of a cell
+        is not a valid tier-4 answer. Passing None decodes everything, which is
+        what an inspector or a test that just wants the contents wants.
 
         A corrupt payload must NOT raise: this is called from the draw handler,
         once per visible cell per frame, so a raise here would be a traceback on
         every repaint for as long as the window stayed open. The empty answer is
         cached like any other, so a damaged cell is decoded once and then costs
         nothing."""
-        key = (cy, cx)
+        key = (cy, cx, tier)
         c = self._cache.get(key)
         if c is not None:
             return c
-        loc = self.dir.get(key)
+        # A tier's features are a SUBSET of any more complete decode of the same
+        # cell, so a cached higher tier answers this by filtering — no seek, no
+        # decompress, no parse. Without this, zooming back OUT re-read cells that
+        # were already in hand, which the old un-tiered cache never had to do.
+        if tier is not None:
+            hidden = _TIER_HIDDEN[tier]
+            for t2 in list(range(len(_TIER_HIDDEN) - 1, tier, -1)) + [None]:
+                got = self._cache.get((cy, cx, t2))
+                if got is not None:
+                    feats = [f for f in got if f[0] not in hidden]
+                    self._cache[key] = feats
+                    self._order.append(key)
+                    if len(self._order) > self.CACHE:
+                        old = self._order.pop(0)
+                        if old != key:
+                            self._cache.pop(old, None)
+                    return feats
+        loc = self.dir.get((cy, cx))
         if loc is None:
             self._cache[key] = ()
             return ()
         off, zl = loc
         try:
+            if zl > PACK_COMPRESSED_MAX:
+                raise ValueError("compressed map cell is too large")
             self.f.seek(self.payload_base + off)
-            feats = self._parse(lzma.decompress(self.f.read(zl)))
+            data = self.f.read(zl)
+            if len(data) != zl:
+                raise ValueError("truncated map cell")
+            hidden = frozenset() if tier is None else _TIER_HIDDEN[tier]
+            feats = self._parse(_lzma_limited(data, PACK_CELL_MAX), hidden)
         except Exception:
             feats = ()
         self._cache[key] = feats
@@ -195,43 +412,120 @@ class NBM2:
                 self._cache.pop(old, None)
         return feats
 
-    def _parse(self, raw):
-        # Store lat/lon (not mercator): mercator projection is deferred to draw
-        # time, so the ~95% of a cell's features that get culled never pay for
-        # math.log/tan — ~1.75x faster decode, which matters on the guest.
-        q = self.quant
+    def _parse(self, raw, hidden=frozenset()):
+        """Decode one cell into (cat, flags, name, points, bbox) tuples.
+
+        THIS IS THE HOT LOOP OF THE WHOLE APP — it was 85% of every frame at
+        every zoom — so it is written against CPython's costs rather than for
+        looks:
+
+        * the varint reader is INLINED. _rv/_rz cost two Python calls per
+          coordinate, and a dense-city view decodes ~900k coordinates, so the
+          call overhead alone outweighed the arithmetic.
+        * points stay QUANTISED INTEGERS in a FLAT list, not float pairs in
+          tuples. That drops one divide and one tuple allocation per point;
+          draw-time divides by `quant` for the few features it actually draws.
+        * a feature whose category `hidden` lists is SKIPPED without its
+          geometry ever being decoded — the byte scan just counts varint
+          terminators past it. Categories, not geometry, are what a zoom tier
+          selects on, so the renderer would have discarded every one of these.
+
+        Points are lat/lon, not mercator: projecting at draw time means the
+        ~95% of features that get culled never pay for math.log/tan."""
         i = 0
-        n, i = _rv(raw, i)
+        shift = n = 0
+        while True:                                   # feature count
+            b = raw[i]
+            i += 1
+            n |= (b & 0x7F) << shift
+            if b < 0x80:
+                break
+            shift += 7
         out = []
+        append = out.append
         for _ in range(n):
             cat = raw[i]
             flags = raw[i + 1]
             i += 2
-            nl, i = _rv(raw, i)
-            nm = raw[i:i + nl].decode("utf-8", "replace") if nl else ""
-            i += nl
-            npts, i = _rv(raw, i)
+            shift = nl = 0
+            while True:                               # name length
+                b = raw[i]
+                i += 1
+                nl |= (b & 0x7F) << shift
+                if b < 0x80:
+                    break
+                shift += 7
+            if nl:
+                nm = raw[i:i + nl].decode("utf-8", "replace")
+                i += nl
+            else:
+                nm = ""
+            shift = npts = 0
+            while True:                               # point count
+                b = raw[i]
+                i += 1
+                npts |= (b & 0x7F) << shift
+                if b < 0x80:
+                    break
+                shift += 7
+
+            if cat in hidden:
+                # Not drawn at this zoom: step over 2*npts varints by counting
+                # terminator bytes. No ints, tuples or lists are built.
+                need = npts + npts
+                while need:
+                    if raw[i] < 0x80:
+                        need -= 1
+                    i += 1
+                continue
+
             pts = []
+            add = pts.append
             qla = qlo = 0
-            mnla = mnlo = 1e18
-            mxla = mxlo = -1e18
+            mnla = mnlo = 1 << 62
+            mxla = mxlo = -(1 << 62)
             for _p in range(npts):
-                dla, i = _rz(raw, i)
-                dlo, i = _rz(raw, i)
-                qla += dla
-                qlo += dlo
-                la = qla / q
-                lo = qlo / q
-                pts.append((la, lo))
-                if la < mnla:
-                    mnla = la
-                if la > mxla:
-                    mxla = la
-                if lo < mnlo:
-                    mnlo = lo
-                if lo > mxlo:
-                    mxlo = lo
-            out.append((cat, flags, nm, pts, (mnla, mnlo, mxla, mxlo)))
+                b = raw[i]                            # zigzag varint: dlat
+                i += 1
+                if b < 0x80:
+                    v = b
+                else:
+                    v = b & 0x7F
+                    shift = 7
+                    while True:
+                        b = raw[i]
+                        i += 1
+                        v |= (b & 0x7F) << shift
+                        if b < 0x80:
+                            break
+                        shift += 7
+                qla += (v >> 1) ^ -(v & 1)
+                b = raw[i]                            # zigzag varint: dlon
+                i += 1
+                if b < 0x80:
+                    v = b
+                else:
+                    v = b & 0x7F
+                    shift = 7
+                    while True:
+                        b = raw[i]
+                        i += 1
+                        v |= (b & 0x7F) << shift
+                        if b < 0x80:
+                            break
+                        shift += 7
+                qlo += (v >> 1) ^ -(v & 1)
+                add(qla)
+                add(qlo)
+                if qla < mnla:
+                    mnla = qla
+                if qla > mxla:
+                    mxla = qla
+                if qlo < mnlo:
+                    mnlo = qlo
+                if qlo > mxlo:
+                    mxlo = qlo
+            append((cat, flags, nm, pts, (mnla, mnlo, mxla, mxlo)))
         return out
 
     def places(self):
@@ -252,8 +546,15 @@ class NBM2:
         out = []
         try:
             if self.places_cnt:
+                if self.places_cnt > PACK_PLACES_COUNT_MAX:
+                    raise ValueError("place index contains too many records")
+                if self.places_zlen > PACK_COMPRESSED_MAX:
+                    raise ValueError("compressed place index is too large")
                 self.f.seek(self.payload_base + self.places_off)
-                raw = lzma.decompress(self.f.read(self.places_zlen))
+                data = self.f.read(self.places_zlen)
+                if len(data) != self.places_zlen:
+                    raise ValueError("truncated place index")
+                raw = _lzma_limited(data, PACK_PLACES_MAX)
                 i = 0
                 for _ in range(self.places_cnt):
                     rank = raw[i]
@@ -270,9 +571,32 @@ class NBM2:
         return out
 
 
+def _startup_packs(maps, cfg):
+    """Candidate paths in honest startup order, without trusting validity."""
+    if not maps:
+        return []
+    remembered = None
+    if isinstance(cfg, dict):
+        want = cfg.get("pack")
+        if isinstance(want, str) and any(path == want for _label, path in maps):
+            remembered = want
+
+    def _bytes(pair):
+        try:
+            return os.path.getsize(pair[1])
+        except OSError:
+            return -1
+
+    ordered = [path for _label, path in sorted(maps, key=_bytes, reverse=True)]
+    if remembered is not None:
+        ordered.remove(remembered)
+        ordered.insert(0, remembered)
+    return ordered
+
+
 def _startup_pack(maps, cfg):
     """The pack to open on launch: the one the config remembers, when it is
-    still installed, else the first one found.
+    still installed, else the LARGEST one installed.
 
     THE REMEMBERED PACK WAS ONLY EVER HONOURED BY ACCIDENT. Maps opened
     maps[0] and only THEN asked whether the config named that same file, so
@@ -283,18 +607,27 @@ def _startup_pack(maps, cfg):
     had left, so the place they had found was gone for good.
 
     A remembered name that is no longer installed (a pack deleted, or the
-    stick it lives on unplugged) falls back to the first, and anything in the
+    stick it lives on unplugged) falls back the same way, and anything in the
     config that is not a string is simply not a remembered pack.
+
+    WITH NOTHING REMEMBERED, SIZE DECIDES — not scan order. /opt/notebook/maps
+    ships a 44 KB sample of Monaco and is the first directory scanned, so "the
+    first one found" meant a machine carrying the whole of North America still
+    opened on one small town on the Riviera. From the desk that does not read
+    as a default worth changing; it reads as the map data not having loaded.
+    Size is the honest proxy for "the substantial one" here, and reading it is
+    a stat, not a decode of a 2.7 GB pack.
     """
-    if not maps:
-        return None
-    if isinstance(cfg, dict):
-        want = cfg.get("pack")
-        if isinstance(want, str):
-            for _label, path in maps:
-                if path == want:
-                    return path
-    return maps[0][1]
+    candidates = _startup_packs(maps, cfg)
+    return candidates[0] if candidates else None
+
+
+def _open_startup(app, maps, cfg):
+    """Try installed packs in preference order; damaged packs are skipped."""
+    for path in _startup_packs(maps, cfg):
+        if app._open_map(path):
+            return path
+    return None
 
 
 class Maps(nbapp.AppWindow):
@@ -324,11 +657,18 @@ class Maps(nbapp.AppWindow):
         self._view_anim = None
         self._view_gen = 0
         self._view_moving = False
+        self.connect("destroy", self._on_destroy)
 
         self.content.pack_start(self._toolbar(), False, False, 0)
         self.canvas = Gtk.DrawingArea()
         self.canvas.set_hexpand(True)
         self.canvas.set_vexpand(True)
+        self.canvas.set_can_focus(True)
+        self.canvas.set_tooltip_text(_t("Maps"))
+        try:
+            self.canvas.get_accessible().set_name(_t("Maps"))
+        except Exception:
+            pass
         self.canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK
                                | Gdk.EventMask.BUTTON_RELEASE_MASK
                                | Gdk.EventMask.POINTER_MOTION_MASK
@@ -338,13 +678,14 @@ class Maps(nbapp.AppWindow):
         self.canvas.connect("button-release-event", self._on_release)
         self.canvas.connect("motion-notify-event", self._on_motion)
         self.canvas.connect("scroll-event", self._on_scroll)
+        self.canvas.connect("key-press-event", self._on_canvas_key)
         self.content.pack_start(self.canvas, True, True, 0)
         self._status = Gtk.Label(label="", xalign=0)
         self._status.get_style_context().add_class("mapstatus")
         self.content.pack_start(self._status, False, False, 0)
 
         if self.maps:
-            self._open_map(_startup_pack(self.maps, self._load_cfg()))
+            _open_startup(self, self.maps, self._load_cfg())
         else:
             # Straight through, not deferred: the canvas and every field
             # _show_empty touches already exist here, so an idle source only
@@ -360,17 +701,23 @@ class Maps(nbapp.AppWindow):
 
     def _load_cfg(self):
         self._extra = {}
+        path = self._cfg_path()
+        self._cfg_writable = not os.path.exists(path)
         try:
-            with open(self._cfg_path()) as fh:
+            with open(path) as fh:
                 data = json.load(fh)
         except (OSError, ValueError):
+            moved = nbapp.preserve_damaged(path)
+            self._cfg_writable = bool(moved) or not os.path.exists(path)
             return {}
         if not isinstance(data, dict):
             # Valid JSON can still be unusable to this app.  The shared
             # parse-level damage guard cannot recognize a wrong top-level
             # shape, so move it aside before the next view-state save.
-            nbapp.quarantine_unrecognized(self._cfg_path())
+            moved = nbapp.quarantine_unrecognized(path)
+            self._cfg_writable = bool(moved) or not os.path.exists(path)
             return {}
+        self._cfg_writable = True
         known = {"pack", "cx", "cy", "scale", "_extra"}
         nested = data.get("_extra")
         if isinstance(nested, dict):
@@ -383,6 +730,18 @@ class Maps(nbapp.AppWindow):
     def _save_cfg(self):
         if not self.pack:
             return
+        # A valid-but-foreign store may still be sitting at this path when its
+        # protective quarantine failed (read-only media, permissions, full
+        # directory). Never replace the only copy with our fallback view.
+        if not getattr(self, "_cfg_writable", True):
+            path = self._cfg_path()
+            nbapp.quarantine_unrecognized(path)
+            if os.path.exists(path):
+                nbapp.note_save_failure(
+                    self, OSError("could not preserve unreadable map settings"),
+                    path)
+                return False
+            self._cfg_writable = True
         # Crash-safe write (temp + fsync + os.replace), the OS-wide pattern —
         # maps was the last persisted file still doing a bare open()+json.dump,
         # which truncates the config before writing. Low stakes (just the view
@@ -394,8 +753,10 @@ class Maps(nbapp.AppWindow):
                 {"pack": self.pack.path, "cx": self.cx,
                  "cy": self.cy, "scale": self.scale,
                  "_extra": getattr(self, "_extra", {})})
+            return True
         except Exception as exc:
             nbapp.note_save_failure(self, exc, self._cfg_path())
+            return False
 
     def _scan_maps(self):
         # /opt/notebook/maps ships the bundled default; large add-on packs (a
@@ -403,9 +764,13 @@ class Maps(nbapp.AppWindow):
         # the read-only squashfs root.
         out = []
         seen = set()
+        # Order is a preference, because `seen` keeps the FIRST pack of a given
+        # name: a copy on the machine's own disk beats the same pack on the
+        # installation medium, which may be a DVD or a slow USB stick.
         dirs = [MAPS_DIR,
                 os.path.join(os.environ.get("NB_HOME", "/root"), "maps"),
-                "/data/maps"]
+                "/data/maps",
+                LIVE_MAPS_DIR]
         for d in dirs:
             try:
                 names = sorted(os.listdir(d))
@@ -425,8 +790,7 @@ class Maps(nbapp.AppWindow):
             self._region = Gtk.ComboBoxText()
             for label, path in self.maps:
                 self._region.append(path, label.replace("-", " ").title())
-            self._region.connect("changed",
-                                  lambda c: self._open_map(c.get_active_id()))
+            self._region.connect("changed", self._on_region_changed)
             bar.pack_start(self._region, False, False, 0)
         self._search = Gtk.Entry()
         self._search.set_placeholder_text(_t("Search cities and towns…"))
@@ -440,13 +804,38 @@ class Maps(nbapp.AppWindow):
         sb.connect("clicked", lambda *_: self._do_search())
         bar.pack_start(sb, False, False, 0)
         bar.pack_start(Gtk.Box(), True, True, 0)
-        for lbl, d in (("−", 0.7), ("+", 1.4)):
+        for lbl, d, action in (("−", 0.7, _t("Zoom out")),
+                               ("+", 1.4, _t("Zoom in"))):
             b = Gtk.Button(label=lbl)
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("mapzoom")
+            b.set_tooltip_text(action)
+            b.get_accessible().set_name(action)
             b.connect("clicked", lambda _w, f=d: self._zoom(f))
             bar.pack_end(b, False, False, 0)
         return bar
+
+    def _on_region_changed(self, combo):
+        """Persist a successfully selected pack even without a later pan."""
+        if getattr(self, "_changing_region", False):
+            return
+        path = combo.get_active_id()
+        if not path:
+            return
+        old_path = getattr(getattr(self, "pack", None), "path", None)
+        if self._open_map(path):
+            self._save_cfg()
+            return
+        # _open_map deliberately kept the old canvas. Keep the selector in
+        # agreement with it as well, without recursively reopening the pack.
+        self._changing_region = True
+        try:
+            if old_path:
+                combo.set_active_id(old_path)
+            else:
+                combo.set_active(-1)
+        finally:
+            self._changing_region = False
 
     # ================= map load / view =================
     def _open_map(self, path):
@@ -457,8 +846,11 @@ class Maps(nbapp.AppWindow):
             self._view_anim.cancel()
             self._view_anim = None
         self._view_moving = False
+        old = self.pack
+        candidate = None
         try:
-            self.pack = NBM2(path)
+            candidate = NBM2(path)
+            self.pack = candidate
             self._position_for(path)
         except Exception:
             # EVERYTHING, because this runs from __init__: a pack that fails in
@@ -468,24 +860,47 @@ class Maps(nbapp.AppWindow):
             # all; this is the backstop for whatever is left.
             # A truncated or corrupt pack (a half-copied continent, say) used to
             # leave a blank sheet of paper and not one word about why.
-            self.pack = None
+            if candidate is not None:
+                candidate.close()
+            self.pack = old
             # Name the file AND the way out: "damaged or incomplete" on its own
             # tells a reader what went wrong and nothing about what to do, and
             # the usual cause here is a copy that was interrupted. The second
             # sentence is the SAME line the no-maps state already uses, so the
             # instruction is one wording in every language rather than two.
-            self._empty = (
+            problem = (
                 _t("This map could not be read"),
                 (_t("The file %s is damaged or incomplete.")
                  % os.path.basename(path)) + " "
                 + _t("Map files are read from the Maps folder in Home."))
+            # A bad choice must not blank the valid region already on screen.
+            # Keep that map visible and put the failure in its status strip;
+            # on startup there is no old map, so the full empty card remains.
+            self._empty = problem if old is None else None
+            if old is not None:
+                try:
+                    self._status.set_text(problem[0] + ". " + problem[1])
+                except Exception:
+                    pass
             self._invalidate()
             self.canvas.queue_draw()
-            return
+            return False
+        if old is not None and old is not candidate:
+            old.close()
         self._empty = None
         self._hi = None
         self._invalidate()
         self.canvas.queue_draw()
+        return True
+
+    def _on_destroy(self, *_):
+        if self._view_anim is not None:
+            self._view_anim.cancel()
+            self._view_anim = None
+        pack, self.pack = self.pack, None
+        if pack is not None:
+            pack.close()
+        return False
 
     def _position_for(self, path):
         """Point the view at the freshly-opened pack: the remembered position if
@@ -778,12 +1193,18 @@ class Maps(nbapp.AppWindow):
         cy0, cy1, cx0, cx1, (vla0, vlo0, vla1, vlo1) = \
             self._visible_cells(aw, ah)
 
-        areas, lines, roads, labels = [], [], [], []
+        # Cull against the view in QUANTISED units, the form the parser leaves
+        # points in, so the comparison costs no conversion per feature.
+        q = self.pack.quant
+        qla0, qlo0 = vla0 * q, vlo0 * q
+        qla1, qlo1 = vla1 * q, vlo1 * q
+        tier = _zoom_tier(scale)
+        areas, lines, roads, labels, named = [], [], [], [], []
         for ccy in range(cy0, cy1 + 1):
             for ccx in range(cx0, cx1 + 1):
                 if (ccy, ccx) not in self.pack.dir:
                     continue
-                for f in self.pack.cell(ccy, ccx):
+                for f in self.pack.cell(ccy, ccx, tier):
                     cat = f[0]
                     if cat == 11:
                         if scale >= LABEL_MINZOOM.get(f[1], 1e9):
@@ -791,8 +1212,8 @@ class Maps(nbapp.AppWindow):
                         continue
                     if scale < MINZOOM.get(cat, 0):
                         continue
-                    bla0, blo0, bla1, blo1 = f[4]      # feature lat/lon bbox
-                    if bla1 < vla0 or bla0 > vla1 or blo1 < vlo0 or blo0 > vlo1:
+                    bla0, blo0, bla1, blo1 = f[4]      # quantised lat/lon bbox
+                    if bla1 < qla0 or bla0 > qla1 or blo1 < qlo0 or blo0 > qlo1:
                         continue
                     kind = STYLE.get(cat, STYLE[0])[0]
                     if kind == "fill":
@@ -801,19 +1222,44 @@ class Maps(nbapp.AppWindow):
                         roads.append(f)
                     else:
                         lines.append(f)
+                    if f[2] and cat in LABELLED_CATS:
+                        named.append(f)
+
+        # Hoisted into locals: build() runs once per drawn feature and the
+        # projection runs once per POINT, and an attribute lookup per point is
+        # not free at this count.
+        iq = 1.0 / q
+        scx, scy = self.cx, self.cy
+        hw, hh = aw / 2.0, ah / 2.0
+        move_to, line_to = cr.move_to, cr.line_to
+        log, tan, radians, degrees = math.log, math.tan, math.radians, math.degrees
+        qpi = math.pi / 4
+        qlat_max = int(85.0 * q)
 
         def build(pts):
             cr.new_path()
+            k = 0
+            npt = len(pts)
             first = True
-            for la, lo in pts:                 # project lat/lon here (deferred)
-                my = _merc(la, lo)[1]
-                sx = (lo - self.cx) * scale + aw / 2
-                sy = (self.cy - my) * scale + ah / 2
+            while k < npt:
+                ila = pts[k]
+                # Clamp in quantised space: a damaged pack can hold a latitude
+                # past the pole, where log(tan(...)) takes the log of a negative
+                # number and RAISES — inside the draw handler, on every repaint.
+                if ila > qlat_max:
+                    ila = qlat_max
+                elif ila < -qlat_max:
+                    ila = -qlat_max
+                lo = pts[k + 1] * iq
+                k += 2
+                my = degrees(log(tan(qpi + radians(ila * iq) / 2)))
+                sx = (lo - scx) * scale + hw
+                sy = (scy - my) * scale + hh
                 if first:
-                    cr.move_to(sx, sy)
+                    move_to(sx, sy)
                     first = False
                 else:
-                    cr.line_to(sx, sy)
+                    line_to(sx, sy)
 
         for f in areas:
             st = STYLE[f[0]]
@@ -856,7 +1302,12 @@ class Maps(nbapp.AppWindow):
                     cr.set_line_width(lw)
                 cr.stroke()
 
-        self._draw_labels(cr, labels, aw, ah)
+        # Labels last, over finished geometry, and in importance order: a town
+        # name outranks a street name outranks a park name, and each pass adds
+        # what it placed to `taken` so the next one gives way to it rather than
+        # printing through it.
+        taken = self._draw_labels(cr, labels, aw, ah)
+        self._draw_named_labels(cr, named, aw, ah, taken)
         self._surface = surf
         self._surf_size = (aw, ah)
         self._surf_scale = self.scale
@@ -865,10 +1316,14 @@ class Maps(nbapp.AppWindow):
         self._surf_cy = self.cy
 
     def _draw_labels(self, cr, labels, aw, ah):
+        """Place names. Returns the boxes it occupied, so the street and area
+        passes can keep clear of them."""
         labels.sort(key=lambda f: f[1])
+        iq = 1.0 / self.pack.quant
         placed = []
+        taken = []
         for f in labels:
-            la, lo = f[3][0]
+            la, lo = f[3][0] * iq, f[3][1] * iq
             mx, my = _merc(la, lo)
             sx, sy = self._to_screen(mx, my, aw, ah)
             # Cull anything whose NAME would land off the canvas, not just its
@@ -880,7 +1335,8 @@ class Maps(nbapp.AppWindow):
                 continue
             placed.append((sx, sy))
             lay = _layout(cr, f[2], LABEL_SIZE.get(f[1], 11))
-            tw = lay.get_pixel_size()[0]
+            tw, th = lay.get_pixel_size()
+            taken.append((sx - tw / 2 - 3, sy - 8 - th, sx + tw / 2 + 3, sy + 5))
             # The name sits ABOVE its marker, the way every map sets a place
             # name. Centred on the point, the marker dot was punched through the
             # middle of the word ("Fontvi.eille", "Monaco-Vi.lle").
@@ -895,6 +1351,152 @@ class Maps(nbapp.AppWindow):
             cr.arc(sx, sy, 1.7, 0, 2 * math.pi)
             cr.set_source_rgb(0.30, 0.28, 0.25)
             cr.fill()
+        return taken
+
+    def _draw_named_labels(self, cr, named, aw, ah, taken):
+        """Street names along their street, and area names across their area.
+
+        A STREET IS NOT A FEATURE. OSM splits a road at every junction, so
+        "East Adams Street" arrives as a couple of dozen separate ways, and in a
+        downtown view the median one is 69 px long — shorter than its own name,
+        which is why labelling per feature put names on alleys and left every
+        arterial bare. The ways that share a name are JOINED end to end first,
+        the way a real map renderer does it, and the name is set on the joined
+        line. Joining is exact: coordinates are quantised integers, so two ways
+        meeting at a junction share a byte-identical endpoint.
+
+        The rest are the rules a paper map follows, each one earned:
+
+        * A name is set ALONG its line, on the longest nearly-STRAIGHT run of
+          it, and never upside down. A name that follows a bend is unreadable,
+          and a horizontal name near a diagonal street belongs to no street.
+        * A name is only drawn where the road is long enough on screen to carry
+          it, and never over a name already placed.
+        * The work is BOUNDED — ranked major-roads-longest-first, and stopped at
+          MAX_LABEL_CANDIDATES examined and MAX_ROAD_LABELS drawn — so a
+          downtown full of named alleys costs no more than a quiet suburb."""
+        if not named:
+            return
+        iq = 1.0 / self.pack.quant
+        scale = self.scale
+        scx, scy = self.cx, self.cy
+        hw, hh = aw / 2.0, ah / 2.0
+        log, tan, radians, degrees = math.log, math.tan, math.radians, math.degrees
+        qpi = math.pi / 4
+
+        # --- join the ways that share a name, then project once --------------
+        groups = {}
+        areas = []
+        for f in named:
+            if f[0] in AREA_LABEL_CATS:
+                areas.append(f)
+            else:
+                groups.setdefault((f[2], f[0]), []).append(f)
+
+        def project(pts):
+            out = []
+            add = out.append
+            k = 0
+            n = len(pts)
+            while k < n:
+                la = pts[k] * iq
+                lo = pts[k + 1] * iq
+                k += 2
+                if la > 85.0:
+                    la = 85.0
+                elif la < -85.0:
+                    la = -85.0
+                my = degrees(log(tan(qpi + radians(la) / 2)))
+                add(((lo - scx) * scale + hw, (scy - my) * scale + hh))
+            return out
+
+        ranked = []
+        for (nm, cat), fs in groups.items():
+            for pts in _join_ways(fs):
+                P = project(pts)
+                run = _straight_run(P)
+                if run is None:
+                    continue
+                (ax, ay), (bx, by), length = run
+                if length < 46:
+                    continue
+                ranked.append((0, 1 if cat == 2 else 0, -length,
+                               nm, cat, ax, ay, bx, by, length))
+        for f in areas:
+            P = project(f[3])
+            if not P:
+                continue
+            bx0 = min(p[0] for p in P)
+            bx1 = max(p[0] for p in P)
+            by0 = min(p[1] for p in P)
+            by1 = max(p[1] for p in P)
+            room = min(bx1 - bx0, (by1 - by0) * 3)
+            if room < 46:
+                continue
+            ranked.append((1, 0, -room, f[2], f[0],
+                           (bx0 + bx1) / 2, (by0 + by1) / 2, 0, 0, room))
+        if not ranked:
+            return
+        ranked.sort(key=lambda t: (t[0], t[1], t[2]))
+        del ranked[MAX_LABEL_CANDIDATES:]
+
+        seen = {}
+        drawn = 0
+        for kind, _minor, _neg, nm, cat, ax, ay, bx, by, room in ranked:
+            if drawn >= MAX_ROAD_LABELS:
+                break
+            if kind:                            # area: name across the middle
+                mx, myy = ax, ay
+                ang = 0.0
+            else:                               # line: name along the street
+                mx, myy = (ax + bx) / 2, (ay + by) / 2
+                ang = math.atan2(by - ay, bx - ax)
+                # Never upside down: a street running right-to-left is labelled
+                # along the same line, read the other way.
+                if ang > math.pi / 2:
+                    ang -= math.pi
+                elif ang < -math.pi / 2:
+                    ang += math.pi
+            if mx < -20 or mx > aw + 20 or myy < 10 or myy > ah + 10:
+                continue
+            prev = seen.get(nm)
+            if prev is not None and any(abs(mx - px) < 320 and abs(myy - py) < 320
+                                        for px, py in prev):
+                continue
+
+            lay = _layout(cr, nm, ROAD_LABEL_SIZE.get(cat, 10))
+            tw, th = lay.get_pixel_size()
+            if tw + 12 > room:
+                continue
+            ca = abs(math.cos(ang))
+            sa = abs(math.sin(ang))
+            ex = tw / 2 * ca + th / 2 * sa       # the rotated box, axis-aligned
+            ey = tw / 2 * sa + th / 2 * ca
+            x0, y0, x1, y1 = mx - ex, myy - ey, mx + ex, myy + ey
+            # Clear of the toolbar above and the © line below, and fully on.
+            if x0 < 2 or y0 < 6 or x1 > aw - 2 or y1 > ah - 16:
+                continue
+            if any(x0 < tx1 and x1 > tx0 and y0 < ty1 and y1 > ty0
+                   for tx0, ty0, tx1, ty1 in taken):
+                continue
+            taken.append((x0, y0, x1, y1))
+            seen.setdefault(nm, []).append((mx, myy))
+
+            cr.save()
+            cr.translate(mx, myy)
+            if ang:
+                cr.rotate(ang)
+            cr.move_to(-tw / 2, -th / 2)
+            PangoCairo.layout_path(cr, lay)
+            # The halo is what keeps a name readable over the road it sits on.
+            cr.set_source_rgba(1, 1, 1, 0.94)
+            cr.set_line_width(2.8)
+            cr.set_line_join(1)
+            cr.stroke_preserve()
+            cr.set_source_rgb(*(LABEL_INK_AREA if kind else LABEL_INK_ROAD))
+            cr.fill()
+            cr.restore()
+            drawn += 1
 
     def _invalidate(self):
         self._surface = None
@@ -943,8 +1545,47 @@ class Maps(nbapp.AppWindow):
         return True
 
     def _on_scroll(self, w, ev):
-        f = 1.25 if ev.direction == Gdk.ScrollDirection.UP else 0.8
+        if ev.direction == Gdk.ScrollDirection.UP:
+            f = 1.25
+        elif ev.direction == Gdk.ScrollDirection.DOWN:
+            f = 0.8
+        elif ev.direction == Gdk.ScrollDirection.SMOOTH:
+            try:
+                ok, _dx, dy = ev.get_scroll_deltas()
+            except Exception:
+                ok, dy = True, getattr(ev, "delta_y", 0.0)
+            if not ok or not dy:
+                return False
+            f = 1.25 if dy < 0 else 0.8
+        else:
+            return False
         self._zoom(f, ev.x, ev.y)
+        return True
+
+    def _on_canvas_key(self, w, ev):
+        """Pan the same viewport without requiring a drag gesture."""
+        moves = {
+            Gdk.KEY_Left: (-1, 0), Gdk.KEY_Right: (1, 0),
+            # Mercator y grows northward; screen y has the opposite sign.
+            Gdk.KEY_Up: (0, 1), Gdk.KEY_Down: (0, -1),
+        }
+        move = moves.get(ev.keyval)
+        if move is None or ev.state & (Gdk.ModifierType.CONTROL_MASK |
+                                        Gdk.ModifierType.MOD1_MASK):
+            return False
+        self._view_gen += 1
+        if self._view_anim is not None:
+            self._view_anim.cancel()
+            self._view_anim = None
+        self._view_moving = False
+        # An eighth of the visible map is enough to make progress while
+        # retaining context. Shift deliberately makes it a half-screen jump.
+        fraction = 0.5 if ev.state & Gdk.ModifierType.SHIFT_MASK else 0.125
+        self.cx += move[0] * w.get_allocated_width() * fraction / self.scale
+        self.cy += move[1] * w.get_allocated_height() * fraction / self.scale
+        self._invalidate()
+        w.queue_draw()
+        self._save_cfg()
         return True
 
     def _do_search(self):
@@ -976,7 +1617,10 @@ class Maps(nbapp.AppWindow):
         nm, la, lo = best
         cx, cy = _merc(la, lo)
         self._hi = (cx, cy)
-        self._status.set_text("  " + nm)
+        # A place name off the map pack, never a word of ours. Reading,
+        # Bath, Nice and Bury are all catalog keys; the two-space layout inset
+        # is the only thing that has been hiding it, and the inset is padding.
+        nbi18n.set_verbatim(self._status, "  " + nm)
         self._animate_view(cx, cy, max(self.scale, 14000.0))
 
     def _show_empty(self):

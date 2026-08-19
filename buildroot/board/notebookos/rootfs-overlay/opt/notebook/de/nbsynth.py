@@ -63,6 +63,7 @@ import itertools
 import math
 import operator
 import os
+import tempfile
 import wave
 
 # ---- format ---------------------------------------------------------------
@@ -416,9 +417,10 @@ def normalize_song(d):
         "bpm": _cf(d.get("bpm"), 40, 240, 120),
         "length": _cf(d.get("length"), 1.0, 3600.0, 120.0),
         "master": _cf(d.get("master"), 0.0, 2.5, 1.0),
-        "metronome": bool(d.get("metronome")),
+        "metronome": d.get("metronome") is True,
         "tape": _cf(d.get("tape"), 0.0, 1.0, 0.0),
-        "fx": bool(d.get("fx", True)),
+        "fx": d.get("fx", True) is not False
+              if isinstance(d.get("fx", True), bool) else True,
     }
     rv = d.get("reverb") if isinstance(d.get("reverb"), dict) else {}
     out["reverb"] = {"mix": _cf(rv.get("mix"), 0.0, 1.0, 0.35),
@@ -435,10 +437,16 @@ def normalize_song(d):
         if b - a > 0.05:
             out["loop"] = (a, b)
     tracks = []
-    for t in (d.get("tracks") or []):
+    source_tracks = d.get("tracks")
+    if not isinstance(source_tracks, (list, tuple)):
+        source_tracks = []
+    for t in source_tracks:
         t = t if isinstance(t, dict) else {}
         clips = []
-        for c in (t.get("clips") or []):
+        source_clips = t.get("clips")
+        if not isinstance(source_clips, (list, tuple)):
+            source_clips = []
+        for c in source_clips:
             c = c if isinstance(c, dict) else {}
             s = _cf(c.get("s"), 0.0, 3600.0, 0.0)
             e = _cf(c.get("e"), 0.0, 3600.0, 0.0)
@@ -459,8 +467,8 @@ def normalize_song(d):
         tracks.append({
             "gain": _cf(t.get("gain"), 0.0, 2.0, 1.0),
             "pan": _cf(t.get("pan"), -1.0, 1.0, 0.0),
-            "mute": bool(t.get("mute")),
-            "solo": bool(t.get("solo")),
+            "mute": t.get("mute") is True,
+            "solo": t.get("solo") is True,
             "rev": _cf(t.get("rev"), 0.0, 1.0, 0.0),
             "dly": _cf(t.get("dly"), 0.0, 1.0, 0.0),
             "low": _cf(t.get("low"), 0.0, 1.0, 0.0),
@@ -532,11 +540,14 @@ class Mixdown:
 
     def resync(self, song):
         """Adopt an edited arrangement without a gap in the sound."""
+        # Active readers belong to the OLD clip identities, offsets and track
+        # routing. Rebuild them at the current frame from the edited schedule;
+        # otherwise a deleted/moved clip keeps sounding from its former lane
+        # until its old end. Effect tails and filter state deliberately remain.
+        self._close_wavs()
         self.song = normalize_song(song)
         self._schedule()
-        f = self.frame
-        while self._ei < len(self.events) and self.events[self._ei][0] < f:
-            self._ei += 1
+        self._catch_up()
 
     def seek(self, seconds):
         self.frame = int(round(float(seconds) * SR))
@@ -693,6 +704,18 @@ class Mixdown:
         the loop point falls on the exact sample it is set to rather than on a
         block boundary ten milliseconds away, and the reverb and echo carry
         over the seam."""
+        n = int(n)
+        if n > BLOCK:
+            # Delay lines are intentionally one-block vector operations. Feed
+            # large public requests through that same sequential path rather
+            # than asking an effect to span several wraps in one slice.
+            chunks = []
+            left = n
+            while left > 0:
+                take = min(left, BLOCK)
+                chunks.append(self.render(take))
+                left -= take
+            return b"".join(chunks)
         loop = self.song["loop"] if self.use_loop else None
         if loop:
             end = int(loop[1] * SR)
@@ -939,7 +962,10 @@ def render_wav(song, path, progress=None, cancel=None):
     s = normalize_song(song)
     total = int((s["length"] + song_tail(s)) * SR)
     mix = Mixdown(s, 0.0, metronome=False, loop=False)
-    tmp = path + ".part"
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path),
+                               suffix=".part", dir=directory)
+    os.close(fd)
     w = None
     try:
         w = wave.open(tmp, "wb")
@@ -960,7 +986,19 @@ def render_wav(song, path, progress=None, cancel=None):
                 progress(done / float(total))
         w.close()
         w = None
+        # wave.close() flushes Python's buffers but not the kernel's. A render
+        # is complete only after its bytes and final directory entry survive a
+        # power loss, matching the durability boundary used by document saves.
+        with open(tmp, "rb") as durable:
+            os.fsync(durable.fileno())
         os.replace(tmp, path)
+        tmp = None
+        dir_fd = os.open(directory, os.O_RDONLY |
+                         getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
         if progress is not None:
             progress(1.0)
         return total
@@ -971,6 +1009,7 @@ def render_wav(song, path, progress=None, cancel=None):
                 w.close()
             except Exception:
                 pass
+        if tmp is not None:
             try:
                 os.unlink(tmp)
             except OSError:

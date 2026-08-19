@@ -56,11 +56,37 @@ PRIMARY=$(printf '%s\n' "$XR" | awk '/^(eDP|LVDS|DSI)[^ ]* connected/{print $1; 
 # guaranteed to display without overscan surprises).
 xrandr --output "$PRIMARY" --primary --auto 2>/dev/null
 
+# The geometry reported for the primary is the logical canvas every mirrored
+# output must expose.  --same-as alone only shares the origin: paired with
+# --auto it can overlap a 4K television and a 1080p panel at unequal sizes.
+PLINE0=$(printf '%s\n' "$XR" | grep -E "^$PRIMARY connected")
+PMODE=$(printf '%s\n' "$PLINE0" | grep -oE '[0-9]+x[0-9]+\+[0-9]+\+[0-9]+' \
+	| head -1 | cut -d+ -f1)
+[ -n "$PMODE" ] || PMODE=$(printf '%s\n' "$XR" | awk -v o="$PRIMARY" '
+	$1 == o && $2 == "connected" { inside=1; next }
+	/^[^ ]/ { inside=0 }
+	inside && ($2 ~ /\*/) { print $1; exit }
+')
+
 # Every OTHER connected output mirrors it.
 printf '%s\n' "$XR" | awk '/ connected/{print $1}' | while read -r OUT; do
 	[ "$OUT" = "$PRIMARY" ] && continue
-	xrandr --output "$OUT" --auto --same-as "$PRIMARY" 2>/dev/null || \
-		xrandr --output "$OUT" --auto 2>/dev/null
+	if [ -n "$PMODE" ] && printf '%s\n' "$XR" | awk -v o="$OUT" -v m="$PMODE" '
+		$1 == o && $2 == "connected" { inside=1; next }
+		/^[^ ]/ { inside=0 }
+		inside && $1 == m { found=1 }
+		END { exit !found }
+	'; then
+		xrandr --output "$OUT" --mode "$PMODE" --same-as "$PRIMARY" 2>/dev/null
+	elif [ -n "$PMODE" ]; then
+		# No common hardware mode: keep the output native but map it onto the
+		# primary's logical canvas. Never fall back to an extended desktop.
+		xrandr --output "$OUT" --auto --scale-from "$PMODE" \
+			--same-as "$PRIMARY" 2>/dev/null || \
+			xrandr --output "$OUT" --off 2>/dev/null
+	else
+		xrandr --output "$OUT" --off 2>/dev/null
+	fi
 done
 
 # ...and anything that has just been UNPLUGGED is switched off, or its dead

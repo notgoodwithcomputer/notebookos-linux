@@ -5,14 +5,32 @@
 # boots straight into the desktop (single-seat appliance).
 #
 NOTEBOOK=/opt/notebook
+PIDFILE=${NB_XINIT_PIDFILE:-/run/notebookos-xinit.pid}
+XINIT=${NB_XINIT:-xinit}
 
 start() {
 	printf "Starting Notebook OS desktop: "
+	if [ -f "$PIDFILE" ]; then
+		read -r old_pid old_started < "$PIDFILE"
+		case "$old_pid" in
+			''|*[!0-9]*) ;;
+			*)
+				live_started=$(awk '{print $22}' "/proc/$old_pid/stat" 2>/dev/null)
+				if [ -n "$old_started" ] && [ "$live_started" = "$old_started" ] && \
+						kill -0 "$old_pid" 2>/dev/null; then
+					echo "already running"
+					return 0
+				fi
+				;;
+		esac
+		# Invalid or stale ownership must not prevent a clean new start.
+		rm -f "$PIDFILE"
+	fi
 	# The modesetting Xorg driver references libgbm symbols but doesn't link
 	# libgbm directly (it expects the server to have loaded gbm globally via
 	# glamor, which this minimal build didn't wire). Preload libgbm so those
 	# symbols are in the global namespace before Xorg dlopens modesetting.
-	export LD_PRELOAD=/usr/lib/libgbm.so.1
+	export LD_PRELOAD=${NB_LD_PRELOAD-/usr/lib/libgbm.so.1}
 	# X reads /opt/notebook/session.sh as the session; :0 on vt1.
 	#
 	# LOGGING. This used to run "-logfile /dev/console -verbose 3", which put
@@ -39,14 +57,45 @@ start() {
 		mkdir -p /var/log
 		XLOG="-logfile /var/log/Xorg.0.log"
 	fi
-	xinit "$NOTEBOOK/session.sh" -- :0 vt1 -nolisten tcp \
+	# (NB_XINIT_CONSOLE exists for the host-side lifecycle test, where
+	# /dev/console is not writable by an ordinary user; on the machine the
+	# desktop's own output goes to the console as it always has.)
+	"$XINIT" "$NOTEBOOK/session.sh" -- :0 vt1 -nolisten tcp \
 		$XLOG \
-		> /dev/console 2>&1 &
+		> "${NB_XINIT_CONSOLE:-/dev/console}" 2>&1 &
+	pid=$!
+	mkdir -p "$(dirname "$PIDFILE")"
+	started=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)
+	printf '%s %s\n' "$pid" "$started" > "$PIDFILE"
+	# Catch the ordinary fatal-startup paths before claiming the desktop is up.
+	# X can take several seconds to become drawable on software rendering, so
+	# process liveness—not an X socket deadline—is the honest early invariant.
+	sleep "${NB_XINIT_GRACE:-1}"
+	if ! kill -0 "$pid" 2>/dev/null; then
+		rm -f "$PIDFILE"
+		echo "FAILED"
+		return 1
+	fi
 	echo "OK"
 }
 
 stop() {
-	killall xinit 2>/dev/null
+	if [ -f "$PIDFILE" ]; then
+		read -r pid started < "$PIDFILE"
+		case "$pid" in
+			''|*[!0-9]*) ;;
+			*)
+				# A dead desktop may leave a stale pidfile; PIDs are reusable.
+				# Match the kernel start-time too so restart/shutdown can never
+				# signal an unrelated process that inherited the same number.
+				live_started=$(awk '{print $22}' "/proc/$pid/stat" 2>/dev/null)
+				if [ -n "$started" ] && [ "$live_started" = "$started" ]; then
+					kill "$pid" 2>/dev/null || true
+				fi
+				;;
+		esac
+		rm -f "$PIDFILE"
+	fi
 }
 
 case "$1" in

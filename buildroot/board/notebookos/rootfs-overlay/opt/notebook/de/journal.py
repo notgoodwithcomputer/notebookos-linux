@@ -16,6 +16,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Gdk, Pango, GLib  # noqa: E402
 
 import os
+import re
 import copy
 import json
 import time
@@ -26,6 +27,7 @@ import nbapp
 import nbicons
 import nbjobs
 import nbprint
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 WD_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
@@ -38,12 +40,62 @@ MONTHS = ["January", "February", "March", "April", "May", "June", "July",
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 JOURNAL_FILE = os.path.join(CFG_DIR, "journal.json")
+MAX_JOURNAL_BYTES = 32 * 1024 * 1024
+
+
+class JournalStoreTooLarge(ValueError):
+    pass
+
+
+def _read_journal_json(path=None, limit=MAX_JOURNAL_BYTES):
+    if path is None:
+        path = JOURNAL_FILE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise JournalStoreTooLarge("journal is too large")
+    return json.loads(data)
 # File -> Export to PDF writes into Documents; the journal.json above is
 # session-recovery autosave, not a user-facing file.
 DOCS_DIR = os.path.join(HOME, "Documents")
 # every entry dict carries exactly these keys; the UI reads them unconditionally
 ENTRY_KEYS = ("day", "wd", "month_label", "date", "meta",
               "title", "preview", "text")
+
+
+def _set_authored_label(label, authored, fallback):
+    """Show journal prose verbatim, translating only an empty-state label."""
+    text = str(authored or "")
+    if text:
+        nbi18n.set_verbatim(label, text)
+    else:
+        label.set_text(_t(fallback))
+
+
+def _localized_month_label(entry):
+    """Display the persisted English month/year in the current language."""
+    raw = str(entry.get("month_label", ""))
+    month, sep, year = raw.rpartition(" ")
+    if sep and month in MONTHS and year.isdigit():
+        return _t("%s %d") % (_t(month), int(year))
+    return raw
+
+
+def _localized_entry_date(entry):
+    """Rebuild a stored derived date from translatable components."""
+    month_raw, sep, year = str(entry.get("month_label", "")).rpartition(" ")
+    try:
+        day = int(entry.get("day", ""))
+        year_num = int(year) if sep and year.isdigit() else None
+    except (TypeError, ValueError):
+        year_num = None
+    short = str(entry.get("wd", ""))
+    weekday = (WD_LONG[WD_SHORT.index(short)] if short in WD_SHORT else
+               str(entry.get("date", "")).partition(",")[0])
+    if weekday in WD_LONG and month_raw in MONTHS and year_num is not None:
+        return _t("%s, %d %s %d") % (
+            _t(weekday), day, _t(month_raw), year_num)
+    return str(entry.get("date", ""))
 
 # The meta line's fixed half. Stored ENGLISH in the entry, like every other
 # derived field here, because the interface language can be changed under a
@@ -65,6 +117,28 @@ PAGE_PAD = 48
 # Straight quotes and hyphen-hyphen dashes become real typography as the
 # writer types (nbapp.smart_replacement, shared with Writer and Novel).
 
+# Scripts written without spaces between words: kana and the CJK ideographs
+# (Chinese, Japanese). Korean is left out on purpose — Hangul text puts spaces
+# between its words, so the token count is already right for it.
+_CJK_RE = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+                     "\uf900-\ufaff\uff66-\uff9f]")
+
+
+def count_words(text):
+    """How many words a piece of prose holds.
+
+    len(text.split()) counted every space-delimited token, so the "• " the
+    Bullet control inserts and the em dash "--" becomes were words, and a
+    Japanese sentence — no spaces at all — was one word. A token counts only
+    when it carries a letter or a digit; a kana or ideograph counts as a word
+    on its own, which is the convention those scripts' own tools use."""
+    if not text:
+        return 0
+    n = len(_CJK_RE.findall(text))
+    rest = _CJK_RE.sub(" ", text)
+    return n + sum(1 for tok in rest.split()
+                   if any(ch.isalnum() for ch in tok))
+
 
 def _atomic_write_json(path, obj):
     """Write the journal crash-safely, through the SHARED nbapp writer.
@@ -78,6 +152,34 @@ def _atomic_write_json(path, obj):
     app was enough to lose the lot. One implementation now, so it cannot drift
     apart again."""
     nbapp.atomic_write_json(path, obj)
+
+
+class _PageColumn(Gtk.Box):
+    """The writing column: PAGE_MAX wide where the canvas has room, the canvas
+    width where it does not, never narrower than PAGE_MIN.
+
+    Measured HERE, as a minimum/natural pair, instead of being pushed in from
+    a size-allocate handler with set_size_request. That older shape was a
+    one-way ratchet: the width it requested became the viewport's minimum, so
+    the viewport could never again be allocated less than the last width it
+    was fitted to, and no smaller allocation ever arrived to fit it back down.
+    Hide the entries list and show it again -- or drag the window wider and
+    back -- and the column stayed at the wide measure, pushing the save chip
+    and the right margin off a 1024px panel for good. A TextView's own minimum
+    is its wrapped layout width (the widest line at the LAST width), which
+    ratchets the same way, so the children's minimums are deliberately not
+    consulted: the column decides its own bounds, halign CENTER takes
+    min(natural, allocated), and the children fill whatever it gets. Both
+    figures include the .page CSS padding (PAGE_PAD).
+
+    No __gtype_name__ on purpose: a fixed GType name can only be registered
+    once per process (see settings.ReadingColumn)."""
+
+    def do_get_preferred_width(self):
+        return PAGE_MIN + PAGE_PAD, PAGE_MAX + PAGE_PAD
+
+    def do_get_preferred_width_for_height(self, _height):
+        return self.do_get_preferred_width()
 
 
 class Journal(nbapp.AppWindow):
@@ -142,6 +244,8 @@ class Journal(nbapp.AppWindow):
 
         # final flush: closing the window (dot button / File->Close / Esc all
         # route through Gtk.Window.close -> "destroy") must not lose the last edit
+        self._recovery_dirty = False
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
 
     # ---------------- persistence ----------------
@@ -159,10 +263,14 @@ class Journal(nbapp.AppWindow):
         entries is read as entries."""
         self._quarantine_pending = False
         try:
-            with open(JOURNAL_FILE) as fh:
-                data = json.load(fh)
+            data = _read_journal_json()
         except FileNotFoundError:
             return [], -1        # first run: nothing to protect
+        except JournalStoreTooLarge:
+            # Valid oversized JSON evades the shared parse-damage guard. Keep
+            # it behind the app-aware move before an empty diary can persist.
+            self._quarantine_pending = True
+            return [], -1
         except Exception:
             # Unreadable bytes. nbapp.atomic_write_json moves the original
             # aside (preserve_damaged) immediately before its next replacing
@@ -222,7 +330,8 @@ class Journal(nbapp.AppWindow):
             if not isinstance(en, dict):
                 continue
             # A null field is empty text, not the four characters "None".
-            e = {}
+            known = set(ENTRY_KEYS) | {"tags"}
+            e = {k: copy.deepcopy(v) for k, v in en.items() if k not in known}
             for k in ENTRY_KEYS:
                 v = en.get(k, "")
                 e[k] = "" if v is None else str(v)
@@ -253,7 +362,8 @@ class Journal(nbapp.AppWindow):
                 n += 1
             os.replace(JOURNAL_FILE, dest)
         except OSError:
-            pass
+            return False
+        return True
 
     def _persist(self):
         """Write the full entries model + active index to disk. Swallows I/O
@@ -262,14 +372,24 @@ class Journal(nbapp.AppWindow):
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
             if getattr(self, "_quarantine_pending", False):
-                self._quarantine()
+                # Never replace the only copy of a valid-but-unrecognized
+                # journal.  A read-only directory, permissions change or full
+                # filesystem can make the quarantine move fail; clearing the
+                # flag and continuing used to overwrite those original bytes
+                # with an empty journal.  Keep the flag armed so a later save
+                # can retry once storage is writable again.
+                if not self._quarantine():
+                    raise OSError("could not preserve unrecognized journal")
                 self._quarantine_pending = False
             payload = dict(getattr(self, "_extra", None) or {})
             payload.update({"entries": self.entries, "active": self.active})
             _atomic_write_json(JOURNAL_FILE, payload)
             self._save_warned = False
+            self._recovery_dirty = False
+            self._last_store_error = None
             return True
         except Exception as exc:
+            self._last_store_error = exc
             # See academics._save_to_disk: a silent failed write is
             # indistinguishable from the app eating the diary.
             if not getattr(self, "_save_warned", False):
@@ -278,6 +398,7 @@ class Journal(nbapp.AppWindow):
                     self._flash(nbapp.save_failure_reason(exc, JOURNAL_FILE))
                 except Exception:
                     pass
+            self._recovery_dirty = True
             return False
 
     # ---------------- undo / redo ----------------
@@ -302,17 +423,34 @@ class Journal(nbapp.AppWindow):
         return [dict(en, tags=list(en.get("tags") or [])) for en in entries]
 
     def _undo_restore(self, state):
+        before = self._undo_snapshot()
         self.entries = self._copy_entries(state["entries"])
         self.active = state["active"]
         self._clear_search()          # a filter can hide the entry we restored
         self._refresh_list()
-        self._load_active()
+        # top=False: undoing a burst of typing must not throw the page back to
+        # its top — the writer is where the caret is, and stays there.
+        self._load_active(mark_saved=False, top=False)
         buf = self.body.get_buffer()
         caret = min(max(0, state.get("_caret", 0)), buf.get_char_count())
         buf.place_cursor(buf.get_iter_at_offset(caret))
-        self._persist()
+        if not self._persist():
+            self.entries = self._copy_entries(before["entries"])
+            self.active = before["active"]
+            self._refresh_list()
+            self._load_active(mark_saved=False, top=False)
+            old_buf = self.body.get_buffer()
+            old_caret = min(max(0, before.get("_caret", 0)),
+                            old_buf.get_char_count())
+            old_buf.place_cursor(old_buf.get_iter_at_offset(old_caret))
+            self._mark_unsaved()
+            if 0 <= self.active < len(self.entries):
+                self.body.grab_focus()
+            return False
+        self._mark_saved(0 <= self.active < len(self.entries))
         if 0 <= self.active < len(self.entries):
             self.body.grab_focus()
+        return True
 
     def _on_destroy(self, *_):
         """Flush the in-progress buffer to disk when the window closes.
@@ -344,6 +482,18 @@ class Journal(nbapp.AppWindow):
         except Exception:
             pass
         self._persist()
+
+    def _on_delete(self, *_):
+        """Keep the only live copy open when its final journal write fails --
+        and say why, with a way out (nbapp.close_unsaved_card). A bare veto
+        was a window that could not be closed on a full disk."""
+        if not getattr(self, "_recovery_dirty", False):
+            return False
+        self._save_current()
+        if self._persist():
+            return False
+        return not nbapp.close_unsaved_card(
+            self, getattr(self, "_last_store_error", None), JOURNAL_FILE)
 
     # ---------------- sidebar ----------------
     def _sidebar(self):
@@ -466,7 +616,12 @@ class Journal(nbapp.AppWindow):
         for i, en in rows:
             if en["month_label"] != last_label:
                 last_label = en["month_label"]
-                gl = Gtk.Label(label=_t(en["month_label"]).upper(), xalign=0)
+                # Already localized by _localized_month_label; a second pass
+                # through the catalog can only rewrite a stored label that is
+                # not one of ours (uppercase is folded on lookup, so .upper()
+                # protects nothing).
+                gl = Gtk.Label(xalign=0)
+                nbi18n.set_verbatim(gl, _localized_month_label(en).upper())
                 gl.get_style_context().add_class("monthlabel")
                 self.list_box.pack_start(gl, False, False, 0)
             self.list_box.pack_start(self._entry_row(i, en), False, False, 0)
@@ -482,9 +637,19 @@ class Journal(nbapp.AppWindow):
         for i, en in enumerate(self.entries):
             hay = "%s %s %s %s" % (en.get("date", ""), en.get("month_label", ""),
                                    en.get("title", ""), en.get("text", ""))
+            hay += " %s %s" % (_localized_entry_date(en),
+                                _localized_month_label(en))
             if q in hay.lower():
                 out.append((i, en))
         return out
+
+    def _matching_index_near(self, preferred):
+        """A visible filtered row nearest an underlying model position."""
+        rows = self._matches()
+        if not rows:
+            return None
+        return min((i for i, _entry in rows),
+                   key=lambda i: (abs(i - preferred), i))
 
     def _on_search(self, _entry):
         """Filter the entries list as the search text is typed. Debounced: on a
@@ -561,7 +726,7 @@ class Journal(nbapp.AppWindow):
             dctx.add_class("active")
         day = Gtk.Label(label=en["day"], xalign=0)
         day.get_style_context().add_class("dbday")
-        wd = Gtk.Label(label=en["wd"].upper(), xalign=0)
+        wd = Gtk.Label(label=_t(en["wd"]).upper(), xalign=0)
         wd.get_style_context().add_class("dbwd")
         datebox.set_valign(Gtk.Align.START)
         datebox.pack_start(day, False, False, 0)
@@ -570,10 +735,12 @@ class Journal(nbapp.AppWindow):
 
         meta = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         meta.set_valign(Gtk.Align.START)
-        t = Gtk.Label(label=en["title"] or "Untitled entry", xalign=0)
+        t = Gtk.Label(label="", xalign=0)
+        _set_authored_label(t, en["title"], "Untitled entry")
         t.set_ellipsize(Pango.EllipsizeMode.END)
         t.get_style_context().add_class("entrytitle")
-        p = Gtk.Label(label=en["preview"] or "—", xalign=0)
+        p = Gtk.Label(label="", xalign=0)
+        _set_authored_label(p, en["preview"], "—")
         p.set_ellipsize(Pango.EllipsizeMode.END)
         p.get_style_context().add_class("entrypreview")
         meta.pack_start(t, False, False, 0)
@@ -636,8 +803,7 @@ class Journal(nbapp.AppWindow):
 
         self.save = Gtk.Label()
         self.save.get_style_context().add_class("savestate")
-        self.save.set_markup('<span foreground="#7FA98C">● </span>'
-                             'Saved %s' % time.strftime("%H:%M"))
+        self._chip_saved()
         fbar.pack_end(self.save, False, False, 0)
         # divider between word count and save chip; hidden with them in the
         # empty state so no orphaned hairline floats at the bar's right edge
@@ -652,15 +818,16 @@ class Journal(nbapp.AppWindow):
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         scroll.get_style_context().add_class("canvaswrap")
-        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        page = _PageColumn(orientation=Gtk.Orientation.VERTICAL)
         page.set_halign(Gtk.Align.CENTER)
         # The writing column wants PAGE_MAX, but it must be able to SHRINK: a
         # hard 720 beside the 320px entries sidebar made the window's minimum
         # 1060px — wider than a 1024x768 panel, which put the right edge of the
         # canvas (and the save state) permanently off-screen, since a window can
-        # never be smaller than its minimum. _fit_page widens it back to the
-        # full measure whenever the canvas has room.
-        page.set_size_request(PAGE_MIN, -1)
+        # never be smaller than its minimum. _PageColumn reports PAGE_MIN as
+        # its minimum and PAGE_MAX as its natural width, so the canvas gives it
+        # the full measure whenever there is room and takes it back when there
+        # is not (see the class for why this is not a set_size_request).
         page.get_style_context().add_class("page")
         self.page = page
 
@@ -728,7 +895,8 @@ class Journal(nbapp.AppWindow):
         self.body.get_style_context().add_class("docbody")
         self.body.set_pixels_below_lines(20)
         self.body.set_pixels_inside_wrap(10)
-        self.body.set_size_request(PAGE_MIN, 400)
+        # Height only: the width is the page's (a FILL child of _PageColumn).
+        self.body.set_size_request(-1, 400)
         buf = self.body.get_buffer()
         buf.create_tag("bold", weight=Pango.Weight.BOLD)
         buf.create_tag("italic", style=Pango.Style.ITALIC)
@@ -739,24 +907,23 @@ class Journal(nbapp.AppWindow):
         page.pack_start(self.body, True, True, 0)
 
         scroll.add(page)
-        # Track the viewport (not the scroller — its width includes the
-        # scrollbar) so the column always matches the space actually available.
+        # Kept for _load_active: every entry opens at the top of its page.
+        self.canvas = scroll
+        # The ScrolledWindow hands its viewport a FOCUS adjustment, which
+        # scrolls the page to whatever child takes focus. For a TextView taller
+        # than the canvas that "scroll into view" clamps to the TextView's own
+        # top edge — so focus arriving from the search field or the + button
+        # (a Gtk.Button takes focus on click) shoved the big date and the
+        # written-at line off the top the moment the caret landed in the text.
+        # Focus never moves the page; only the reader and _load_active do.
+        # (The binding refuses None here, so the focus clamp is pointed at an
+        # adjustment nothing scrolls by.)
         vp = scroll.get_child()
         if vp is not None:
-            vp.connect("size-allocate", self._fit_page)
+            vp.set_focus_vadjustment(Gtk.Adjustment())
+            vp.set_focus_hadjustment(Gtk.Adjustment())
         col.pack_start(scroll, True, True, 0)
         return col
-
-    def _fit_page(self, _w, alloc):
-        """Size the writing column to the canvas: the design's measure where it
-        fits, the canvas width where it does not. Writes only when the value
-        actually changes, so it cannot loop with the resize it triggers."""
-        w = max(PAGE_MIN, min(PAGE_MAX, alloc.width - PAGE_PAD))
-        if w == getattr(self, "_page_w", None):
-            return
-        self._page_w = w
-        self.page.set_size_request(w, -1)
-        self.body.set_size_request(w, 400)
 
     def _sep(self):
         s = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
@@ -798,8 +965,11 @@ class Journal(nbapp.AppWindow):
         self.entries.insert(0, self._new_entry_dict())
         self.active = 0
         self._refresh_list()
-        self._load_active()
-        self._persist()          # structural change: persist the new entry
+        self._load_active(mark_saved=False)
+        if self._persist():      # structural change: persist the new entry
+            self._mark_saved(True)
+        else:
+            self._mark_unsaved()
         self.undo.commit()
         self.body.grab_focus()
 
@@ -809,17 +979,26 @@ class Journal(nbapp.AppWindow):
         self._save_current()
         self.active = i
         self._refresh_list()
-        self._load_active()
-        self._persist()          # persist buffered edit + new active index
+        self._load_active(mark_saved=False)
+        if self._persist():      # persist buffered edit + new active index
+            self._mark_saved(0 <= self.active < len(self.entries))
+        else:
+            self._mark_unsaved()
 
-    def _load_active(self):
+    def _load_active(self, mark_saved=True, top=True):
+        """Show the active entry (or the empty state) on the canvas. `top`
+        opens it at the top of its page — what a row, New Entry or a search
+        hit wants; undo/redo pass False so the reader's place is kept."""
         self._loading = True
         buf = self.body.get_buffer()
         have = 0 <= self.active < len(self.entries)
         if have:
             en = self.entries[self.active]
-            self.date_lbl.set_text(en["date"])
-            self.meta_lbl.set_text(self._meta_display(en["meta"]))
+            # Both are produced already-localized, and both fall back to a
+            # raw string out of the store when the entry was not written by
+            # this app — which is the user's text, never ours to translate.
+            nbi18n.set_verbatim(self.date_lbl, _localized_entry_date(en))
+            nbi18n.set_verbatim(self.meta_lbl, self._meta_display(en["meta"]))
             self.date_lbl.show()
             self.meta_lbl.show()
             self.empty_box.hide()
@@ -827,6 +1006,9 @@ class Journal(nbapp.AppWindow):
             buf.set_text(en["text"])
             # restore character/paragraph formatting saved for this entry
             self._apply_tags(buf, en.get("tags"))
+            # set_text leaves the insert mark at the END of the new text; a
+            # page you have just opened is read (and written) from its top
+            buf.place_cursor(buf.get_start_iter())
         else:
             self.date_lbl.set_text("")
             self.meta_lbl.set_text("")
@@ -838,10 +1020,19 @@ class Journal(nbapp.AppWindow):
             self.body.hide()
             buf.set_text("")
         self._loading = False
+        # The canvas keeps its scroll offset across a buffer swap, so an entry
+        # opened from the bottom of a long one — a sidebar row, New Entry, a
+        # search hit — came up with its date, its written-at line and its
+        # first paragraphs above the top edge. Every entry opens at its top,
+        # as a page would.
+        canvas = getattr(self, "canvas", None)
+        if top and canvas is not None:
+            canvas.get_vadjustment().set_value(0)
         # the format bar, word count and save chip only make sense with an entry
         # open; keep the empty state honest instead of showing "0 words / Saved"
         self._set_fmt_enabled(have)
-        self._mark_saved(have)
+        if mark_saved:
+            self._mark_saved(have)
         self._recount()
 
     def _set_fmt_enabled(self, on):
@@ -853,23 +1044,51 @@ class Journal(nbapp.AppWindow):
             except Exception:
                 pass
         if getattr(self, "_quote_btn", None) is not None:
-            self._quote_btn.set_tooltip_text(
-                _t("Quote") if on else _t("Open a journal entry to format a quote."))
+            message = (_t("Quote") if on else
+                       _t("Open a journal entry to format a quote."))
+            self._quote_btn.set_tooltip_text(message)
+            acc = self._quote_btn.get_accessible()
+            if acc is not None:
+                acc.set_name(message)
         if getattr(self, "_bullet_btn", None) is not None:
-            self._bullet_btn.set_tooltip_text(
-                _t("Bullet") if on else _t("Open a journal entry to add a bullet."))
+            message = (_t("Bullet") if on else
+                       _t("Open a journal entry to add a bullet."))
+            self._bullet_btn.set_tooltip_text(message)
+            acc = self._bullet_btn.get_accessible()
+            if acc is not None:
+                acc.set_name(message)
+
+    def _chip_saved(self):
+        """The green chip, in the ONE form the OS uses for it: a dot and the
+        time of the write ("● Saved 14:32" — Writer, Novel, Cookbook and
+        Screenplay all read the same). Every successful save routes here:
+        the autosave (_did_save), the structural writes new/select/delete/undo
+        make (_mark_saved), and the launch, when the entries on screen are the
+        ones just read back from disk. A bare "Saved" used to appear after a
+        row switch and "Saved 13:42" after typing, so the wording flipped with
+        the route the save had taken."""
+        self._chip(_t("Saved %s") % time.strftime("%H:%M"), "#7FA98C")
 
     def _mark_saved(self, have):
         """Reflect the on-disk truth in the save chip: an open entry is already
-        persisted ('Saved'); the empty state has nothing to save (blank)."""
+        persisted ('Saved HH:MM'); the empty state has nothing to save
+        (blank)."""
         try:
             if have:
-                self.save.set_markup('<span foreground="#7FA98C">● </span>Saved')
+                self._chip_saved()
             else:
                 self.save.set_text("")
             sep = getattr(self, "_count_sep", None)
             if sep is not None:
                 sep.set_visible(have)
+        except Exception:
+            pass
+
+    def _mark_unsaved(self):
+        """Never let a failed structural write retain a green Saved claim."""
+        try:
+            self.save.set_markup('<span foreground="#C8341E">● </span>'
+                                 + _t("Not saved"))
         except Exception:
             pass
 
@@ -978,6 +1197,7 @@ class Journal(nbapp.AppWindow):
     def _on_change(self, buf):
         if self._loading or getattr(self, "_closed", False):
             return
+        self._recovery_dirty = True
         # Keep the word recount OFF the keystroke hot path: recomputing the
         # whole-buffer count synchronously per keypress makes each keystroke
         # cost scale with entry length. Coalesce it onto a short idle timer so
@@ -1015,8 +1235,7 @@ class Journal(nbapp.AppWindow):
         # chip blank rather than repainting a dishonest "Saved" over nothing.
         if self._persist():
             if 0 <= self.active < len(self.entries):
-                self.save.set_markup('<span foreground="#7FA98C">● </span>'
-                                     'Saved %s' % time.strftime("%H:%M"))
+                self._chip_saved()
             else:
                 self.save.set_text("")
         # update sidebar preview/title live — only the active row's two labels,
@@ -1041,9 +1260,10 @@ class Journal(nbapp.AppWindow):
         title = en["title"] or "Untitled entry"
         preview = en["preview"] or "—"
         if self._active_title_lbl.get_text() != title:
-            self._active_title_lbl.set_text(title)
+            _set_authored_label(self._active_title_lbl, en["title"],
+                                "Untitled entry")
         if self._active_preview_lbl.get_text() != preview:
-            self._active_preview_lbl.set_text(preview)
+            _set_authored_label(self._active_preview_lbl, en["preview"], "—")
 
     def _recount(self):
         if not (0 <= self.active < len(self.entries)):
@@ -1051,7 +1271,7 @@ class Journal(nbapp.AppWindow):
             return
         buf = self.body.get_buffer()
         txt = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
-        n = len(txt.split())
+        n = count_words(txt)
         self.count.set_text("%s word%s" % (format(n, ","), "" if n == 1 else "s"))
 
     def _toggle_tag(self, name):
@@ -1286,18 +1506,29 @@ class Journal(nbapp.AppWindow):
                 page.rule()
             page.emit(_t(en.get("date", "")).upper(), 9.5, False, "#6E695E",
                       gap_before=6, gap_after=4)
-            page.emit(en.get("title", "") or _t("Untitled entry"), 22, True,
-                      "#1A1916", gap_after=2)
+            body = en.get("text", "")
+            tags = en.get("tags") or []
+            # The first line is the entry's heading (the sidebar shows it as
+            # the title, see _derive) and the remainder is the body, so the
+            # heading is not repeated. The heading is the WHOLE first line as
+            # written, not en["title"]: that is the sidebar's 60-character
+            # display cut, and printing it silently dropped the rest of the
+            # sentence from the PDF -- and from Print, which draws the same
+            # page. Its inline formatting rides along like any body line's.
+            parts = body.split("\n", 1)
+            head = parts[0]
+            if head.strip():
+                spans, quoted = self._line_spans(tags, 0, 0, len(head))
+                page.emit(head, 22, True, "#1A1916", italic=quoted,
+                          gap_after=2, spans=spans)
+            else:
+                page.emit(_t("Untitled entry"), 22, True, "#1A1916",
+                          gap_after=2)
             meta = self._meta_display(en.get("meta", ""))
             if meta:
                 page.emit(meta, 10, False, "#9A9484", gap_after=6)
-            body = en.get("text", "")
-            # first line is the entry title (see _derive); render the remainder
-            # as the body so the title is not repeated. Empty body -> nothing.
-            parts = body.split("\n", 1)
             rest = parts[1] if len(parts) > 1 else ""
-            base = len(parts[0]) + 1 if len(parts) > 1 else 0
-            tags = en.get("tags") or []
+            base = len(head) + 1 if len(parts) > 1 else 0
             lo = 0
             for raw in rest.split("\n"):
                 spans, quoted = self._line_spans(tags, base, lo, len(raw))
@@ -1336,8 +1567,11 @@ class Journal(nbapp.AppWindow):
         cursor. Built from the app's static maps — never time.strptime /
         import calendar, which would crash the app on launch."""
         n = time.localtime()
-        stamp = "%s, %d %s %d" % (WD_LONG[(n.tm_wday + 1) % 7], n.tm_mday,
-                                  MONTHS[n.tm_mon - 1], n.tm_year)
+        # Text inserted into the document bypasses GTK label auto-translation,
+        # so localize both components and the reorderable whole-date template.
+        stamp = _t("%s, %d %s %d") % (
+            _t(WD_LONG[(n.tm_wday + 1) % 7]), n.tm_mday,
+            _t(MONTHS[n.tm_mon - 1]), n.tm_year)
         self._insert_at_cursor(stamp, "Insert Date")
 
     def _insert_time(self):
@@ -1390,15 +1624,34 @@ class Journal(nbapp.AppWindow):
         immediately since this is a structural change."""
         if not (0 <= self.active < len(self.entries)):
             return
+        before_entries = self._copy_entries(self.entries)
+        before_active = self.active
         self.undo.checkpoint("Delete Entry")
         del self.entries[self.active]
         if not self.entries:
             self.active = -1
         elif self.active >= len(self.entries):
             self.active = len(self.entries) - 1
+        if self.entries and self._query:
+            visible = self._matching_index_near(self.active)
+            if visible is None:
+                # Match new_entry(): once the filtered result disappears,
+                # reveal the neighbour we are about to open. Never show a
+                # no-results rail beside an editor for a hidden entry.
+                self._query = ""
+                self.search.set_text("")
+            else:
+                self.active = visible
         self._refresh_list()
-        self._load_active()
-        self._persist()
+        self._load_active(mark_saved=False)
+        if not self._persist():
+            self.entries = before_entries
+            self.active = before_active
+            self._refresh_list()
+            self._load_active()
+            self.undo.commit()  # clear the pending label; state is unchanged
+            return
+        self._mark_saved(0 <= self.active < len(self.entries))
         self.undo.commit()
 
     def _confirm(self, title, message, ok_label, on_yes):
@@ -1449,14 +1702,15 @@ class Journal(nbapp.AppWindow):
     # ---------------- menus ----------------
     def menu_items(self, name):
         if name == "File":
-            # New Entry is this app's purely-internal "new document" action; it
-            # only appends to the in-memory model. Export to PDF renders the
-            # entries into Documents. No open/save — journal.json autosave is
-            # the source of truth. Delete Entry is destructive, so it is only
-            # offered when an entry is open and always confirms first.
+            # New Entry starts today's entry at once (no ellipsis: nothing is
+            # asked first — the label promised a card it never opened). Export
+            # to PDF renders the entries into Documents. No open/save —
+            # journal.json autosave is the source of truth. Delete Entry is
+            # only offered when an entry is open; it acts immediately and is
+            # undoable (see _delete_active), so it carries no ellipsis either.
             have = 0 <= self.active < len(self.entries)
             return [
-                ("New Entry…", self.new_entry),
+                ("New Entry", self.new_entry),
                 ("Delete Entry", self._delete_active if have else None),
                 nbapp.SEP,
                 ("Export to PDF", self._export_pdf),
@@ -1556,7 +1810,7 @@ class Journal(nbapp.AppWindow):
         .side { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .sidehead { padding: 24px 26px 20px; border-bottom: 1px solid #D7D2C5; }
         .side * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .kicker { font-size: 11px; letter-spacing: 0.16em; color: #9A9484;
+        .kicker { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                   font-weight: 700; margin-bottom: 8px; }
         .yearlabel { font-family: "Newsreader","Liberation Serif",serif;
                      font-size: 24px; color: #1A1916; }
@@ -1573,10 +1827,10 @@ class Journal(nbapp.AppWindow):
                    background: #FCFBF8; border: 1px solid #C9C4B6;
                    border-radius: 8px; box-shadow: none; min-height: 30px; }
         .jsearch:focus { border: 1px solid #8A857A; }
-        .searchcount { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
+        .searchcount { font-size: 11px; letter-spacing: 0.1em; color: #6E695E;
                        font-weight: 700; padding: 0 10px; margin: 4px 0 8px; }
         .listbox { padding: 16px 14px; }
-        .sideempty { padding: 30px 12px; font-size: 13px; color: #9A9484; }
+        .sideempty { padding: 30px 12px; font-size: 13px; color: #6E695E; }
         .sideemptyhead { font-size: 13px; color: #6E695E; font-weight: 700; }
         /* the way out of a search that matched nothing: quiet, but a real
            control, so the pane is never a dead end */
@@ -1585,7 +1839,7 @@ class Journal(nbapp.AppWindow):
                         border: 1px solid #D7D2C5; border-radius: 8px;
                         box-shadow: none; }
         .sideemptybtn:hover { background: #EAE3D2; }
-        .monthlabel { font-size: 11px; letter-spacing: 0.14em; color: #9A9484;
+        .monthlabel { font-size: 11px; letter-spacing: 0.14em; color: #6E695E;
                       font-weight: 700; padding: 0 10px; margin: 14px 0 9px; }
         .entryrow { padding: 12px 10px; border-radius: 6px; margin-bottom: 2px;
                     border-left: 3px solid transparent; }
@@ -1604,13 +1858,14 @@ class Journal(nbapp.AppWindow):
         .entryrow.active { background: #EAE3D2; border-left: 3px solid #C8341E; }
         .datebox { background: transparent; margin-top: 1px; }
         .dbday { font-size: 20px; font-weight: 400; color: #6E695E; }
-        .datebox.active .dbday { color: #C8341E; }
-        .dbwd { font-size: 10px; letter-spacing: 0.09em; color: #9A9484;
+        .datebox.active .dbday { color: #B12D19; }
+        .dbwd { font-size: 10px; letter-spacing: 0.09em; color: #6E695E;
                 font-weight: 700; margin-top: 1px; }
-        .datebox.active .dbwd { color: #B3AD9E; }
+        .datebox.active .dbwd { color: #3A362E; }
         .entrytitle { font-family: "Newsreader","Liberation Serif",serif;
                       font-size: 16px; color: #1A1916; }
-        .entrypreview { font-size: 12px; color: #9A9484; margin-top: 3px; }
+        .entrypreview { font-size: 12px; color: #6E695E; margin-top: 3px; }
+        .datebox.active .entrypreview { color: #3A362E; }
 
         .formatbar { background: #FCFBF8; border-bottom: 1px solid #D7D2C5;
                      padding: 10px 36px; min-height: 54px; }
@@ -1628,7 +1883,7 @@ class Journal(nbapp.AppWindow):
         .fmtbtn.ital { font-style: italic;
                        font-family: "Newsreader","Liberation Serif",serif; }
         .fsep { color: #D7D2C5; min-width: 1px; }
-        .wordcount, .savestate { font-size: 13px; color: #8A857A; }
+        .wordcount, .savestate { font-size: 13px; color: #6E695E; }
 
         .editorcol { background: #FCFBF8; }
         .canvaswrap { background: #FCFBF8; }
@@ -1637,7 +1892,7 @@ class Journal(nbapp.AppWindow):
         .bigdate { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 44px; color: #1A1916; letter-spacing: -0.01em;
                    margin-bottom: 12px; }
-        .metaline { font-size: 13px; letter-spacing: 0.04em; color: #9A9484;
+        .metaline { font-size: 13px; letter-spacing: 0.04em; color: #6E695E;
                     margin-bottom: 46px; }
         .emptybox { margin-top: 40px; }
         .emptyhead { font-family: "Newsreader","Liberation Serif",serif;

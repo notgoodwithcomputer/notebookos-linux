@@ -46,6 +46,9 @@ def _uri(path):
         return "file://" + os.path.abspath(path)
 
 
+# See open_async: a preroll longer than this is treated as a failed open.
+PREROLL_LIMIT_MS = 12000
+
 class Playback:
     """One playbin feeding a GTK widget.
 
@@ -64,6 +67,8 @@ class Playback:
         self._path = None
         self._rate = 1.0
         self._bus_ids = []
+        self._pending_open = None
+        self._open_timeout = 0
 
         if not GST_OK:
             self.failed = True
@@ -85,6 +90,7 @@ class Playback:
             self._bus_ids = [
                 bus.connect("message::eos", self._bus_eos),
                 bus.connect("message::error", self._bus_error),
+                bus.connect("message::async-done", self._bus_async_done),
             ]
             self._bus = bus
             self._play = play
@@ -109,22 +115,129 @@ class Playback:
             # ends up playing from its start: the trim-in looks applied because
             # the call returned True.
             self._play.set_state(Gst.State.PAUSED)
-            self._play.get_state(3 * Gst.SECOND)
+            changed, _state, _pending = self._play.get_state(3 * Gst.SECOND)
+            if changed == Gst.StateChangeReturn.FAILURE:
+                raise RuntimeError("media failed to preroll")
             self._rate = 1.0
             if at > 0 or abs(float(rate) - 1.0) > 1e-6:
-                self.seek(at, rate=rate)
-            if play:
-                self.play()
+                if not self.seek(at, rate=rate):
+                    raise RuntimeError("media seek failed")
+            if play and not self.play():
+                raise RuntimeError("media playback failed")
             return True
         except Exception:                                      # noqa: BLE001
+            # Do not leave a half-open pipeline holding the decoder/audio
+            # device after a bad URI, failed preroll or rejected trim seek.
+            try:
+                self._play.set_state(Gst.State.NULL)
+            except Exception:                                  # noqa: BLE001
+                pass
+            self._path = None
             return False
+
+    def open_async(self, path, at=0.0, play=False, rate=1.0, done=None):
+        """Begin preroll and return immediately; `done(ok)` runs on GLib.
+
+        This is the UI-safe counterpart to open(). A decoder is allowed to
+        take seconds to preroll, so waiting with get_state() in a GTK callback
+        freezes the whole editor, including Stop and Close.
+        """
+        if not self.available or not path or not os.path.isfile(path):
+            return False
+        self._cancel_pending(False)
+        try:
+            # Finish the cancelled pipeline's downward transition and discard
+            # its queued ASYNC_DONE before publishing the next request. Without
+            # this boundary, A's delayed bus message can consume B's pending
+            # tuple and report B ready before B has prerollled.
+            changed = self._play.set_state(Gst.State.NULL)
+            if changed == Gst.StateChangeReturn.FAILURE:
+                return False
+            if changed == Gst.StateChangeReturn.ASYNC:
+                changed, _state, _pending = self._play.get_state(
+                    250 * Gst.MSECOND)
+                if changed in (Gst.StateChangeReturn.ASYNC,
+                               Gst.StateChangeReturn.FAILURE):
+                    return False
+            bus = getattr(self, "_bus", None)
+            if bus is not None:
+                while bus.pop_filtered(Gst.MessageType.ASYNC_DONE) is not None:
+                    pass
+            self._play.set_property("uri", _uri(path))
+            self._path = path
+            self._rate = 1.0
+            self._pending_open = (max(0.0, float(at)), bool(play),
+                                  float(rate) or 1.0, done)
+            changed = self._play.set_state(Gst.State.PAUSED)
+            if changed == Gst.StateChangeReturn.FAILURE:
+                self._finish_pending(False)
+                return False
+            if changed != Gst.StateChangeReturn.ASYNC:
+                self._finish_pending(True)
+            elif GLib is not None:
+                # How long a preroll may take before it counts as failed and
+                # the editor falls back to still frames. Generous on purpose:
+                # the old synchronous open waited 3 s and then carried on
+                # anyway, so a slow decoder still played; treating 3 s as
+                # failure on the software-rendered path (TCG, an old laptop)
+                # would silently turn every long clip into a slideshow. A
+                # decoder that has produced nothing in PREROLL_LIMIT_MS is
+                # stuck, not slow.
+                self._open_timeout = GLib.timeout_add(PREROLL_LIMIT_MS,
+                                                      self._open_timed_out)
+            return True
+        except Exception:                                      # noqa: BLE001
+            self._finish_pending(False)
+            return False
+
+    def _cancel_pending(self, notify):
+        pending, self._pending_open = self._pending_open, None
+        timeout, self._open_timeout = self._open_timeout, 0
+        if timeout and GLib is not None:
+            try:
+                GLib.source_remove(timeout)
+            except Exception:                                  # noqa: BLE001
+                pass
+        if notify and pending and pending[3]:
+            try:
+                pending[3](False)
+            except Exception:                                  # noqa: BLE001
+                pass
+
+    def _finish_pending(self, ready):
+        pending = self._pending_open
+        if pending is None:
+            return False
+        at, start_playing, rate, callback = pending
+        self._cancel_pending(False)
+        ok = bool(ready)
+        if ok and (at > 0 or abs(rate - 1.0) > 1e-6):
+            ok = self.seek(at, rate=rate)
+        if ok and start_playing:
+            ok = self.play()
+        if not ok:
+            try:
+                self._play.set_state(Gst.State.NULL)
+            except Exception:                                  # noqa: BLE001
+                pass
+            self._path = None
+        if callback:
+            try:
+                callback(ok)
+            except Exception:                                  # noqa: BLE001
+                pass
+        return False
+
+    def _open_timed_out(self):
+        self._open_timeout = 0
+        return self._finish_pending(False)
 
     def play(self):
         if not self.available:
             return False
         try:
-            self._play.set_state(Gst.State.PLAYING)
-            return True
+            changed = self._play.set_state(Gst.State.PLAYING)
+            return changed != Gst.StateChangeReturn.FAILURE
         except Exception:                                      # noqa: BLE001
             return False
 
@@ -132,8 +245,8 @@ class Playback:
         if not self.available:
             return False
         try:
-            self._play.set_state(Gst.State.PAUSED)
-            return True
+            changed = self._play.set_state(Gst.State.PAUSED)
+            return changed != Gst.StateChangeReturn.FAILURE
         except Exception:                                      # noqa: BLE001
             return False
 
@@ -141,6 +254,7 @@ class Playback:
         """Back to NULL. Safe to call twice, and safe after teardown."""
         if self._play is None:
             return
+        self._cancel_pending(True)
         try:
             self._play.set_state(Gst.State.NULL)
         except Exception:                                      # noqa: BLE001
@@ -226,6 +340,9 @@ class Playback:
                 self._on_error(domain)
             except Exception:                                  # noqa: BLE001
                 pass
+
+    def _bus_async_done(self, _bus, _msg):
+        self._finish_pending(True)
 
     def teardown(self):
         """Release everything. The bus watch is dropped FIRST: a message still

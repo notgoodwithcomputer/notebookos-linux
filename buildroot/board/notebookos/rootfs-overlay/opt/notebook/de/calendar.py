@@ -21,7 +21,8 @@ and `time.strptime` are never used here.
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+gi.require_version("Pango", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
 
 import math
 import os
@@ -37,6 +38,7 @@ import cairo
 import nbapp
 import nbpicker
 import nbicons
+import nbi18n
 from nbi18n import _t  # noqa: E402
 # _upper, not str.upper: monotonic Greek DROPS the tonos in capitals (ΥΛΙΚΑ, not
 # ΥΛΙΚΆ) and Python's upper() keeps it. Used for the short weekday headers.
@@ -80,6 +82,78 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 EVENTS_FILE = os.path.join(CFG_DIR, "calendar.json")
 CALENDARS_FILE = os.path.join(CFG_DIR, "calendars.json")
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+MAX_STORE_BYTES = 32 * 1024 * 1024
+
+
+def _set_event_text(label, text):
+    """Put an event title (or a location) on a label exactly as it was typed.
+
+    People call things "Work", "Home", "School", "Music", "Class" — every one
+    of those is a catalog key, so on a French install a month cell read
+    "Travail" while calendar.json went on holding "Work". The sidebar row for
+    a calendar has been protected since _cal_row; the chips had not been."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+    else:
+        label.set_text("")
+
+
+def _set_event_tooltip(widget, text):
+    """Hover text carrying an event's own words. set_tooltip_text is patched
+    by nbi18n; set_tooltip_markup is not and renders the same once escaped."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+def _combo_append_user(combo, text):
+    """Add a calendar the user NAMED to a ComboBoxText verbatim.
+
+    append_text() is patched by nbi18n, so the picker offered "Personnel"
+    for the calendar the sidebar (already protected) called "Personal" — two
+    names for one calendar, three centimetres apart. append(id, text) is not
+    patched and fills the same column, so get_active()/get_active_text() read
+    back exactly what was added."""
+    value = str(text or "")
+    try:
+        combo.append(None, value)
+    except Exception:
+        combo.append_text(value)
+
+
+class CalendarStoreTooLarge(ValueError):
+    pass
+
+
+def _read_store_json(path, limit=MAX_STORE_BYTES):
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise CalendarStoreTooLarge("Calendar store is too large")
+    return json.loads(raw)
+
+
+def read_calendar_document(path, limit=MAX_DOCUMENT_BYTES):
+    """Decode selected calendar JSON without unbounded UI-thread allocation."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("calendar document is too large")
+    return json.loads(raw.decode("utf-8-sig"))
 
 
 def _quarantine_store(path):
@@ -90,6 +164,8 @@ def _quarantine_store(path):
     app knows the shape is not a calendar. Without this, the next flush would
     write a fresh store straight over whatever the file really held."""
     import time
+    if not os.path.exists(path):
+        return True
     try:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         dest = "%s.damaged-%s" % (path, stamp)
@@ -99,7 +175,8 @@ def _quarantine_store(path):
             n += 1
         os.replace(path, dest)
     except OSError:
-        pass
+        return False
+    return True
 # The Academics app's store. Class meetings are MIRRORED onto this calendar,
 # never copied into it: Academics owns them, so they are rebuilt from that file
 # on every load and are deliberately absent from calendar.json. That keeps one
@@ -199,7 +276,17 @@ day_name = tuple(WEEKDAYS_FULL)
 day_abbr = tuple(name[:3] for name in WEEKDAYS_FULL)
 month_name = ("",) + tuple(MONTHS)
 month_abbr = ("",) + tuple(name[:3] for name in MONTHS)
-HOURS = list(range(8, 21))  # 08:00 .. 20:00
+# THE WHOLE DAY. This was 08:00..20:00, so a 06:30 train, a night shift or
+# anything after nine in the evening simply had no row to sit on and no
+# slot to be typed into. Every consumer below is written against HOURS[0]
+# and HOURS[-1] rather than the literals, and the day/week grid already
+# scrolls, so widening the day is this one line.
+HOURS = list(range(0, 24))  # 00:00 .. 23:00
+# Where a NEW event starts when nothing else says otherwise (a slot click and
+# an edit both do). Nine in the morning is the answer a person expects from an
+# empty New Event card; it is named here so it can never again be spelled as
+# an index into a grid whose first hour has since moved.
+DEFAULT_START_HOUR = 9
 
 # How often an event comes round again. Stored on every occurrence as "repeat"
 # so a series can be recognised, retimed or removed as a whole; the occurrences
@@ -301,6 +388,7 @@ def _repeat_dates(start, rule, end_date=None):
 _TIME_RE = re.compile(r"^(\d{1,2})(?:[:.](\d{2}))?(am|pm)?$", re.I)
 _DMY_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2,4}))?$")
 _ORDINAL_RE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?$", re.I)
+_YEAR_RE = re.compile(r"^[1-9]\d{3}$")
 
 
 # The abbreviations people actually write that are NOT simply the first three
@@ -416,7 +504,8 @@ def parse_quick_event(text, base_day, cal_names=()):
 
     Understands, in any order and mixed into the name: a time ('3pm', '15:00',
     '9.30am', 'noon', 'at 7'), a day ('today', 'tomorrow', 'thursday', '14/8',
-    '14 August', 'August 14', 'Sept 3'), and '#Calendar' to file it. Whatever
+    '14 August', 'August 14', 'Sept 3', '3 January 2027', '3/1/2027'), and
+    '#Calendar' to file it. Whatever
     is left is the name. A weekday or a bare date always resolves FORWARD, so
     'thursday' typed on a Friday means the Thursday coming, not the one just
     gone.
@@ -495,23 +584,29 @@ def parse_quick_event(text, base_day, cal_names=()):
                     day = got
                     i += 1
                     continue
-            # "14 August" / "August 14", with or without an ordinal suffix
+            # "14 August" / "August 14", with or without an ordinal suffix,
+            # and with or without a year after the pair ("3 January 2020",
+            # "January 3, 2020"). The year used to be understood only in the
+            # numeric "3/1/2020" form: written out, "3 january 2020" was
+            # filed on the NEXT 3 January and the "2020" stayed glued to the
+            # event's name — the wrong day, and no sign of it in the readback.
             om = _ORDINAL_RE.match(low)
             if om and nxt in MONTH_WORDS:
-                got = _day_month_year(int(om.group(1)), MONTH_WORDS[nxt],
-                                      None, base_day)
+                got, used = _day_month_year_words(
+                    int(om.group(1)), MONTH_WORDS[nxt], words, i + 2, base_day)
                 if got is not None:
                     day = got
-                    i += 2
+                    i += 2 + used
                     continue
             if low in MONTH_WORDS:
                 om = _ORDINAL_RE.match(nxt)
                 if om:
-                    got = _day_month_year(int(om.group(1)), MONTH_WORDS[low],
-                                          None, base_day)
+                    got, used = _day_month_year_words(
+                        int(om.group(1)), MONTH_WORDS[low], words, i + 2,
+                        base_day)
                     if got is not None:
                         day = got
-                        i += 2
+                        i += 2 + used
                         continue
         if hour is None:
             # "3 pm" written with a space is two words; join them before
@@ -544,16 +639,41 @@ def parse_quick_event(text, base_day, cal_names=()):
             9.0 if hour is None else hour, cal)
 
 
+def _quick_event_end(hour):
+    """One-hour quick event constrained to this app's single-day model."""
+    return min(24.0, max(0.0, float(hour)) + 1.0)
+
+
+def _day_month_year_words(d, m, words, at, base_day):
+    """The date for a typed '<day> <month>' pair, taking a YEAR from the word
+    at `words[at]` when one is there. Returns (date, words consumed past the
+    pair) — 1 when a year was read, else 0. Only a four-digit year counts: a
+    shorter number after "14 August" is far more often a time or a count
+    ("14 August 3pm", "14 August 20 guests") than a year, and the numeric
+    date form ("14/8/26") already covers the short spelling. A four-digit
+    number that is not a real year for that day ("30 February 2020") is left
+    alone, and the pair resolves as if no year had been typed."""
+    if at < len(words):
+        yw = _fold(words[at])
+        if _YEAR_RE.match(yw):
+            got = _day_month_year(d, m, yw, base_day)
+            if got is not None:
+                return got, 1
+    return _day_month_year(d, m, None, base_day), 0
+
+
 def _day_month_year(d, m, y, base_day):
     """Build a date from typed day/month/(optional year) parts, resolving a
     missing year FORWARD — '14/1' typed in December means next January. Returns
     None when the parts are not a real date."""
     if y is None:
+        got = None
         for year in (base_day.year, base_day.year + 1):
             try:
                 got = date(year, m, d)
             except ValueError:
-                return None
+                got = None
+                continue
             if got >= base_day:
                 return got
         return got
@@ -594,6 +714,67 @@ _MONTH_WEEKEND_KEYS = {
 }
 _MONTH_OPEN_KEYS = (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_ISO_Enter,
                     Gdk.KEY_space, Gdk.KEY_KP_Space)
+
+
+class _StatusLabel(Gtk.Label):
+    """The header's transient message line, which asks for NO width of its own.
+
+    The header packs the period title (its natural width, ellipsized when it
+    must), the ‹ › / Today group, this message and the Day/Week/Month segment
+    in one row. Two ellipsizing labels in a box share a shortfall between
+    them, so while "Added Dentist" was showing the title — the one line that
+    says which day, week or month this is — read "17 August 20…" and
+    "August 10–1…", and came back whole only when the message timed out. And
+    a plain ellipsized label still asks for its ellipsis (12px), which is
+    exactly the slack the Greek month title does not have at 1024 wide.
+
+    So this label reports a minimum and natural width of nothing: the title
+    is measured and placed first, and the message is laid into whatever the
+    row has left — the whole sentence on a wide screen, an ellipsized one on
+    a narrow one, and, when the room would hold no more than the ellipsis
+    itself, nothing at all (a lone "…" beside the view segment is not a
+    message). The gap that keeps its text off the segment is taken from its
+    OWN allocation at allocate time, never asked for: a margin or CSS padding
+    would have been counted into the row and paid for by the title.
+    """
+    # No __gtype_name__ on purpose (see installer.PageColumn): a fixed GType
+    # name registers ONCE per process, and the harnesses import this module
+    # more than once.
+    GAP = 10          # px kept clear between the message and the view segment
+
+    def do_get_preferred_width(self):
+        return 0, 0
+
+    def do_size_allocate(self, alloc):
+        # What the label would have asked for on its own (the ellipsis, plus
+        # any theme padding), and one more character: less than that shows
+        # "…" alone or a fragment of it, so the message is faded instead —
+        # opacity, not visibility, because hiding a widget inside its own
+        # allocation would re-run the layout that is running.
+        shown = True
+        try:
+            if self.get_text():
+                need = Gtk.Label.do_get_preferred_width(self)[0]
+                ctx = self.get_pango_context()
+                # NOT None: the shipped Pango (1.50) has no (nullable)
+                # annotation on this argument and dereferences the NULL.
+                # See novel.py's _sync_placeholder_position.
+                _lang = ctx.get_language() or Pango.Language.get_default()
+                metrics = ctx.get_metrics(ctx.get_font_description(), _lang)
+                need += metrics.get_approximate_char_width() // 1024
+                room = alloc.width - self.GAP
+                shown = room >= need
+                if shown:
+                    a = Gdk.Rectangle()
+                    a.x, a.y, a.width, a.height = alloc.x, alloc.y, room, alloc.height
+                    alloc = a
+        except Exception:                                         # noqa: BLE001
+            shown = True
+        Gtk.Label.do_size_allocate(self, alloc)
+        try:
+            self.set_opacity(1.0 if shown else 0.0)
+        except Exception:                                         # noqa: BLE001
+            pass
 
 
 class Calendar(nbapp.AppWindow):
@@ -656,8 +837,15 @@ class Calendar(nbapp.AppWindow):
         self._doc_path = None          # current File-menu document (None=unsaved)
         self.seg_btns = {}
         self.month_grid = None         # live month Gtk.Grid (see _build_month)
+        # How many chips a month cell may stack, per shown month — see
+        # _month_chip_cap. Starts at three and only comes down when a laid-out
+        # grid proves it did not fit the panel.
+        self._month_cap = 3
+        self._month_cap_key = None
+        self._month_cap_pending = False
         self._new_event_hour = None    # slot-click seed for the New Event dialog
         self._status_tok = 0
+        self._status_timer = 0
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         body.set_hexpand(True); body.set_vexpand(True)
@@ -736,20 +924,34 @@ class Calendar(nbapp.AppWindow):
                 getattr(self, "view", None))
 
     def _undo_restore(self, state):
-        (events, calendars, visible, orphans, seen, doc_path, sel,
-         cur_y, cur_m, view) = copy.deepcopy(state)
-        self.events = events
-        self.calendars = calendars
-        self._orphans = orphans
-        self._seen = seen
-        self._doc_path = doc_path
-        self.sel, self.cur_y, self.cur_m, self.view = sel, cur_y, cur_m, view
-        self.cals_on = {c["name"]: visible.get(c["name"], True)
-                        for c in calendars}
-        self._save_calendars()
-        self._save_events(merge=False)
+        before = self._undo_snapshot()
+        def apply(snapshot):
+            (events, calendars, visible, orphans, seen, doc_path, sel,
+             cur_y, cur_m, view) = copy.deepcopy(snapshot)
+            self.events = events
+            self.calendars = calendars
+            self._orphans = orphans
+            self._seen = seen
+            self._doc_path = doc_path
+            self.sel, self.cur_y, self.cur_m, self.view = sel, cur_y, cur_m, view
+            self.cals_on = {c["name"]: visible.get(c["name"], True)
+                            for c in calendars}
+
+        apply(state)
+        calendars_saved = self._save_calendars()
+        events_saved = calendars_saved and self._save_events(merge=False)
+        if not events_saved:
+            apply(before)
+            # Either store may already contain the rejected snapshot. Restore
+            # both best-effort so the next launch agrees with the screen.
+            self._save_calendars()
+            self._save_events(merge=False)
+            self._populate_cal_list()
+            self._refresh()
+            return False
         self._populate_cal_list()
         self._refresh()
+        return True
 
     # ------------------------------------------------------------------ menus
     def menu_items(self, name):
@@ -806,10 +1008,7 @@ class Calendar(nbapp.AppWindow):
     def _toggle_cal_by_name(self, name):
         """Flip a calendar's visibility from the View menu; crash-safe if the
         swatch DrawingArea handle is missing."""
-        self.cals_on[name] = not self.cals_on.get(name, True)
-        area = self.cals_on.get(name + "_area")
-        if area is not None:
-            area.queue_draw()
+        self._set_cal_on(name, not self.cals_on.get(name, True))
         self._rebuild_body()
 
     def _on_key(self, w, ev):
@@ -875,9 +1074,11 @@ class Calendar(nbapp.AppWindow):
         on a fresh / unreadable / empty store. Never raises."""
         self._calendars_quarantine = False
         try:
-            with open(CALENDARS_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json(CALENDARS_FILE)
         except FileNotFoundError:
+            return [dict(DEFAULT_CAL)]
+        except CalendarStoreTooLarge:
+            self._calendars_quarantine = True
             return [dict(DEFAULT_CAL)]
         except Exception:
             # Unreadable bytes: nbapp's writer asides them at the next write;
@@ -924,22 +1125,33 @@ class Calendar(nbapp.AppWindow):
             if not nm or nm.lower() in seen:
                 continue
             color = str(item.get("color", PALETTE[0]))
-            out.append({"name": nm, "color": color})
+            record = dict(item)
+            record.update({"name": nm, "color": color})
+            out.append(record)
             seen.add(nm.lower())
         return out
 
     def _save_calendars(self):
         """Persist named calendars to calendars.json. Never raises."""
-        if getattr(self, "_calendars_quarantine", False):
-            _quarantine_store(CALENDARS_FILE)
-            self._calendars_quarantine = False
         try:
+            if getattr(self, "_calendars_quarantine", False):
+                if not _quarantine_store(CALENDARS_FILE):
+                    raise OSError("could not preserve unrecognized calendars")
+                self._calendars_quarantine = False
             nbapp.atomic_write_json(
                 CALENDARS_FILE,
-                [{"name": c["name"], "color": c["color"]}
-                 for c in self.calendars])
-        except Exception:
-            pass
+                [dict(c) for c in self.calendars])
+            self._calendars_save_warned = False
+            return True
+        except Exception as exc:
+            if not getattr(self, "_calendars_save_warned", False):
+                self._calendars_save_warned = True
+                try:
+                    self._flash_status(
+                        nbapp.save_failure_reason(exc, CALENDARS_FILE))
+                except Exception:
+                    pass
+            return False
 
     # ---------------------------------------------------------------- sidebar
     def _build_sidebar(self):
@@ -1063,10 +1275,19 @@ class Calendar(nbapp.AppWindow):
             return
         title, day, hour, cal = got
         h = int(hour)
+        month = _t(MONTHS[day.month - 1])[:3]
+        # The year rides with the month token — every catalog's form of this
+        # line ends its date with the month, so "Jan 2027" lands where a year
+        # reads naturally in all of them without a second format string. Only
+        # shown when it is NOT this year: that is the one case the day and
+        # month alone are ambiguous ("3 Jan" typed in August is next year, and
+        # "3 january 2020" is a date in the past), and the readback is the
+        # only place that resolution is visible before Enter.
+        if day.year != self.today.year:
+            month += " %d" % day.year
         stamp = _t("%s  ·  %s %d %s  ·  %02d:%02d") % (
             title,
-            _t(WEEKDAYS_FULL[day.weekday()])[:3], day.day,
-            _t(MONTHS[day.month - 1])[:3],
+            _t(WEEKDAYS_FULL[day.weekday()])[:3], day.day, month,
             h, int(round((hour - h) * 60)))
         if cal:
             stamp += "  ·  " + cal
@@ -1081,17 +1302,14 @@ class Calendar(nbapp.AppWindow):
         title, day, hour, cal = got
         names = self._cal_names()
         cal = cal or (names[0] if names else DEFAULT_CAL["name"])
-        self._new_event(day, {"start": hour, "end": hour + 1.0,
+        self._new_event(day, {"start": hour, "end": _quick_event_end(hour),
                               "title": title, "cal": cal})
         self.quick.set_text("")
         # Follow the event to its day, and make sure its calendar is showing —
         # an event you cannot see was not really added.
         self.sel = day
         self.cur_y, self.cur_m = day.year, day.month
-        self.cals_on[cal] = True
-        swatch = self.cals_on.get(cal + "_area")
-        if swatch is not None:
-            swatch.queue_draw()
+        self._set_cal_on(cal, True)
         self._save_events()
         self._refresh()
         self._flash_status(_t("Added %s") % title)
@@ -1166,18 +1384,23 @@ class Calendar(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         row.get_style_context().add_class("calrow")
 
-        toggle = Gtk.Button()
+        toggle = Gtk.ToggleButton()
         toggle.set_relief(Gtk.ReliefStyle.NONE)
         toggle.get_style_context().add_class("caltoggle")
-        toggle.set_tooltip_text(_t("Show or hide calendar"))
+        action_name = _t("Show or hide calendar") + ": " + name
+        toggle.set_tooltip_text(action_name)
+        toggle.get_accessible().set_name(action_name)
+        toggle.set_active(bool(self.cals_on.get(name, True)))
         inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         inner.set_margin_top(2); inner.set_margin_bottom(2)
         swatch = Gtk.DrawingArea(); swatch.set_size_request(18, 18)
         swatch.set_valign(Gtk.Align.CENTER)
         swatch.connect("draw", self._draw_calbox, name)
         self.cals_on[name + "_area"] = swatch  # keep a handle for redraw
+        self.cals_on[name + "_toggle"] = toggle  # so _set_cal_on can mirror it
         inner.pack_start(swatch, False, False, 0)
-        lbl = Gtk.Label(label=name, xalign=0)
+        lbl = Gtk.Label(label="", xalign=0)
+        nbi18n.set_verbatim(lbl, name)
         lbl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
         lbl.get_style_context().add_class("callabel")
         inner.pack_start(lbl, True, True, 0)
@@ -1227,12 +1450,34 @@ class Calendar(nbapp.AppWindow):
         return False
 
     def _on_toggle_cal_clicked(self, _w, name):
-        self.cals_on[name] = not self.cals_on.get(name, True)
+        # GTK has already flipped the button; take ITS state rather than
+        # negating ours and pushing it back with set_active. The push-back
+        # re-emitted "clicked" (Gtk.ToggleButton.set_active does that) and,
+        # the moment the two disagreed -- an event filed into a hidden
+        # calendar re-shows it without rebuilding this row -- the two
+        # handlers corrected each other to RecursionError.
+        self._set_cal_on(name, bool(_w.get_active()))
+        self._rebuild_body()
+        return True
+
+    def _set_cal_on(self, name, on):
+        """Show or hide a calendar and keep its sidebar row in step.
+
+        The one place a calendar's visibility changes: the row toggle, the
+        View menu, and the three paths that re-show a hidden calendar
+        because an event was just filed into it. The row's ToggleButton is
+        mirrored QUIETLY (nbapp.set_active_quietly) so mirroring never runs
+        the row's own clicked handler."""
+        self.cals_on[name] = bool(on)
+        toggle = self.cals_on.get(name + "_toggle")
+        if toggle is not None:
+            try:
+                nbapp.set_active_quietly(toggle, bool(on))
+            except Exception:                                     # noqa: BLE001
+                pass
         area = self.cals_on.get(name + "_area")
         if area is not None:
             area.queue_draw()
-        self._rebuild_body()
-        return True
 
     def _round_rect(self, ctx, x, y, w, h, r):
         # Software-render safety: a draw signal can arrive before the
@@ -1256,9 +1501,9 @@ class Calendar(nbapp.AppWindow):
         dlg = Gtk.Dialog(transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("nbdialog")
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("dlgcancel")
-        ok = dlg.add_button("Add Calendar", Gtk.ResponseType.OK)
+        ok = dlg.add_button(_t("Add Calendar"), Gtk.ResponseType.OK)
         ok.get_style_context().add_class("suggested-action")
         dlg.set_default_response(Gtk.ResponseType.OK)
 
@@ -1285,15 +1530,23 @@ class Calendar(nbapp.AppWindow):
         used = {c["color"] for c in self.calendars}
         selected = [next((i for i, c in enumerate(PALETTE) if c not in used), 0)]
         swrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        swatch_group = None
         for i, color in enumerate(PALETTE):
-            ev = Gtk.Button(); ev.set_relief(Gtk.ReliefStyle.NONE)
+            ev = (Gtk.RadioButton.new(None) if swatch_group is None else
+                  Gtk.RadioButton.new_from_widget(swatch_group))
+            if swatch_group is None:
+                swatch_group = ev
+            ev.set_mode(False); ev.set_relief(Gtk.ReliefStyle.NONE)
             ev.get_style_context().add_class("calswatch")
-            ev.set_tooltip_text(_t("Choose color %d") % (i + 1))
+            action = _t("Choose color %d") % (i + 1)
+            ev.set_tooltip_text(action)
+            ev.get_accessible().set_name(action)
             da = Gtk.DrawingArea(); da.set_size_request(26, 26)
             da.connect("draw", self._draw_swatch, i, color, selected)
             ev.add(da)
             ev.connect("clicked",
                        self._on_pick_swatch, i, selected, swrow)
+            ev.set_active(i == selected[0])
             swrow.pack_start(ev, False, False, 0)
         area.pack_start(self._field("Color", swrow), False, False, 0)
 
@@ -1345,10 +1598,11 @@ class Calendar(nbapp.AppWindow):
             pass
         return False
 
-    def _on_pick_swatch(self, _btn, idx, selected, swrow):
-        # `clicked`, so no event argument and nothing to return. The row's
-        # children are Gtk.Buttons now rather than EventBoxes; both are Gtk.Bin,
-        # so get_child() still reaches the DrawingArea that does the painting.
+    def _on_pick_swatch(self, btn, idx, selected, swrow):
+        # `clicked`, so no event argument and nothing to return. RadioButton is
+        # a Gtk.Bin, so get_child() reaches the DrawingArea doing the painting.
+        if not btn.get_active():
+            return
         selected[0] = idx
         for child in swrow.get_children():
             da = child.get_child() if isinstance(child, Gtk.Bin) else None
@@ -1360,11 +1614,17 @@ class Calendar(nbapp.AppWindow):
         Blocked when it is the only calendar left."""
         if len(self.calendars) <= 1:
             return
+        if not self._confirm(
+                _t("Delete Calendar"),
+                _t("Delete calendar “%s”?") % name,
+                _t("Delete")):
+            return
         self.undo.checkpoint("Delete Calendar")
         self.calendars = [c for c in self.calendars if c["name"] != name]
         self.events = [e for e in self.events if e["cal"] != name]
         self.cals_on.pop(name, None)
         self.cals_on.pop(name + "_area", None)
+        self.cals_on.pop(name + "_toggle", None)
         self._save_calendars()
         self._save_events()
         self._populate_cal_list()
@@ -1377,15 +1637,15 @@ class Calendar(nbapp.AppWindow):
         dlg = Gtk.Dialog(transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("nbdialog")
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("dlgcancel")
         ok = dlg.add_button(ok_label, Gtk.ResponseType.OK)
         # The shared OS treatment (Papertone .destructive-action), the same red
         # slab the Finder, Contacts, Cookbook, Journal and Terminal use for a
         # single destructive choice. The quieter local .destructive stays for
         # the two places it is right: a Delete that sits BESIDE a primary Save
-        # (_event_dialog), and _confirm_series, where both choices destroy
-        # something and neither is "the" action.
+        # (_event_dialog), and _choose_series_scope on a delete, where every
+        # choice destroys something and none is "the" action.
         ok.get_style_context().add_class("destructive-action")
         area = dlg.get_content_area()
         area.set_spacing(10)
@@ -1452,18 +1712,22 @@ class Calendar(nbapp.AppWindow):
         head.pack_start(left, False, False, 0)
 
         # Transient status line (Save/Open/New feedback), centered in the bar.
-        self.status_lbl = Gtk.Label(label="", xalign=0.5)
+        # It may only ever have what is LEFT once the title has spelt itself
+        # out — see _StatusLabel for why an ordinary label could not be
+        # trusted with that. Its right-hand gap from the view segment is CSS
+        # padding (.statusmsg), which that class keeps out of the row's
+        # arithmetic; a margin here would have been width taken from the title.
+        self.status_lbl = _StatusLabel(label="", xalign=0.5)
         self.status_lbl.set_ellipsize(3)
         self.status_lbl.get_style_context().add_class("statusmsg")
-        # No padding: this label is empty at rest, and its padding was reserved
-        # width the title could not use on a narrow screen.
         head.pack_start(self.status_lbl, True, True, 0)
 
         seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         seg.get_style_context().add_class("segwrap")
         seg.set_valign(Gtk.Align.CENTER)
-        for i, key in enumerate(("day", "week", "month")):
-            b = Gtk.Button(label=key.capitalize())
+        for i, (key, source_label) in enumerate(
+                (("day", "Day"), ("week", "Week"), ("month", "Month"))):
+            b = Gtk.Button(label=_t(source_label))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("segbtn")
             if i == 2:
@@ -1587,13 +1851,25 @@ class Calendar(nbapp.AppWindow):
             "Enter opens the selected day"))
         try:
             acc = grid.get_accessible()
-            acc.set_name(_t("Month grid"))
-            acc.set_description(_t(
+            selected = _t("%s, %d %s %d") % (
+                _t(WEEKDAYS_FULL[self.sel.weekday()]), self.sel.day,
+                _t(MONTHS[self.sel.month - 1]), self.sel.year)
+            acc.set_name("%s: %s" % (_t("Month grid"), selected))
+            instructions = _t(
                 "Arrow keys move a day, Page Up and Page Down move a month, "
-                "Enter opens the selected day"))
+                "Enter opens the selected day")
+            acc.set_description("%s. %s" % (selected, instructions))
         except Exception:
             pass    # a11y bridge missing is never worth failing a render over
         self.month_grid = grid
+        # A new month starts hopeful (three chips) and is measured, see
+        # _month_chip_cap; the answer for a month is remembered while it stays
+        # on screen so a rebuild after every quick-add does not re-measure.
+        key = (self.cur_y, self.cur_m)
+        if self._month_cap_key != key:
+            self._month_cap_key = key
+            self._month_cap = 3
+        grid.connect("size-allocate", self._month_chip_cap)
 
         lead, dim = _monthrange(self.cur_y, self.cur_m)
         total = lead + dim
@@ -1610,6 +1886,60 @@ class Calendar(nbapp.AppWindow):
             grid.attach(self._month_cell(date(self.cur_y, self.cur_m, dnum),
                                          col >= 5), col, row, 1, 1)
         self.body_area.pack_start(grid, True, True, 0)
+
+    def _month_chip_cap(self, grid, alloc):
+        """Lower the number of chips a month cell stacks when the laid-out grid
+        did not fit its screen, and rebuild once with the smaller cap.
+
+        A month grid never scrolls, so its rows are as tall as the busiest
+        cell asks and the whole grid must fit under the header: with three
+        chips in a cell a six-row month is 107px a row, and 6 x 107 is 59px
+        more than a 740px panel has under the weekday header — the row of
+        the 31st became a sliver and the sidebar's New Event button left the
+        screen. Whether three fit depends on the panel, the shipped face and
+        the row count at once, so — like _dow_fit — this asks the allocated
+        grid rather than guessing: when its bottom edge lies below its
+        toplevel (a widget is never given LESS than its minimum, so an
+        overflow shows up as an allocation past the window's edge), the cap
+        comes down by one and the month is rebuilt in an idle (never inside
+        the allocation that is running). Nothing is hidden by the smaller
+        cap: the day keeps its '+N more' chip, which costs no row."""
+        try:
+            if (grid is not self.month_grid or self.view != "month"
+                    or self._closed or self._month_cap_pending
+                    or self._month_cap <= 1):
+                return
+            top = grid.get_toplevel()
+            got = grid.translate_coordinates(top, 0, 0)
+            if got is None:
+                return
+            y = got[-1]
+            ceiling = top.get_allocated_height()
+            screen_h = nbapp.screen_size()[1]
+            if ceiling <= 1 or (screen_h > 1 and screen_h < ceiling):
+                ceiling = screen_h
+            if y + alloc.height <= ceiling:
+                return
+            self._month_cap -= 1
+            self._month_cap_pending = True
+            GLib.idle_add(self._rebuild_month_with_cap)
+        except Exception:
+            return    # a measuring aid; never worth breaking a render over
+
+    def _rebuild_month_with_cap(self):
+        self._month_cap_pending = False
+        if self._closed or self.view != "month":
+            return False
+        # A rebuild replaces the grid the keyboard may be standing on (see
+        # _focus_month_grid); when the old one held focus, the new one takes it.
+        try:
+            had_focus = self.month_grid is not None and self.month_grid.has_focus()
+        except Exception:
+            had_focus = False
+        self._rebuild_body()
+        if had_focus:
+            self._focus_month_grid()
+        return False
 
     @staticmethod
     def month_key_target(keyval, sel):
@@ -1682,9 +2012,10 @@ class Calendar(nbapp.AppWindow):
     @staticmethod
     def _hhmm(value):
         try:
-            h = int(value)
-            return "%02d:%02d" % (h, int(round((float(value) - h) * 60)))
-        except (TypeError, ValueError):
+            minutes = max(0, min(24 * 60, int(round(float(value) * 60))))
+            h, minute = divmod(minutes, 60)
+            return "%02d:%02d" % (h, minute)
+        except (TypeError, ValueError, OverflowError):
             return "--:--"
 
     def _chip_detail(self, e):
@@ -1717,14 +2048,34 @@ class Calendar(nbapp.AppWindow):
         top.pack_end(num, False, False, 0)
         cell.pack_start(top, False, False, 0)
 
-        # Show up to three event chips; when a day holds more, keep two and add a
-        # '+N more' chip that jumps to that day's Day view instead of silently
-        # dropping the overflow. Each chip is its own click target that opens the
-        # event for edit/delete (returns True so it doesn't also pick the day).
+        # Show up to `cap` event chips (three, or fewer when the rows of this
+        # month cannot hold three — see _month_chip_cap); when a day holds
+        # more, a '+N more' chip jumps to that day's Day view instead of
+        # silently dropping the overflow. It sits in the day-number row, at
+        # the left of the number, and NOT under the chips: as a fourth row it
+        # cost exactly what a chip costs, so a six-row month with three events
+        # on one day grew 59px past a 740px panel — the row of the 31st was a
+        # sliver and the sidebar's New Event button was pushed off the screen
+        # — and shortening the stack to make room for it changed nothing. Each
+        # chip is its own click target that opens the event for edit/delete
+        # (returns True so it doesn't also pick the day).
         day_events = self._events_on(d)
-        shown = day_events if len(day_events) <= 3 else day_events[:2]
+        cap = max(1, int(getattr(self, "_month_cap", 3)))
+        shown = day_events[:cap]
+        if len(day_events) > len(shown):
+            more = Gtk.Label(label=_t("+%d more") % (len(day_events) - len(shown)),
+                             xalign=0)
+            more.get_style_context().add_class("evmore")
+            morebox = Gtk.Button(); morebox.set_relief(Gtk.ReliefStyle.NONE)
+            morebox.get_style_context().add_class("eventhit")
+            morebox.set_valign(Gtk.Align.CENTER)
+            morebox.set_tooltip_text(_t("Show all events for this day"))
+            morebox.add(more)
+            morebox.connect("clicked", self._on_show_more, d)
+            top.pack_start(morebox, False, False, 0)
         for e in shown:
-            chip = Gtk.Label(label=e["title"], xalign=0)
+            chip = Gtk.Label(xalign=0)
+            _set_event_text(chip, e["title"])
             chip.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
             cc = chip.get_style_context()
             cc.add_class("evchip"); cc.add_class(self._event_chip_class(e))
@@ -1735,19 +2086,9 @@ class Calendar(nbapp.AppWindow):
             # A month cell is too narrow to print the time beside the name
             # without eating the name, so it goes on the hover instead — along
             # with the full name, which is what an ellipsis just took away.
-            chipbox.set_tooltip_text(self._chip_detail(e))
+            _set_event_tooltip(chipbox, self._chip_detail(e))
             chipbox.connect("clicked", self._on_event_clicked, e)
             cell.pack_start(chipbox, False, False, 0)
-        if len(day_events) > len(shown):
-            more = Gtk.Label(label=_t("+%d more") % (len(day_events) - len(shown)),
-                             xalign=0)
-            more.get_style_context().add_class("evmore")
-            morebox = Gtk.Button(); morebox.set_relief(Gtk.ReliefStyle.NONE)
-            morebox.get_style_context().add_class("eventhit")
-            morebox.set_tooltip_text(_t("Show all events for this day"))
-            morebox.add(more)
-            morebox.connect("clicked", self._on_show_more, d)
-            cell.pack_start(morebox, False, False, 0)
 
         ev.add(cell)
         # True: a click in the grid also parks keyboard focus there, so the
@@ -1853,13 +2194,34 @@ class Calendar(nbapp.AppWindow):
                 cc.add_class("istoday")
             grid.attach(lbl, i + 1, 0, 1, 1)
 
+        # All-day events live in a band above the clock, as in the Day view —
+        # not at 00:00, and not nowhere: this view used to draw only the timed
+        # events, so a birthday or a holiday that the Month and Day views both
+        # showed simply vanished from the week, with no empty hint either (the
+        # hint rightly counts it as an event). One band row for the whole week
+        # when any of its days has one, so the hour rows still line up.
+        parts = [self._partition_day_events(d) for d in days]
+        row_offset = 0
+        if any(all_day for all_day, _timed in parts):
+            row_offset = 1
+            for di, (all_day, _timed) in enumerate(parts):
+                band = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                band.get_style_context().add_class("alldayband")
+                band.get_style_context().add_class("weekcell")
+                band.set_hexpand(True)
+                for event in all_day:
+                    band.pack_start(self._time_chip(event, True, narrow=True),
+                                    False, False, 0)
+                grid.attach(band, di + 1, 1, 1, 1)
+
         cells = {}
         for i, h in enumerate(HOURS):
+            i += 1 + row_offset         # row 0 is the day header
             hl = Gtk.Label(label="%02d:00" % h, xalign=1)
             hl.get_style_context().add_class("hourlabel")
             hl.set_size_request(56, 52); hl.set_valign(Gtk.Align.START)
             hl.set_margin_end(10)
-            grid.attach(hl, 0, i + 1, 1, 1)
+            grid.attach(hl, 0, i, 1, 1)
             for di in range(7):
                 slot = Gtk.EventBox()
                 slot.get_style_context().add_class("weekcell")
@@ -1868,10 +2230,10 @@ class Calendar(nbapp.AppWindow):
                 slot.add(inner)
                 slot.connect("button-press-event",
                              self._on_pick_slot, days[di], h)
-                grid.attach(slot, di + 1, i + 1, 1, 1)
+                grid.attach(slot, di + 1, i, 1, 1)
                 cells[(di, h)] = inner
         for di, d in enumerate(days):
-            for e in self._partition_day_events(d)[1]:
+            for e in parts[di][1]:
                 # Fill every hour cell the event spans (start hour .. end), so
                 # the week block grows with its duration; only its first row is
                 # titled (see _build_day); out-of-band events are pinned to an
@@ -1952,7 +2314,8 @@ class Calendar(nbapp.AppWindow):
         label = e["title"] if lead else ""
         if lead and e.get("location"):
             label += "  ·  " + e["location"]
-        chip = Gtk.Label(label=label, xalign=0)
+        chip = Gtk.Label(xalign=0)
+        _set_event_text(chip, label)
         chip.set_ellipsize(3)
         if narrow:
             chip.set_max_width_chars(6)
@@ -1975,7 +2338,7 @@ class Calendar(nbapp.AppWindow):
         box = Gtk.Button(); box.set_relief(Gtk.ReliefStyle.NONE)
         box.get_style_context().add_class("eventhit")
         box.set_can_focus(lead)
-        box.set_tooltip_text(self._chip_detail(e))
+        _set_event_tooltip(box, self._chip_detail(e))
         box.add(chip)
         box.connect("clicked", self._on_event_clicked, e)
         return box
@@ -2096,9 +2459,11 @@ class Calendar(nbapp.AppWindow):
         self._orphans = []
         self._events_quarantine = False
         try:
-            with open(EVENTS_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json(EVENTS_FILE)
         except FileNotFoundError:
+            return []
+        except CalendarStoreTooLarge:
+            self._events_quarantine = True
             return []
         except Exception:
             # Unreadable bytes. nbapp.atomic_write_json moves the original
@@ -2145,13 +2510,28 @@ class Calendar(nbapp.AppWindow):
         try:
             start = float(item.get("start", 9.0)) if not all_day else 0.0
             end = float(item.get("end", start + 1)) if not all_day else 24.0
+            # Python's JSON reader accepts NaN/Infinity. They satisfy the float
+            # conversion above but later crash int(start) in the week/day view
+            # (or feed non-finite geometry to Cairo). Cost only this time pair.
+            if not math.isfinite(start) or not math.isfinite(end):
+                start, end = 9.0, 10.0
         except (TypeError, ValueError):
             start, end = 9.0, 10.0
+        if not all_day:
+            # This store has one event date and no end-date field. Keep the
+            # range inside it: >24 values rendered impossible times such as
+            # 24:30 and fed out-of-band geometry to day/week views.
+            start = max(0.0, min(23.999, start))
+            end = min(24.0, max(start + 1.0 / 60.0, end))
         default_cal = self._cal_names()[0] if self.calendars else "Personal"
         cal = str(item.get("cal", default_cal)) or default_cal
         rid = str(item.get("id") or "").strip()
         rep = str(item.get("repeat", "none") or "none")
-        ev = {"id": rid if rid else _gen_id(), "date": d, "start": start,
+        known = {"id", "date", "start", "end", "title", "cal", "repeat",
+                 "series", "location", "notes", "all_day", "series_end",
+                 "pattern_date", "detached", "cancelled"}
+        ev = {k: copy.deepcopy(v) for k, v in item.items() if k not in known}
+        ev.update({"id": rid if rid else _gen_id(), "date": d, "start": start,
               "end": end, "title": str(item.get("title", "")), "cal": cal,
               "repeat": rep if rep in REPEAT_LABELS else "none",
               "series": str(item.get("series", "") or ""),
@@ -2161,7 +2541,7 @@ class Calendar(nbapp.AppWindow):
               "series_end": str(item.get("series_end", "") or ""),
               "pattern_date": str(item.get("pattern_date", "") or ""),
               "detached": bool(item.get("detached", False)),
-              "cancelled": bool(item.get("cancelled", False))}
+              "cancelled": bool(item.get("cancelled", False))})
         ev["_loadkey"] = self._content_key(ev["title"], d, start)
         return ev
 
@@ -2223,8 +2603,10 @@ class Calendar(nbapp.AppWindow):
         guard and returns None for anything else, which is exactly the signal
         the orphan path is waiting for."""
         try:
-            with open(EVENTS_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json(EVENTS_FILE)
+        except CalendarStoreTooLarge:
+            self._events_quarantine = True
+            return None
         except Exception:
             return None
         return self._event_list(data)
@@ -2276,9 +2658,13 @@ class Calendar(nbapp.AppWindow):
         knowing repeats exist, and they still have to show next Tuesday's bin
         day. The tags are only there so the series can be edited or removed as a
         whole; anything that ignores them still reads a correct calendar."""
-        rec = {"id": self._ensure_id(e),
+        known = {"id", "date", "start", "end", "title", "cal", "repeat",
+                 "series", "location", "notes", "all_day", "series_end",
+                 "pattern_date", "detached", "cancelled", "_loadkey"}
+        rec = {k: copy.deepcopy(v) for k, v in e.items() if k not in known}
+        rec.update({"id": self._ensure_id(e),
                "date": self._date_to_iso(e["date"]),
-               "title": e["title"], "cal": e["cal"]}
+               "title": e["title"], "cal": e["cal"]})
         if not e.get("all_day", False):
             rec.update({"start": e["start"], "end": e["end"]})
         for key, default in (("location", ""), ("notes", ""),
@@ -2317,7 +2703,16 @@ class Calendar(nbapp.AppWindow):
             # move it aside NOW, immediately before the replacing write — the
             # same moment nbapp picks for files it can detect — and skip the
             # merge, which could only re-read the shape we already refused.
-            _quarantine_store(EVENTS_FILE)
+            if not _quarantine_store(EVENTS_FILE):
+                exc = OSError("could not preserve unrecognized calendar events")
+                if not getattr(self, "_save_warned", False):
+                    self._save_warned = True
+                    try:
+                        self._flash_status(nbapp.save_failure_reason(
+                            exc, EVENTS_FILE))
+                    except Exception:
+                        pass
+                return False
             self._events_quarantine = False
         try:
             data = [self._event_record(e) for e in self.events]
@@ -2331,6 +2726,7 @@ class Calendar(nbapp.AppWindow):
                 self._orphans = []
             nbapp.atomic_write_json(EVENTS_FILE, data)
             self._save_warned = False
+            return True
         except Exception as exc:
             # See academics._save_to_disk. Silence here reads as "Calendar
             # deleted my appointments": the store keeps whatever the last write
@@ -2343,6 +2739,7 @@ class Calendar(nbapp.AppWindow):
                         nbapp.save_failure_reason(exc, EVENTS_FILE))
                 except Exception:
                     pass
+            return False
 
     def _on_destroy(self, *_):
         # Idempotent: GTK can emit "destroy" more than once through nested
@@ -2353,6 +2750,14 @@ class Calendar(nbapp.AppWindow):
         # Marked BEFORE anything else, so a rollover poll that fires during the
         # saves below sees a closing window and stays away from the widgets.
         self._closed = True
+        self._status_tok += 1
+        status_id = getattr(self, "_status_timer", 0)
+        self._status_timer = 0
+        if status_id:
+            try:
+                GLib.source_remove(status_id)
+            except Exception:
+                pass
         rid = getattr(self, "_rollover_id", 0)
         self._rollover_id = 0
         if rid:
@@ -2547,12 +2952,12 @@ class Calendar(nbapp.AppWindow):
         dlg = Gtk.Dialog(transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("nbdialog")
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("dlgcancel")
         if editing:
-            delbtn = dlg.add_button("Delete", RESPONSE_DELETE)
+            delbtn = dlg.add_button(_t("Delete"), RESPONSE_DELETE)
             delbtn.get_style_context().add_class("destructive")
-        ok = dlg.add_button("Save" if editing else "Add Event",
+        ok = dlg.add_button(_t("Save") if editing else _t("Add Event"),
                             Gtk.ResponseType.OK)
         ok.get_style_context().add_class("suggested-action")
         dlg.set_default_response(Gtk.ResponseType.OK)
@@ -2633,17 +3038,40 @@ class Calendar(nbapp.AppWindow):
 
         fields = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         start = Gtk.ComboBoxText()
-        for h in HOURS:
-            for mm in ("00", "30"):
-                start.append_text("%02d:%s" % (h, mm))
-        start.set_active(self._start_index(existing))
-        dur = Gtk.ComboBoxText()
-        for label in ("30 minutes", "1 hour", "2 hours", "3 hours"):
-            dur.append_text(label)
-        dur.set_active(self._duration_index(existing))
+        for slot in self._time_slots():
+            start.append_text(slot)
+        start_idx = self._start_index(existing)
+        start.set_active(start_idx)
+        # AN EVENT IS A RANGE, NOT A LENGTH. This was a four-item duration
+        # picker -- 30 minutes, 1, 2 or 3 hours -- so a 09:15..10:45 meeting
+        # simply could not be written down, and anything that did not happen to
+        # be one of those four lengths was filed as the nearest one that was.
+        # The stored record has always carried `start` and `end` (the day grid
+        # draws the block from them), so nothing below the UI changes: this
+        # picks the end directly instead of inferring it.
+        end = Gtk.ComboBoxText()
+        for slot in self._time_slots(include_close=True):
+            end.append_text(slot)
+        end.set_active(self._end_index(existing, start_idx))
+        timeerr = Gtk.Label(label=_t("An event has to end after it starts."),
+                            xalign=0)
+        timeerr.get_style_context().add_class("dlgerror")
+        timeerr.set_no_show_all(True)
         fields.pack_start(self._field("Starts", start), True, True, 0)
-        fields.pack_start(self._field("Duration", dur), True, True, 0)
+        fields.pack_start(self._field("Ends", end), True, True, 0)
         area.pack_start(fields, False, False, 0)
+        area.pack_start(timeerr, False, False, 0)
+
+        def _keep_end_after_start(*_):
+            """Nudge the end along when the start passes it, the way every
+            calendar does -- moving a 10:00 start to 14:00 must not silently
+            leave an end of 11:00 behind for the save to refuse."""
+            si, ei = start.get_active(), end.get_active()
+            if si >= 0 and ei >= 0 and ei <= si:
+                end.set_active(min(si + 2, len(self._time_slots(True)) - 1))
+            timeerr.hide()
+        start.connect("changed", _keep_end_after_start)
+        end.connect("changed", lambda *_: timeerr.hide())
         all_day.connect("toggled", lambda w: fields.set_sensitive(
             not w.get_active()))
         fields.set_sensitive(not all_day.get_active())
@@ -2655,7 +3083,7 @@ class Calendar(nbapp.AppWindow):
         if editing and existing["cal"] not in cal_names:
             cal_names = [existing["cal"]] + cal_names
         for cname in cal_names:
-            calpick.append_text(cname)
+            _combo_append_user(calpick, cname)
         if editing and existing["cal"] in cal_names:
             calpick.set_active(cal_names.index(existing["cal"]))
         elif cal_names:
@@ -2693,13 +3121,38 @@ class Calendar(nbapp.AppWindow):
             end_entry.set_text(existing.get("series_end", ""))
         area.pack_start(self._field(_t("Series End Date"), end_entry),
                         False, False, 0)
+        # An end date that is not one says so in words, like the empty title
+        # above: a red border on its own told nobody WHAT was wrong with
+        # "yesterday" or how to write it. Hidden until it is needed, cleared
+        # the moment the field changes. The example is a real date in this
+        # calendar's own form rather than a pattern of letters.
+        end_err = Gtk.Label(xalign=0)
+        end_err.get_style_context().add_class("dlgerror")
+        end_err.set_no_show_all(True)
+        area.pack_start(end_err, False, False, 0)
+
+        def _clear_end_err(*_):
+            end_entry.get_style_context().remove_class("field-error")
+            end_err.hide()
+        end_entry.connect("changed", _clear_end_err)
 
         notes = Gtk.TextView()
         notes.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
-        notes.set_size_request(-1, 64)
         if editing:
             notes.get_buffer().set_text(existing.get("notes", ""))
-        area.pack_start(self._field(_t("Notes"), notes), False, False, 0)
+        # GTK draws no border for a TextView's own CSS, so the notes area was
+        # an invisible field: the NOTES caption, then blank paper, while every
+        # field above it sits in an outlined box. Frame it the way the entries
+        # are (see .notesframe), with the text scrolling inside once it is
+        # longer than the field — the same shape Contacts gives its notes.
+        nscroll = Gtk.ScrolledWindow()
+        nscroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        nscroll.set_size_request(-1, 64)
+        nscroll.add(notes)
+        nframe = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        nframe.get_style_context().add_class("notesframe")
+        nframe.pack_start(nscroll, True, True, 0)
+        area.pack_start(self._field(_t("Notes"), nframe), False, False, 0)
 
         dlg.show_all()
         # Focus the title so typing starts there, not on the day-step arrows the
@@ -2730,9 +3183,19 @@ class Calendar(nbapp.AppWindow):
                 st = start.get_active_text() or "09:00"
                 hh, mm = st.split(":")
                 sh = int(hh) + int(mm) / 60.0
-                dh = {0: 0.5, 1: 1, 2: 2, 3: 3}[dur.get_active()]
+                et = end.get_active_text() or "10:00"
+                ehh, emm = et.split(":")
+                eh = int(ehh) + int(emm) / 60.0
             except (ValueError, KeyError):
                 break
+            if eh <= sh:
+                # Say it and stay open, the same way an empty title does.
+                # Silently swapping or clamping the two would file an event the
+                # person did not write.
+                timeerr.show()
+                end.grab_focus()
+                continue
+            dh = eh - sh
             default_cal = cal_names[0] if cal_names else "Personal"
             # By INDEX into cal_names, never calpick.get_active_text(): nbi18n
             # translates what a ComboBoxText shows, so the stock calendar
@@ -2761,13 +3224,20 @@ class Calendar(nbapp.AppWindow):
             series_end = self._iso_to_date(end_entry.get_text().strip())
             if end_entry.get_text().strip() and series_end is None:
                 end_entry.get_style_context().add_class("field-error")
+                end_err.set_text(_t("An end date looks like %s.")
+                                 % self._date_to_iso(target_day))
+                end_err.show()
                 end_entry.grab_focus()
                 continue
+            attempt = self._event_attempt_snapshot()
             if editing:
                 fields["series_end"] = (self._date_to_iso(series_end)
                                         if series_end else "")
                 if existing.get("series") and rule == cur_rule:
-                    scope = self._choose_series_scope(_t("Edit Repeating Event"))
+                    scope = self._choose_series_scope(
+                        _t("Edit Repeating Event"),
+                        self._series_body(existing,
+                                          self._series_members(existing)))
                     if scope is None:
                         continue
                     self._edit_series_scope(existing, target_day, fields, scope)
@@ -2781,16 +3251,46 @@ class Calendar(nbapp.AppWindow):
             self.cur_y, self.cur_m = target_day.year, target_day.month
             # If the target calendar was toggled off, turn it back on so the
             # event isn't invisible the instant it's saved.
-            self.cals_on[cal] = True
-            swatch = self.cals_on.get(cal + "_area")
-            if swatch is not None:
-                swatch.queue_draw()
-            self._save_events()
+            self._set_cal_on(cal, True)
+            if not self._save_events():
+                self._restore_event_attempt(attempt)
+                self._refresh()
+                continue
             self._refresh()
             break
         dlg.destroy()
 
     # ------------------------------------------------------- repeating events
+    def _event_attempt_snapshot(self):
+        """Reversible state for one event-dialog Save attempt.
+
+        Keep the original event objects as well as their values: the open
+        dialog's ``existing`` reference must remain valid after rollback so a
+        second press of Save edits the real model rather than a detached copy.
+        """
+        objects = list(self.events)
+        return (objects, [copy.deepcopy(event) for event in objects],
+                getattr(self, "sel", None), getattr(self, "cur_y", None),
+                getattr(self, "cur_m", None), dict(self.cals_on),
+                set(getattr(self, "_seen", set())),
+                copy.deepcopy(getattr(self, "_orphans", [])))
+
+    def _restore_event_attempt(self, snapshot):
+        objects, values, sel, cur_y, cur_m, cals_on, seen, orphans = snapshot
+        for event, value in zip(objects, values):
+            event.clear()
+            event.update(copy.deepcopy(value))
+        self.events[:] = objects
+        self.sel, self.cur_y, self.cur_m = sel, cur_y, cur_m
+        self.cals_on.clear()
+        self.cals_on.update(cals_on)
+        # _save_events may have merged a Tasks-created row (and marked it
+        # seen), or adopted malformed data as an orphan, before its write
+        # failed.  Rolling back the rows without these merge ledgers would
+        # make the next save misclassify that concurrent row as deleted.
+        self._seen = set(seen)
+        self._orphans = copy.deepcopy(orphans)
+
     def _series_members(self, ev):
         """Every event in the same series as `ev`, in date order. Just [ev] when
         it does not repeat."""
@@ -2902,6 +3402,13 @@ class Calendar(nbapp.AppWindow):
         self.calendars.append({"name": WORK_CAL, "color": WORK_COLOR})
         self.cals_on.setdefault(WORK_CAL, True)
         self._save_calendars()
+        # The sidebar's CALENDARS rows are built from self.calendars and only
+        # rebuilt on request (see _populate_cal_list): without this the new
+        # calendar was in the View menu and colouring chips on the grid, but
+        # the sidebar went on listing only the calendars that existed before
+        # the shift — no toggle for it, and the row above it greyed its delete
+        # as though it were still the only calendar.
+        self._populate_cal_list()
 
     def _shift_dialog(self):
         """Enter a work shift.
@@ -3067,7 +3574,7 @@ class Calendar(nbapp.AppWindow):
                                 rule, sid)
         self.sel = day
         self.cur_y, self.cur_m = day.year, day.month
-        self.cals_on[WORK_CAL] = True
+        self._set_cal_on(WORK_CAL, True)
         self._save_events()
         self._refresh()
 
@@ -3170,11 +3677,15 @@ class Calendar(nbapp.AppWindow):
         must not clear the term. Returns True when something was deleted."""
         members = self._series_members(existing)
         if len(members) > 1:
-            choice = self._choose_series_scope(_t("Delete Repeating Event"))
+            choice = self._choose_series_scope(
+                _t("Delete Repeating Event"),
+                self._series_body(existing, members), destructive=True)
             if choice is None:
                 return False
         else:
             choice = "one"
+        before_order = list(self.events)
+        before_values = [copy.deepcopy(event) for event in before_order]
         self.undo.checkpoint("Delete Event")
         if len(members) > 1:
             self._delete_series_scope(existing, choice)
@@ -3183,88 +3694,117 @@ class Calendar(nbapp.AppWindow):
                 self.events.remove(existing)
             except ValueError:
                 pass
-        self._save_events()
+        if not self._save_events():
+            # The edit dialog still owns `existing`, so restore dictionaries
+            # in place as well as their ordering. Replacing them with copies
+            # would leave the dialog pointing at a detached stale event.
+            for event, saved in zip(before_order, before_values):
+                event.clear()
+                event.update(saved)
+            self.events = before_order
+            self._refresh()
+            return False
         self._refresh()
         self.undo.commit()
         return True
 
-    def _choose_series_scope(self, title):
-        """Ask how far a repeating edit/delete reaches."""
+    def _series_body(self, existing, members):
+        """The line under a repeating edit / delete's title: WHICH event, and
+        how many times it stands in the calendar — what the choice below is
+        about, and how much "Whole Series" is."""
+        return _t("“%s” repeats %d times in the calendar.") % (
+            existing.get("title", ""), len(members))
+
+    def _choose_series_scope(self, title, body="", destructive=False):
+        """Ask how far a repeating edit/delete reaches: 'one', 'following',
+        'all', or None when cancelled.
+
+        `body` names the event and its count (see _series_body): a bare
+        "Delete Repeating Event" over four buttons said neither which event
+        was about to go nor how much of it "Whole Series" is. `destructive`
+        marks the three scope buttons the way the event dialog marks Delete
+        (the local .destructive: choices that all remove something, sitting
+        beside a Cancel — see _confirm on why not the OS-wide red slab), so a
+        delete's choices do not read as three neutral options."""
         responses = {31: "one", 32: "following", 33: "all"}
         dlg = Gtk.Dialog(transient_for=self, modal=True)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("nbdialog")
-        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
-        dlg.add_button(_t("This Occurrence Only"), 31)
-        dlg.add_button(_t("This and Following"), 32)
-        dlg.add_button(_t("Whole Series"), 33)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        cancel.get_style_context().add_class("dlgcancel")
+        for resp, label in ((31, "This Occurrence Only"),
+                            (32, "This and Following"),
+                            (33, "Whole Series")):
+            btn = dlg.add_button(_t(label), resp)
+            if destructive:
+                btn.get_style_context().add_class("destructive")
         area = dlg.get_content_area()
+        area.set_spacing(10)
         area.set_margin_top(20); area.set_margin_bottom(12)
         area.set_margin_start(24); area.set_margin_end(24)
         label = Gtk.Label(label=title, xalign=0)
         label.get_style_context().add_class("dlgtitle")
         area.pack_start(label, False, False, 0)
+        if body:
+            b = Gtk.Label(label=body, xalign=0)
+            b.set_line_wrap(True); b.set_max_width_chars(40)
+            b.get_style_context().add_class("dlgbody")
+            area.pack_start(b, False, False, 0)
         dlg.show_all()
         response = dlg.run()
         dlg.destroy()
         return responses.get(response)
 
-    def _confirm_series(self, title, n):
-        """Ask which part of a repeating event to delete. Returns 'one', 'all'
-        or None (cancelled)."""
-        RESP_ONE, RESP_ALL = 21, 22
-        dlg = Gtk.Dialog(transient_for=self, modal=True)
-        dlg.set_decorated(False)
-        dlg.get_style_context().add_class("nbdialog")
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        cancel.get_style_context().add_class("dlgcancel")
-        one = dlg.add_button("This Event", RESP_ONE)
-        one.get_style_context().add_class("destructive")
-        every = dlg.add_button("All Events", RESP_ALL)
-        every.get_style_context().add_class("destructive")
-        area = dlg.get_content_area()
-        area.set_spacing(10)
-        area.set_margin_top(24); area.set_margin_bottom(16)
-        area.set_margin_start(28); area.set_margin_end(28)
-        t = Gtk.Label(label=_t("Delete Repeating Event"), xalign=0)
-        t.get_style_context().add_class("dlgtitle")
-        area.pack_start(t, False, False, 0)
-        b = Gtk.Label(
-            label=_t("“%s” repeats %d times in the calendar.")
-            % (title, n), xalign=0)
-        b.set_line_wrap(True); b.set_max_width_chars(40)
-        b.get_style_context().add_class("dlgbody")
-        area.pack_start(b, False, False, 0)
-        dlg.show_all()
-        resp = dlg.run()
-        dlg.destroy()
-        if resp == RESP_ONE:
-            return "one"
-        return "all" if resp == RESP_ALL else None
-
     def _start_index(self, existing):
         """Combo index for a start time. New events honour a slot-click seed
         (one-shot) or default to 09:00; edits reflect the event's own start."""
+        # 09:00 as an INDEX, not the literal 2. The grid used to start at
+        # 08:00, so 2 was the third slot -- 09:00. HOURS now spans the whole
+        # day (00:00..23:00) so that a 06:30 train or a night shift has a row,
+        # and the same literal became 01:00: every new event opened offering
+        # one in the middle of the night. Derive it from HOURS so the default
+        # follows the grid instead of a number that used to line up with it.
+        default = max(0, (DEFAULT_START_HOUR - HOURS[0]) * 2)
         if existing is not None:
             sh = int(existing["start"])
             sm = 30 if (existing["start"] - sh) >= 0.5 else 0
             idx = (sh - HOURS[0]) * 2 + (1 if sm else 0)
             if 0 <= idx < len(HOURS) * 2:
                 return idx
-            return 2
+            return default
         pref = self._new_event_hour
         self._new_event_hour = None   # one-shot seed; reset for later opens
         if pref in HOURS:
             return (pref - HOURS[0]) * 2
-        return 2  # 09:00
+        return default
 
-    def _duration_index(self, existing):
-        """Combo index for a duration; edits map end-start back to the nearest
-        offered length, defaulting to 1 hour."""
-        if existing is None:
-            return 1
-        span = round(existing["end"] - existing["start"], 1)
-        return {0.5: 0, 1.0: 1, 2.0: 2, 3.0: 3}.get(span, 1)
+    def _time_slots(self, include_close=False):
+        """The half-hour grid the pickers offer, as "HH:MM" strings.
+
+        `include_close` appends the closing edge (one slot past the last start
+        time) so an event may END at the end of the day it started in."""
+        slots = ["%02d:%s" % (h, mm) for h in HOURS for mm in ("00", "30")]
+        if include_close:
+            slots.append("%02d:00" % (HOURS[-1] + 1))
+        return slots
+
+    def _end_index(self, existing, start_idx):
+        """Combo index for an end time.
+
+        Edits show the event's real end, to the half hour -- rounded UP, so an
+        event that runs to 10:50 is offered as 11:00 and reopening it can never
+        quietly shorten what was written. New events default to one hour after
+        the start the dialog opened on."""
+        slots = self._time_slots(include_close=True)
+        if existing is not None:
+            raw = float(existing.get("end", existing["start"] + 1.0))
+            idx = int(math.ceil((raw - HOURS[0]) * 2 - 1e-6))
+            return max(0, min(idx, len(slots) - 1))
+        # start_idx is PASSED IN, never recomputed: _start_index consumes a
+        # one-shot slot-click seed, so asking it a second time answers 09:00
+        # and an event begun by clicking the 14:00 row would open offering to
+        # end at 10:00.
+        return min(start_idx + 2, len(slots) - 1)
 
     def _field(self, label, widget):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -3414,8 +3954,7 @@ class Calendar(nbapp.AppWindow):
         document and mirror it into session recovery (calendar.json /
         calendars.json). Never raises."""
         try:
-            with open(path) as fh:
-                data = json.load(fh)
+            data = read_calendar_document(path)
         except Exception:
             self._flash_status("Open failed")
             return
@@ -3468,15 +4007,21 @@ class Calendar(nbapp.AppWindow):
             return
         self._status_tok += 1
         tok = self._status_tok
+        if self._status_timer:
+            try:
+                GLib.source_remove(self._status_timer)
+            except Exception:
+                pass
 
         def _clear():
             if self._status_tok == tok:
+                self._status_timer = 0
                 try:
                     self.status_lbl.set_text("")
                 except Exception:
                     pass
             return False
-        GLib.timeout_add_seconds(4, _clear)
+        self._status_timer = GLib.timeout_add_seconds(4, _clear)
 
     # --------------------------------------------------------------- refresh
     def _refresh(self):
@@ -3558,7 +4103,7 @@ class Calendar(nbapp.AppWindow):
 
         .calsidebar { background: #F1EEE6; border-right: 1px solid #C9C4B6; }
         .minititle { font-size: 15px; font-weight: 700; color: #1A1916; }
-        .minidow { font-size: 10px; color: #9A9484; font-weight: 600;
+        .minidow { font-size: 10px; color: #6E695E; font-weight: 600;
                    letter-spacing: 0.04em; }
         .miniday { font-size: 12px; color: #6E695E; min-width: 26px;
                    min-height: 26px; }
@@ -3574,9 +4119,9 @@ class Calendar(nbapp.AppWindow):
                    background: #DED4C2; border-radius: 50%;
                    min-width: 26px; min-height: 26px; padding: 0; }
         .calsectionhead { font-size: 11px; letter-spacing: 0.14em;
-                          color: #9A9484; font-weight: 700; }
+                          color: #6E695E; font-weight: 700; }
         .calrow { padding: 6px 4px; border-radius: 6px; background: transparent; }
-        .calrow:hover { background: #EAE3D2; }
+        .calrow:hover { background: #F0EADC; }
         .callabel { font-size: 14px; color: #1A1916; }
         .caltoggle { padding: 0; border: none; background: transparent;
                      background-image: none; box-shadow: none; }
@@ -3604,7 +4149,7 @@ class Calendar(nbapp.AppWindow):
         .quickentry { background: transparent; border: none; box-shadow: none;
                       font-size: 14px; color: #1A1916; }
         .quickentry:focus { border: none; box-shadow: none; }
-        .quickhint { font-size: 11px; color: #9A9484; padding: 5px 2px 0 2px; }
+        .quickhint { font-size: 11px; color: #6E695E; padding: 5px 2px 0 2px; }
         /* Primary "New Event" — the same paper-outline treatment every other
            app's create button uses (Novel's New Chapter, Academic's New
            Lecture, Cookbook's New Recipe). It used to be a solid black slab,
@@ -3641,12 +4186,12 @@ class Calendar(nbapp.AppWindow):
         .segbtn label { color: #6E695E; }
         .segbtn.active label { color: #1A1916; font-weight: 600; }
 
-        .emptyhint { font-size: 13px; color: #9A9484;
+        .emptyhint { font-size: 13px; color: #6E695E;
                      padding: 10px 40px 4px 40px; }
         .dowhead { background: #F4F2EC; border-top: 1px solid #D7D2C5;
                    border-bottom: 1px solid #D7D2C5; }
         .dowcell { padding: 9px 12px; font-size: 11px; letter-spacing: 0.1em;
-                   color: #9A9484; font-weight: 600; }
+                   color: #6E695E; font-weight: 600; }
         /* 6px, not 7px, top/bottom: a six-row month whose busiest day shows
            three chips was 2px taller than a 768px screen can display. */
         .monthcell { border-right: 1px solid #D7D2C5;
@@ -3669,13 +4214,13 @@ class Calendar(nbapp.AppWindow):
         .evchip.evcont { min-height: 15px; }
 
         .subhead { font-size: 15px; font-weight: 600; color: #1A1916; }
-        .hourlabel { font-size: 11px; color: #9A9484; }
+        .hourlabel { font-size: 11px; color: #6E695E; }
         .hourslot { border-bottom: 1px solid #D7D2C5;
                     border-left: 1px solid #D7D2C5; }
         .weekcell { border-bottom: 1px solid #D7D2C5;
                     border-left: 1px solid #D7D2C5; }
         .weekdaycell { padding: 9px 12px; font-size: 12px; letter-spacing: 0.06em;
-                       font-weight: 600; color: #9A9484;
+                       font-weight: 600; color: #6E695E;
                        border-left: 1px solid #D7D2C5;
                        border-bottom: 1px solid #D7D2C5; }
         .weekdaycell.istoday { color: #C8341E; }
@@ -3688,7 +4233,7 @@ class Calendar(nbapp.AppWindow):
                    background: #FCFBF8; box-shadow: none; }
         .daystep:hover { background: #F1EEE6; }
         .dlgbody { font-size: 13px; color: #1A1916; }
-        .dlgfield { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
+        .dlgfield { font-size: 11px; letter-spacing: 0.1em; color: #6E695E;
                     font-weight: 600; }
         .nbdialog entry { background: #FCFBF8; border: 1px solid #C9C4B6;
                           border-radius: 8px; padding: 6px 9px; color: #1A1916;
@@ -3697,7 +4242,7 @@ class Calendar(nbapp.AppWindow):
         .filelist { background: #FCFBF8; border: 1px solid #C9C4B6;
                     border-radius: 12px; }
         .filerow { font-size: 13px; color: #1A1916; padding: 7px 10px; }
-        .emptylist { font-size: 13px; color: #9A9484; padding: 14px; }
+        .emptylist { font-size: 13px; color: #6E695E; padding: 14px; }
         .suggested-action { background: #1A1916; color: #FCFBF8; border: none;
                             box-shadow: none; font-weight: 600; }
         .suggested-action:hover { background: #2A2620; }
@@ -3722,6 +4267,27 @@ class Calendar(nbapp.AppWindow):
         .todaybtn label { color: #1A1916; font-weight: 600; }
         .nbdialog entry.field-error { border-color: #C8341E; }
         .dlgerror { font-size: 12px; color: #C8341E; }
+        /* The notes field's outline: a TextView draws no border of its own,
+           so it takes the entry's box (same hairline, same radius) from a
+           frame around it. The view inside is named paper too — an unstyled
+           text surface paints black on this stack. */
+        .notesframe { background: #FCFBF8; border: 1px solid #C9C4B6;
+                      border-radius: 8px; padding: 4px 6px; }
+        .notesframe textview, .notesframe textview text {
+            background: #FCFBF8; color: #1A1916; }
+        /* UNAVAILABLE. Ticking All Day switches the Starts / Duration
+           fields off, and they looked exactly as they had: the theme names
+           the three faint tones for a control you cannot use just now
+           (Papertone @inkoff #A9A395, @hairoff #DDD8CB, @paperoff #F1EEE6)
+           but spends them only on checks, radios, switches and menu items,
+           so a disabled combo kept full ink. Same object, printed faintly:
+           the shape and place stay, only the ink weight changes. */
+        .nbdialog combobox:disabled button {
+            color: #A9A395; border-color: #DDD8CB; background: #F1EEE6; }
+        .nbdialog combobox:disabled button label,
+        .nbdialog combobox:disabled button arrow,
+        .nbdialog combobox:disabled button cellview { color: #A9A395; }
+        .nbdialog .dlgfield:disabled { color: #A9A395; }
         .evmore { font-size: 11px; color: #6E695E; padding: 1px 8px; }
         .evmore:hover { color: #1A1916; }
         """ + chips).encode("utf-8")

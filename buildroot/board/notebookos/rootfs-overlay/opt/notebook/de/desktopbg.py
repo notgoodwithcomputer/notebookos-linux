@@ -39,6 +39,7 @@ repainted a surface this window sits on top of and nothing visible happened.
 That option has been removed, so the one papertone field is now painted
 unconditionally.
 """
+import re
 import sys
 
 import gi
@@ -49,12 +50,35 @@ from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 DEFAULT_COLOR = "#DED4C2"
 
 
+def _lower_once(win):
+    """Best-effort delayed stack correction; always remove its GLib source."""
+    try:
+        window = win.get_window()
+        if window is not None:
+            window.lower()
+    except Exception:
+        pass
+    return False
+
+
+def _window_destroyed(*_args):
+    """The backdrop process owns exactly one window, so its lifetime is that."""
+    Gtk.main_quit()
+    return False
+
+
 
 def _rgba(color):
     """Parse '#RRGGBB' into a Gdk.RGBA, falling back to the papertone field so a
     malformed value never leaves the desktop unpainted."""
     rgba = Gdk.RGBA()
-    if not (isinstance(color, str) and rgba.parse(color)):
+    # Gdk.RGBA.parse is intentionally broader than this command-line format:
+    # it accepts names and `transparent`. Drawing below ignores alpha, so the
+    # latter becomes opaque black and a malformed startup argument replaces
+    # Papertone with a black desktop. Validate the promised wire format first.
+    if not (isinstance(color, str)
+            and re.fullmatch(r"#[0-9A-Fa-f]{6}", color)
+            and rgba.parse(color)):
         rgba.parse(DEFAULT_COLOR)
     return rgba
 
@@ -146,6 +170,7 @@ class Backdrop(Gtk.Window):
 def main():
     color = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_COLOR
     win = Backdrop(color)
+    win.connect("destroy", _window_destroyed)
     win.show_all()
     try:
         gw = win.get_window()
@@ -155,8 +180,7 @@ def main():
         pass
     # A repeated lower for the first few seconds: apps launched during startup
     # map after us, and on this WM the stacking settles a beat later.
-    GLib.timeout_add(1500, lambda: (win.get_window() and win.get_window().lower(),
-                                    False)[1])
+    GLib.timeout_add(1500, _lower_once, win)
     Gtk.main()
 
 

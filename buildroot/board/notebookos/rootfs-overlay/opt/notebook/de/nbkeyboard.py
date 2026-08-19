@@ -86,18 +86,29 @@ def parse(code):
     "ru,us" -> [("ru", ""), ("us", "")]; "jp(kana),us" -> [("jp", "kana"),
     ("us", "")]. Never empty and never raises: a code this cannot make sense
     of becomes plain US, because every caller of this is on a path where
-    returning nothing means a machine with no keyboard.
+    returning nothing means a machine with no keyboard. Exact duplicates are
+    collapsed in first-use order: two identical XKB groups only create a dead
+    Alt+Shift binding and duplicate keyboard buttons that switch nowhere.
     """
+    # Locale state is persisted JSON and can be damaged or hand-edited.  This
+    # helper is used while constructing Login, so an integer/list here must
+    # degrade to the safe layout rather than strand the machine at sign-in.
+    if not isinstance(code, str):
+        return [(LATIN_FALLBACK, "")]
     out = []
+    seen = set()
     for part in (code or "").split(","):
         part = part.strip()
         if not part:
             continue
         m = _PAREN.match(part)
         if m:
-            out.append((m.group(1).strip(), m.group(2).strip()))
+            group = (m.group(1).strip(), m.group(2).strip())
         else:
-            out.append((part, ""))
+            group = (part, "")
+        if group not in seen:
+            out.append(group)
+            seen.add(group)
     return out or [(LATIN_FALLBACK, "")]
 
 
@@ -162,11 +173,14 @@ def ensure_qwerty(code):
     So the sign-in screen guarantees the arrangement passwords are actually
     written on, not merely an alphabet. US is APPENDED, never substituted: the
     machine's own layout stays group 1 and stays live, and this only adds a
-    way back.
+    way back. XKB supports at most four groups, so an already-full custom list
+    retains its first three and deterministically gives the final slot to US.
     """
     groups = parse(code)
     if any(lay == LATIN_FALLBACK and not var for lay, var in groups):
         return join(groups)
+    if len(groups) >= 4:
+        groups = groups[:3]
     return join(groups + [(LATIN_FALLBACK, "")])
 
 
@@ -243,3 +257,28 @@ def apply(code, timeout=10):
         return r.returncode == 0
     except Exception:                                          # noqa: BLE001
         return False
+
+
+def live_code(timeout=3):
+    """The layouts the X server is actually using, or "" if unknown."""
+    try:
+        result = subprocess.run(["setxkbmap", "-query"], capture_output=True,
+                                text=True, timeout=timeout)
+        if result.returncode != 0:
+            return ""
+        fields = {}
+        for line in result.stdout.splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields[key.strip()] = value.strip()
+        layouts = [part.strip() for part in fields.get("layout", "").split(",")]
+        variants = [part.strip() for part in fields.get("variant", "").split(",")]
+        groups = []
+        for index, layout in enumerate(layouts):
+            if not layout:
+                continue
+            variant = variants[index] if index < len(variants) else ""
+            groups.append((layout, variant))
+        return join(groups) if groups else ""
+    except Exception:                                          # noqa: BLE001
+        return ""

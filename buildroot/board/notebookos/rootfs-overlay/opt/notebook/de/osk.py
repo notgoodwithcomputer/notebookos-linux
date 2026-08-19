@@ -69,6 +69,17 @@ class KeyboardState:
             self.shift = 0
         return keycode, shifted
 
+    def control_intent(self, keycode):
+        """Editing/navigation keys neither use nor consume one-shot Shift."""
+        return keycode, False
+
+    def consume_printable(self):
+        """Direct Unicode/symbol injection still consumes one-shot Shift."""
+        if self.shift == 1:
+            self.shift = 0
+            return True
+        return False
+
 
 class LongPressModel:
     def __init__(self, table=TABLE, threshold=HOLD_MS):
@@ -221,6 +232,7 @@ CSS = b"""
  border-radius: 7px; box-shadow: 0 3px 0 %(hair)s; padding: 4px; }
 .osk-key:active, .osk-key.on { background: %(warm)s; box-shadow: none;
  margin-top: 3px; }
+.osk-key.locked { border: 3px double %(ink)s; padding: 2px; }
 .osk-special { font-weight: bold; }
 .osk-palette { background: %(paper)s; border: 1px solid %(hair)s; padding: 5px; }
 .osk-palette button { background: %(paper)s; color: %(ink)s;
@@ -310,11 +322,11 @@ class OSKWindow(Gtk.Window):
                         if found:
                             line.pack_start(self._button(label,
                                 lambda _b, c=code, sh=bool(row_index):
-                                    self.injector.keycode(c, sh)), True, True, 0)
+                                    self._symbol_keycode(c, sh)), True, True, 0)
                             continue
                     label = keysym_text(sym)
                     line.pack_start(self._button(label,
-                        lambda _b, ch=label: self.injector.character(ch)), True, True, 0)
+                        lambda _b, ch=label: self._character(ch)), True, True, 0)
         else:
             rows = (NUMBER_ROW,) + LETTER_ROWS
             for codes in rows:
@@ -325,9 +337,14 @@ class OSKWindow(Gtk.Window):
                     line.pack_start(self._letter_button(label, code), True, True, 0)
         bottom = Gtk.Box(spacing=6)
         box.pack_start(bottom, True, True, 0)
-        shift = self._button("\u21e7", self._shift, True)
+        # One-shot Shift and locked Shift are different states, so render them
+        # differently: ⇧ means the next character, ⇪ means the lock persists.
+        shift = self._button("\u21ea" if self.state.shift == 2 else "\u21e7",
+                             self._shift, True)
         if self.state.shift:
             shift.get_style_context().add_class("on")
+        if self.state.shift == 2:
+            shift.get_style_context().add_class("locked")
         bottom.pack_start(shift, True, True, 0)
         bottom.pack_start(self._button("ABC" if self.state.page == "symbols" else "?123",
                                       self._page, True), True, True, 0)
@@ -360,7 +377,7 @@ class OSKWindow(Gtk.Window):
             self._hold_source = 0
         if not self.hold.open:
             self._tap(code)
-        self.hold.cancel()
+            self.hold.cancel()
 
     def _open_palette(self, button):
         self._hold_source = 0
@@ -396,12 +413,25 @@ class OSKWindow(Gtk.Window):
         return False
 
     def _pick(self, index):
-        self.hold.select(index, self.injector.character)
+        self.hold.select(index, self._character)
         if self._palette:
             self._palette.popdown()
 
+    def _character(self, character):
+        self.injector.character(character)
+        if self.state.consume_printable():
+            self._rebuild()
+
+    def _symbol_keycode(self, code, shifted):
+        self.injector.keycode(code, shifted)
+        if self.state.consume_printable():
+            self._rebuild()
+
     def _tap(self, code):
-        code, shifted = self.state.intent(code)
+        if code in (SPECIAL["backspace"], SPECIAL["enter"]):
+            code, shifted = self.state.control_intent(code)
+        else:
+            code, shifted = self.state.intent(code)
         self.injector.keycode(code, shifted)
         if not self.state.shift:
             self._rebuild()
@@ -415,25 +445,57 @@ class OSKWindow(Gtk.Window):
         self._rebuild()
 
 
-def _claim_instance():
-    path = "/tmp/notebook-osk.pid"
+def _process_started(pid):
+    try:
+        with open("/proc/%d/stat" % pid, encoding="ascii") as handle:
+            # comm (field 2) may itself contain spaces; fields after its final
+            # ')' begin at state (field 3), making starttime field index 19.
+            return handle.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return ""
+
+
+def _claim_instance(path="/tmp/notebook-osk.pid"):
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(os.getpid()).encode("ascii"))
+        pid = os.getpid()
+        os.write(fd, ("%d %s\n" % (pid, _process_started(pid))).encode("ascii"))
         os.close(fd)
         return path
     except FileExistsError:
         try:
             with open(path, encoding="ascii") as handle:
-                pid = int(handle.read())
+                fields = handle.read().split()
+            pid = int(fields[0])
+            recorded_start = fields[1] if len(fields) > 1 else ""
             os.kill(pid, 0)
-            return None
-        except (OSError, ValueError):
+            live_start = _process_started(pid)
+            # A current-format file owns the exact process incarnation. Keep
+            # accepting live legacy PID-only files during an upgrade.
+            if ((recorded_start and live_start == recorded_start) or
+                    (not recorded_start and live_start)):
+                return None
+            raise OSError("stale OSK pid ownership")
+        except (OSError, ValueError, IndexError):
             try:
                 os.unlink(path)
             except OSError:
                 pass
-            return _claim_instance()
+            return _claim_instance(path)
+
+
+def _release_instance(path):
+    """Remove only this process's ownership record, never a replacement's."""
+    try:
+        with open(path, encoding="ascii") as handle:
+            fields = handle.read().split()
+        mine = [str(os.getpid()), _process_started(os.getpid())]
+        if fields[:2] != mine:
+            return False
+        os.unlink(path)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 def main():
@@ -450,10 +512,7 @@ def main():
     try:
         Gtk.main()
     finally:
-        try:
-            os.unlink(lock)
-        except OSError:
-            pass
+        _release_instance(lock)
         window.injector.x.close()
     return 0
 

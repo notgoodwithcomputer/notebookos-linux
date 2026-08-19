@@ -39,10 +39,12 @@ import threading
 
 import nbjobs
 import nbmotion
+from nbi18n import _t
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+gi.require_version("Atk", "1.0")
+from gi.repository import Gtk, GLib, Atk  # noqa: E402
 
 # ---- units -----------------------------------------------------------------
 PT_PER_IN = 72.0
@@ -110,7 +112,8 @@ def list_printers():
     try:
         out = subprocess.run(["lpstat", "-e"], capture_output=True,
                              text=True, timeout=4)
-        names = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        if out.returncode == 0:
+            names = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
     except Exception:
         names = []
     # status/info per printer (best effort)
@@ -120,7 +123,7 @@ def list_printers():
         out = subprocess.run(["lpstat", "-l", "-p"], capture_output=True,
                              text=True, timeout=4)
         cur = None
-        for ln in out.stdout.splitlines():
+        for ln in out.stdout.splitlines() if out.returncode == 0 else ():
             if ln.startswith("printer "):
                 parts = ln.split()
                 cur = parts[1] if len(parts) > 1 else None
@@ -134,7 +137,7 @@ def list_printers():
     try:
         out = subprocess.run(["lpstat", "-d"], capture_output=True,
                              text=True, timeout=4)
-        line = out.stdout.strip()
+        line = out.stdout.strip() if out.returncode == 0 else ""
         if ":" in line and "no " not in line.lower():
             default = line.split(":", 1)[1].strip() or None
     except Exception:
@@ -196,6 +199,8 @@ def printer_stopped(name):
                              text=True, timeout=4)
     except Exception:
         return None
+    if out.returncode != 0:
+        return None
     text = out.stdout or ""
     low = text.lower()
     if "disabled" not in low and "stopped" not in low:
@@ -251,6 +256,8 @@ def jobs_pending(name):
                              text=True, timeout=4)
     except Exception:
         return False
+    if out.returncode != 0:
+        return False
     return any(ln.strip() for ln in out.stdout.splitlines())
 
 
@@ -259,11 +266,13 @@ def resume_printer(name):
     if not _have("cupsenable"):
         return False
     try:
-        subprocess.run(["cupsenable", name], capture_output=True,
-                       text=True, timeout=6)
-        subprocess.run(["cupsaccept", name], capture_output=True,
-                       text=True, timeout=6)
+        enabled = subprocess.run(["cupsenable", name], capture_output=True,
+                                 text=True, timeout=6)
+        accepted = subprocess.run(["cupsaccept", name], capture_output=True,
+                                  text=True, timeout=6)
     except Exception:
+        return False
+    if enabled.returncode != 0 or accepted.returncode != 0:
         return False
     return printer_stopped(name) is None
 
@@ -280,6 +289,19 @@ def make_print_file(make_pdf):
     os.close(fd)
     try:
         make_pdf(path)
+        # A renderer can return normally after drawing no pages (or after
+        # swallowing its own cairo error), leaving the mkstemp placeholder at
+        # zero bytes. Sending that to CUPS can still produce a successful `lp`
+        # exit and a cheerful "Sent" message, but the printer has no document.
+        # Treat it as preparation failure here, while the draft is still ours.
+        if os.path.getsize(path) == 0:
+            raise ValueError("print renderer produced an empty file")
+        # A renderer can also swallow its own failure after leaving a nonempty
+        # diagnostic/partial file. CUPS may queue arbitrary bytes successfully,
+        # which would turn that into a false “Sent” result with no document.
+        with open(path, "rb") as rendered:
+            if rendered.read(5) != b"%PDF-":
+                raise ValueError("print renderer did not produce a PDF")
     except BaseException:
         try:
             os.unlink(path)
@@ -323,14 +345,21 @@ def submit_pdf(pdf_path, printer=None, copies=1, options=None,
         return False, ("The printer could not be reached. Check that it is "
                        "switched on and plugged in, then try again.")
     if r.returncode != 0:
-        msg = (r.stderr or r.stdout or "print command failed").strip()
-        return False, msg
+        # Backend diagnostics are for the system log, not the Print dialog:
+        # they routinely contain CUPS option names, URIs and device paths and
+        # may even echo text supplied by a remote print server.
+        return False, ("The print job could not be sent. Check that the "
+                       "printer is switched on and ready, then try again.")
     # The job is queued. If processing it knocked the queue over, say so now
     # instead of claiming success.
     if printer:
         why = printer_stopped(printer)
         if why:
-            return False, ("The printer stopped while starting the job. %s" % why)
+            # lp already accepted the document. This is a committed job with a
+            # warning, not a send failure: inviting Retry here queues a second
+            # copy which will print when the paper/jam problem is cleared.
+            return True, ("Queued, but the printer stopped while starting the "
+                          "job. %s" % why)
     return True, (r.stdout.strip() or "Sent to printer.")
 
 
@@ -715,7 +744,8 @@ LOOKING_TEXT = "Looking for printers…"
 PRINT_KEY = "print"
 
 
-def _print_worker(job, make_pdf, printer, copies, options, job_name):
+def _print_worker(job, make_pdf, printer, copies, options, job_name,
+                  commit_sending=None):
     """Render and hand off one complete file, entirely off the UI thread."""
     job.progress(0.0, "preparing")
     _RENDER_CONTEXT.job = job
@@ -724,6 +754,11 @@ def _print_worker(job, make_pdf, printer, copies, options, job_name):
         job.checkpoint()
         path = make_print_file(make_pdf)
         job.checkpoint()
+        # Submission is the irreversible boundary: once lp owns the PDF,
+        # cancelling only our worker cannot unqueue it.  Let the dialog
+        # atomically retire Cancel before crossing that boundary.
+        if commit_sending is not None:
+            commit_sending(job)
         job.progress(0.82, "sending")
         ok, message = submit_pdf(path, printer=printer, copies=copies,
                                  options=options, job_name=job_name)
@@ -731,7 +766,7 @@ def _print_worker(job, make_pdf, printer, copies, options, job_name):
         if not ok:
             raise RuntimeError(message)
         job.progress(1.0, "sent")
-        return True
+        return message if message.startswith("Queued, but ") else None
     finally:
         _RENDER_CONTEXT.job = None
         if path:
@@ -765,7 +800,14 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
     combo = Gtk.ComboBoxText()
     sel = 0
     for idx, p in enumerate(printers):
-        combo.append_text(p["info"] or p["name"])
+        # A queue name is typed by the user in Settings -> Printers ("Home",
+        # "Work", "Office"), so the picker must offer it as they named it.
+        # append_text() is patched by nbi18n; append(id, text) is not, and it
+        # fills the same column the selection is read back from.
+        try:
+            combo.append(None, p["info"] or p["name"])
+        except Exception:
+            combo.append_text(p["info"] or p["name"])
         if p["name"] == default:
             sel = idx
     combo.set_active(sel)
@@ -802,10 +844,22 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
     status = Gtk.Label(xalign=0); status.set_line_wrap(True)
     status.set_max_width_chars(42)
     status.get_style_context().add_class("nbprint-note")
+    status_accessible = status.get_accessible()
+    status_accessible.set_role(Atk.Role.STATUSBAR)
+    status_accessible.set_name(_t("Printing"))
     box.pack_start(status, False, False, 0)
+
+    def set_status(text, *, alert=False):
+        """Update the visible message and announce asynchronous state changes."""
+        status.set_text(text)
+        status_accessible.set_role(Atk.Role.ALERT if alert else Atk.Role.STATUSBAR)
+        status_accessible.set_name(text)
+        status_accessible.set_description(text)
+        status_accessible.notify_visible_data_changed()
 
     progress = Gtk.ProgressBar()
     progress.set_fraction(0.0)
+    progress.get_accessible().set_name(_t("Printing"))
     progress.get_style_context().add_class("nbprint-progress")
     box.pack_start(progress, False, False, 0)
     progress.hide()
@@ -813,10 +867,31 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
     scalar = nbmotion.Scalar(
         progress, 0.0, on_frame=progress.set_fraction,
         duration=nbmotion.SURFACE_IN, easing=nbmotion.LINEAR)
+    sending_lock = threading.Lock()
+    sending_committed = [False]
+
+    def commit_sending(job):
+        with sending_lock:
+            # If Cancel won the same lock, this raises and lp is never called.
+            job.checkpoint()
+            sending_committed[0] = True
+
+        def retire_cancel():
+            cancel.set_sensitive(False)
+            set_status(_t("Sending to the printer…"))
+            return False
+        GLib.idle_add(retire_cancel)
 
     def cancel_print(*_args):
-        if owner.cancel(PRINT_KEY):
-            status.set_text("Stopping printing…")
+        with sending_lock:
+            committed = sending_committed[0]
+            cancelled = False if committed else owner.cancel(PRINT_KEY)
+        if committed:
+            # The spooler may already own the document. Claiming it stopped
+            # would be worse than refusing this now-too-late action.
+            cancel.set_sensitive(False)
+        elif cancelled:
+            set_status(_t("Stopping printing…"))
             cancel.set_sensitive(False)
         else:
             win.destroy()
@@ -828,15 +903,27 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
     def on_progress(fraction, phase):
         fraction = max(scalar.target, min(1.0, float(fraction or 0.0)))
         scalar.animate_to(fraction, easing=nbmotion.LINEAR)
-        status.set_text("Sending to the printer…" if phase == "sending"
-                        else "Preparing pages…")
+        set_status(_t("Sending to the printer…") if phase == "sending"
+                   else _t("Preparing pages…"))
 
-    def on_done(_value):
+    def on_done(value):
+        if isinstance(value, str) and value.startswith("Queued, but "):
+            with sending_lock:
+                sending_committed[0] = False
+            scalar.animate_to(1.0, easing=nbmotion.LINEAR)
+            progress.hide()
+            set_status(value, alert=True)
+            go.set_sensitive(False)
+            cancel.set_label(_t("Close"))
+            cancel.set_sensitive(True)
+            return
         scalar.animate_to(1.0, easing=nbmotion.LINEAR,
                           on_done=lambda _finished: win.destroy())
 
     def on_error(error):
-        status.set_text(_print_failure(error))
+        with sending_lock:
+            sending_committed[0] = False
+        set_status(_print_failure(error), alert=True)
         progress.hide()
         go.set_sensitive(True)
         cancel.set_sensitive(True)
@@ -848,7 +935,7 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
         go.set_sensitive(False)
         cancel.set_sensitive(True)
         progress.show()
-        status.set_text("Preparing pages…")
+        set_status(_t("Preparing pages…"))
         pname = printers[combo.get_active() if combo.get_active() >= 0 else 0]["name"]
         copy_count = int(copies.get_value())
         # The page size the DOCUMENT was rendered at, not a hard-coded Letter.
@@ -876,7 +963,8 @@ def _print_body(win, box, owner, printers, default, job_name, make_pdf, booklet,
         owner.start(
             PRINT_KEY,
             lambda job: _print_worker(job, make_pdf, pname,
-                                      copy_count, opts, job_name),
+                                      copy_count, opts, job_name,
+                                      commit_sending),
             on_done=on_done, on_error=on_error, on_cancel=on_cancel,
             on_progress=on_progress, policy=nbjobs.REJECT)
 

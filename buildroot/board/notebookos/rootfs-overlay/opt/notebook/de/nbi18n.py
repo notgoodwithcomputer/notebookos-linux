@@ -118,18 +118,24 @@ def _config_path():
     return os.path.join(base, "locale.json")
 
 
+def _read_config():
+    """Return the locale object, or an empty one for any damaged shape."""
+    try:
+        with open(_config_path(), encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+
+
 def current_lang():
     """Active UI language code. $NB_LANG wins (so the shell can pin it for a
     launched app / a test), else the persisted setting, else English."""
     env = os.environ.get("NB_LANG")
     if env in SUPPORTED:
         return env
-    try:
-        with open(_config_path()) as fh:
-            code = json.load(fh).get("lang", "en")
-        return code if code in SUPPORTED else "en"
-    except (OSError, ValueError):
-        return "en"
+    code = _read_config().get("lang", "en")
+    return code if isinstance(code, str) and code in SUPPORTED else "en"
 
 
 def _fsync_dir(d):
@@ -157,24 +163,30 @@ def _lock_locale(p):
     key — Settings persisting a language could undo the layout the sign-in
     screen had just recorded.
 
-    Best effort by design: a lock we cannot take must never stop somebody
-    changing their keyboard, so every failure falls through to the unlocked
-    write, which is still atomic. Returns an fd to close (closing releases the
-    flock), or None."""
+    A lock we cannot take returns promptly and the caller reports failure;
+    writing unlocked would reintroduce the lost-update race this lock exists
+    to prevent. Returns an fd to close (closing releases the flock), or None."""
     try:
         import fcntl                                           # noqa: PLC0415
         fd = os.open(p + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     except (ImportError, OSError):
         return None
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-    except OSError:
+    deadline = time.monotonic() + 0.20
+    while True:
         try:
-            os.close(fd)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.01)
         except OSError:
-            pass
-        return None
-    return fd
+            break
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return None
 
 
 def _preserve_damaged(p):
@@ -193,10 +205,14 @@ def _preserve_damaged(p):
     A healthy file needs no .bak twin here: an update MERGES into what it read,
     so a key nothing touched is carried through rather than replaced."""
     try:
-        if not os.path.isfile(p) or os.path.getsize(p) == 0:
+        if not os.path.isfile(p):
             return None
+        if os.path.getsize(p) == 0:
+            raise ValueError("zero-byte locale preferences")
         with open(p, "r", encoding="utf-8") as fh:
-            json.loads(fh.read())
+            data = json.loads(fh.read())
+        if not isinstance(data, dict):
+            raise ValueError("locale preferences must be an object")
         return None                                   # parses: a normal save
     except (OSError, ValueError, UnicodeDecodeError):
         pass
@@ -233,7 +249,21 @@ def _update_locale(**kv):
     try:
         os.makedirs(d, exist_ok=True)
         lock = _lock_locale(p)
+        if lock is None:
+            return False
+        damaged_at_path = False
+        try:
+            if os.path.isfile(p):
+                if os.path.getsize(p) == 0:
+                    damaged_at_path = True
+                else:
+                    with open(p, "r", encoding="utf-8") as existing:
+                        damaged_at_path = not isinstance(json.load(existing), dict)
+        except (OSError, ValueError, UnicodeDecodeError):
+            damaged_at_path = True
         _preserve_damaged(p)
+        if damaged_at_path and os.path.exists(p):
+            return False
         try:
             with open(p) as fh:
                 data = json.load(fh)
@@ -251,7 +281,12 @@ def _update_locale(**kv):
         tmp = None
         _fsync_dir(d)
         return True
-    except OSError:
+    except (OSError, TypeError, ValueError, UnicodeError):
+        # JSON encoding is part of the write boundary too.  A bad value from a
+        # caller (including a circular container or an invalid surrogate) must
+        # report failure just like a full disk, not escape through a Settings
+        # callback.  The live file has not been replaced at this point and the
+        # finally block below removes the private temp file.
         return False
     finally:
         if tmp is not None:
@@ -273,6 +308,16 @@ def set_lang(code):
     return _update_locale(lang=code)
 
 
+def set_locale(code, keyboard=None):
+    """Persist a language and its followed keyboard as one transaction."""
+    if code not in SUPPORTED:
+        return False
+    values = {"lang": code}
+    if keyboard is not None:
+        values["keyboard"] = keyboard
+    return _update_locale(**values)
+
+
 # Codes this file used to offer, mapped to what they are called now. A layout
 # already written into somebody's locale.json goes on being read for the life
 # of that machine, so a code cannot simply be changed here: "jp(kana)" alone
@@ -283,13 +328,9 @@ _KB_ALIASES = {"jp(kana)": "jp(kana),us"}
 
 def keyboard():
     """Persisted X keyboard layout code, else the current language's default."""
-    try:
-        with open(_config_path()) as fh:
-            kb = json.load(fh).get("keyboard")
-        if kb:
-            return _KB_ALIASES.get(kb, kb)
-    except (OSError, ValueError):
-        pass
+    kb = _read_config().get("keyboard")
+    if isinstance(kb, str) and kb:
+        return _KB_ALIASES.get(kb, kb)
     return DEFAULT_KB.get(current_lang(), "us")
 
 
@@ -309,11 +350,8 @@ def login_keyboard():
     every single boot, with nothing to remind them. login.py writes it after a
     sign-in actually succeeds, so it records what worked rather than a guess.
     Only ever the SCRIPT — no part of the password is stored anywhere."""
-    try:
-        with open(_config_path()) as fh:
-            return json.load(fh).get("login_keyboard") or ""
-    except (OSError, ValueError):
-        return ""
+    code = _read_config().get("login_keyboard")
+    return code if isinstance(code, str) else ""
 
 
 def set_login_keyboard(code):
@@ -378,6 +416,28 @@ def _load_catalog(code):
 
 _LANG = current_lang()
 _CAT = _load_catalog(_LANG)
+
+
+def _ci_index(cat):
+    """Catalog keys folded to lower case, but ONLY where the fold is
+    unambiguous: a key that shares its lower-case form with another key is
+    left out, because guessing between two entries is worse than falling back
+    to English. Used by the upper-case fallback below, where the transforms it
+    already tries (capitalize, title) cannot recover a key whose own spelling
+    is irregular -- "EXPORT TO PDF" capitalises to "Export to pdf" and titles
+    to "Export To Pdf", while the key is written "Export to PDF"."""
+    seen, out = set(), {}
+    for key in cat:
+        low = key.lower()
+        if low in seen:
+            out.pop(low, None)
+            continue
+        seen.add(low)
+        out[low] = key
+    return out
+
+
+_CAT_CI = _ci_index(_CAT)
 
 
 _SPEC = None        # compiled printf-spec matcher, built with the format table
@@ -715,6 +775,14 @@ def _lookup(s):
     if s.isupper() and len(s) > 2:
         for form in (s.capitalize(), s.title()):
             hit = _CAT.get(form)
+            if hit is not None:
+                return _upper(hit)
+        # ...and the irregular spellings neither transform can reach. Only
+        # where the fold names exactly one key (see _ci_index), so this can
+        # never pick between two entries.
+        key = _CAT_CI.get(s.lower())
+        if key is not None:
+            hit = _CAT.get(key)
             if hit is not None:
                 return _upper(hit)
     hit = _suffix_lookup(s)

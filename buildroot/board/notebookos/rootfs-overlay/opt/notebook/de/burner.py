@@ -72,6 +72,7 @@ import cairo                                                # noqa: E402
 import nbapp                                                # noqa: E402
 import nbjobs                                               # noqa: E402
 import nbpicker                                             # noqa: E402
+import nbi18n
 from nbi18n import _t                                       # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -115,8 +116,27 @@ DVD_AUDIO_KBIT = 192
 
 MAX_TITLES = 9          # the menu is one screen and a remote has ten digits
 
+# How tall the contents list asks to be, per mode. The list is the one part of
+# the column that can give room back, and in Video DVD mode it has to: the DISC
+# NAME field and its hint cost about 100px, which on the smallest supported
+# panel (1024x740) pushed the status bar clean off the bottom edge — taking
+# every phase, refusal and result sentence in that whole half of the app with
+# it. A shorter list is a visible cost; an invisible status line is not.
+LIST_MIN_AUDIO = 190
+LIST_MIN_VIDEO = 150
+
 
 # ---- reading the machine ----------------------------------------------------
+def _set_user_text(label, text):
+    """A track name in the burn queue, exactly as the file is called.
+
+    item["name"] is the filename with its extension STRIPPED, so ~/Music/
+    Drums.wav arrives here as the bare word "Drums" — a catalog key. The disc
+    menu is rendered from the same list, so the screen said "Batterie" and the
+    burned DVD said "Drums"."""
+    nbi18n.set_verbatim(label, str(text or ""))
+
+
 def _read(path, default=""):
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -183,14 +203,27 @@ def disc_info(node, run=None):
         info["media"] = m.group(1)
     m = _BLANK_RE.search(out)
     if m:
+        # Some drives omit the "Mounted Media" line but still report a disc
+        # status. That is positive presence evidence, not an unknown probe.
+        info["present"] = True
         info["blank"] = m.group(1).lower().startswith("blank")
     m = _CAPACITY_RE.search(out) or _TRACK_RE.search(out)
     if m:
         try:
             info["bytes"] = int(m.group(1)) * 2048
+            info["present"] = True
         except ValueError:
             pass
     return info
+
+
+def compatible_media(mode, info):
+    """A known blank medium the selected authoring path can actually use."""
+    if not isinstance(info, dict) or info.get("present") is not True \
+            or info.get("blank") is not True:
+        return False
+    media = str(info.get("media") or "").upper()
+    return ("CD" in media) if mode == "audio" else ("DVD" in media)
 
 
 def _run(cmd, timeout=30):
@@ -582,7 +615,8 @@ def _end_group(proc):
             continue
 
 
-def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
+def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None,
+          source=None):
     """Run one tool, checkpointing for cancellation, reporting as it goes.
 
     `fraction` is where this step starts on the overall bar and `span` is how
@@ -622,7 +656,11 @@ def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
         while True:
             ready = select.select([proc.stdout], [], [], 0.4)[0]
             if not ready:
-                if job.cancelled():
+                # A PROPERTY on nbjobs.Job (it delegates to the cancel token's
+                # own property), so `job.cancelled()` calls a bool and raises
+                # TypeError inside the worker — which is what every burn did,
+                # before the first track was even decoded.
+                if job.cancelled:
                     _end_group(proc)
                     job.checkpoint()
                     break
@@ -634,7 +672,7 @@ def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
                 break                  # end of output: the tool is done
             tail.append(line)
             del tail[:-40]
-            if job.cancelled():
+            if job.cancelled:
                 _end_group(proc)
                 job.checkpoint()
                 break
@@ -650,6 +688,13 @@ def _step(job, cmd, phase, fraction=None, span=0.0, progress_seconds=None):
         code = proc.wait()
     job.checkpoint()
     if code != 0:
+        if source:
+            # This step was working on ONE of the person's files, so its
+            # failure is about that file. "ffmpeg could not finish." names our
+            # own plumbing instead of the thing they can do something about.
+            raise StepFailed(_t("“%s” could not be read. Remove it and try "
+                                "again.") % os.path.basename(source),
+                             "".join(tail)[-2000:])
         raise StepFailed(_t("%s could not finish.") % cmd[0],
                          "".join(tail)[-2000:])
     return "".join(tail)
@@ -664,7 +709,7 @@ def build_audio_cd(job, node, files, workdir, speed=None):
         dst = os.path.join(workdir, "track%02d.wav" % (i + 1))
         _step(job, decode_track_cmd(src, dst),
               _t("Preparing “%s”…") % os.path.basename(src),
-              fraction=0.05 + 0.45 * (i / float(total)))
+              fraction=0.05 + 0.45 * (i / float(total)), source=src)
         tracks.append(dst)
     job.progress(0.5, _t("Writing the disc…"))
     _step(job, audio_burn_cmd(node, tracks, speed),
@@ -690,7 +735,7 @@ def build_video_dvd(job, node, files, titles, disc_title, workdir,
         _step(job, transcode_title_cmd(src, dst, standard, kbit),
               _t("Converting “%s”…") % os.path.basename(src),
               fraction=0.02 + share * i, span=share,
-              progress_seconds=durations[i] or None)
+              progress_seconds=durations[i] or None, source=src)
         vobs.append(dst)
 
     job.checkpoint()
@@ -749,6 +794,25 @@ def build_video_dvd(job, node, files, titles, disc_title, workdir,
 
 
 # ---- the window -------------------------------------------------------------
+def set_reason(btn, text):
+    """Set a control's state FROM the reason it is in that state.
+
+    Sensitivity is derived from the string rather than computed beside it,
+    so a button that will decline the click cannot exist without saying
+    what would make it work — the defect tools/disabled_reason_check.py
+    exists to stop. Passing "" is the only way to enable a control, and it
+    clears the stale reason in the same call.
+    """
+    btn.set_sensitive(not text)
+    # Write only a CHANGED reason. set_tooltip_text triggers a tooltip query
+    # against the display on every call, and _refresh restates all six of
+    # these controls on every keystroke in the disc name and every row
+    # selection, almost always with the sentence they already carry.
+    want = text or None
+    if btn.get_tooltip_text() != want:
+        btn.set_tooltip_text(want)
+
+
 class DiscBurner(nbapp.AppWindow):
     app_name = "Disc Burner"
     menus = ("File",)
@@ -759,13 +823,21 @@ class DiscBurner(nbapp.AppWindow):
     def __init__(self):
         super().__init__()
         self.mode = self.AUDIO
-        self.items = []           # [{path, name, seconds}]
+        # ONE LIST PER MODE. The mode pair is a segmented control sitting right
+        # above the list, so a stray click used to throw away a compilation
+        # that took minutes to assemble, with no warning and nowhere to get it
+        # back from. Switching parks the list; switching back restores it.
+        self._lists = {self.AUDIO: [], self.VIDEO: []}
+        self.items = self._lists[self.mode]   # [{path, name, seconds}]
         self.drives = []
         self.drive = None
         self.busy = False
+        self._add_pending = False
+        self._closing_after_stop = False
         self.standard = NTSC
         self._workdir = None
         self._jobs = nbjobs.JobOwner(name="burner")
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", lambda *_: self._shutdown())
         self._install_css()
         self._build()
@@ -789,7 +861,7 @@ class DiscBurner(nbapp.AppWindow):
         .db-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .db-lede { font-size: 14px; color: #6E695E; }
         .db-step { font-size: 11px; letter-spacing: 0.14em; font-weight: 700;
-                   color: #9A9484; }
+                   color: #6E695E; }
         .db-field { background: #F4F2EC; border: 1px solid #D7D2C5; }
         .db-value { font-size: 15px; color: #1A1916; }
         .db-hint { font-size: 12px; color: #6E695E; }
@@ -798,6 +870,11 @@ class DiscBurner(nbapp.AppWindow):
                   border: 1px solid #C9C4B6; border-radius: 8px;
                   box-shadow: none; font-size: 14px; color: #1A1916; }
         .db-btn:hover { background: #F1EEE6; }
+        /* The contents rows ARE .db-btn toggles, and this flat background beat
+           Papertone's own button:checked (a provider priority wins whatever the
+           selectors say), so the chosen row was pixel-identical to the others
+           while Move up/Move down acted on it. */
+        .db-btn:checked { background: #E7DFCC; border-color: #B9B2A1; }
         .db-btn:disabled { color: #B3AD9E; background: #F8F7F2; }
         .db-mode { padding: 7px 18px; background: #FCFBF8;
                    border: 1px solid #C9C4B6; box-shadow: none;
@@ -863,8 +940,8 @@ class DiscBurner(nbapp.AppWindow):
         # -- mode
         modes = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         modes.set_margin_top(18)
-        self.audio_btn = Gtk.Button(label=_t("Music CD"))
-        self.video_btn = Gtk.Button(label=_t("Video DVD"))
+        self.audio_btn = Gtk.ToggleButton(label=_t("Music CD"))
+        self.video_btn = Gtk.ToggleButton(label=_t("Video DVD"))
         for b, mode in ((self.audio_btn, self.AUDIO),
                         (self.video_btn, self.VIDEO)):
             b.get_style_context().add_class("db-mode")
@@ -907,11 +984,11 @@ class DiscBurner(nbapp.AppWindow):
         self.name_entry.set_margin_top(6)
         self.name_entry.connect("changed", lambda _e: self._refresh())
         self.name_box.pack_start(self.name_entry, False, False, 0)
-        hint = Gtk.Label(label=_t("Shown at the top of the disc menu."),
-                         xalign=0)
-        hint.get_style_context().add_class("db-hint")
-        hint.set_margin_top(4)
-        self.name_box.pack_start(hint, False, False, 0)
+        self.name_hint = Gtk.Label(
+            label=_t("Shown at the top of the disc menu."), xalign=0)
+        self.name_hint.get_style_context().add_class("db-hint")
+        self.name_hint.set_margin_top(4)
+        self.name_box.pack_start(self.name_hint, False, False, 0)
         col.pack_start(self.name_box, False, False, 0)
 
         # -- list
@@ -921,7 +998,7 @@ class DiscBurner(nbapp.AppWindow):
         listwrap.set_margin_top(6)
         self.scroll = Gtk.ScrolledWindow()
         self.scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.scroll.set_size_request(-1, 190)
+        self.scroll.set_size_request(-1, LIST_MIN_AUDIO)
         self.rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.scroll.add(self.rows)
         listwrap.pack_start(self.scroll, True, True, 0)
@@ -938,6 +1015,10 @@ class DiscBurner(nbapp.AppWindow):
             b.get_style_context().add_class("db-btn")
             b.connect("clicked", self._on_move, delta)
             tools.pack_start(b, False, False, 0)
+            if delta < 0:
+                self.move_up_btn = b
+            else:
+                self.move_down_btn = b
         self.clear_btn = Gtk.Button(label=_t("Remove all"))
         self.clear_btn.get_style_context().add_class("db-btn")
         self.clear_btn.connect("clicked", self._on_clear)
@@ -1001,10 +1082,13 @@ class DiscBurner(nbapp.AppWindow):
 
     # -- state ----------------------------------------------------------------
     def _on_mode(self, _btn, mode):
-        if self.busy or mode == self.mode:
+        if self.busy or self._add_pending or mode == self.mode:
+            self._refresh()       # restore native checked state after a click
             return
+        self._lists[self.mode] = self.items
         self.mode = mode
-        self.items = []
+        self.items = self._lists[mode]
+        self._sel = None          # an index into the list being left
         self._refresh()
 
     def _rescan(self):
@@ -1029,8 +1113,12 @@ class DiscBurner(nbapp.AppWindow):
         self.disc = info or {}
         self._refresh()
 
-    def _on_add(self, _btn):
-        if self.busy:
+    # The File menu hands these two straight to nbapp, which invokes a menu
+    # callback as fn() with no arguments, while a toolbar button passes itself.
+    # The default is what lets one handler serve both; without it File > Add…
+    # and File > Remove All raised TypeError and did nothing at all.
+    def _on_add(self, _btn=None):
+        if self.busy or self._add_pending:
             return
         audio = self.mode == self.AUDIO
         start = MUSIC_DIR if audio else VIDEOS_DIR
@@ -1045,7 +1133,24 @@ class DiscBurner(nbapp.AppWindow):
         if self.mode == self.VIDEO and len(self.items) >= MAX_TITLES:
             self._say(_t("A disc menu holds %d titles.") % MAX_TITLES)
             return
-        seconds = media_duration(path)
+        self._add_pending = True
+        self._refresh()
+        mode = self.mode
+        job = self._jobs.start(
+            "media-duration", lambda _job: media_duration(path),
+            on_done=lambda seconds: self._duration_ready(path, mode, seconds),
+            on_error=lambda _error: self._duration_ready(path, mode, None),
+            policy=nbjobs.REJECT)
+        if job is None:
+            self._add_pending = False
+            self._refresh()
+
+    def _duration_ready(self, path, mode, seconds):
+        """Install one picker result after its slow media probe completes."""
+        self._add_pending = False
+        if mode != self.mode:
+            self._refresh()
+            return
         self.items.append({"path": path,
                            "name": os.path.splitext(
                                os.path.basename(path))[0],
@@ -1065,10 +1170,10 @@ class DiscBurner(nbapp.AppWindow):
         self._sel = j
         self._refresh()
 
-    def _on_clear(self, _btn):
+    def _on_clear(self, _btn=None):
         if self.busy:
             return
-        self.items = []
+        self.items = self._lists[self.mode] = []
         self._sel = None
         self._refresh()
 
@@ -1077,9 +1182,43 @@ class DiscBurner(nbapp.AppWindow):
         self._refresh()
 
     # -- rendering ------------------------------------------------------------
+    def _burn_blocked(self):
+        """Why the disc cannot be written right now, or "" when it can.
+
+        Ordered the way somebody works: what is already happening, then what
+        is missing from the list, then what is missing from the drive, then
+        what is wrong with the contents.
+        """
+        if self.busy:
+            return _t("The disc is being written.")
+        if not self.items:
+            return (_t("There are no songs to write.")
+                    if self.mode == self.AUDIO
+                    else _t("There are no videos to write."))
+        if self.drive is None:
+            return _t("This computer has no CD or DVD drive attached.")
+        if getattr(self, "disc", {}).get("present") is not True:
+            return _t("No disc in the drive.")
+        if self._over_capacity():
+            if self.mode == self.AUDIO:
+                return _t("That is more than a CD holds. Remove a song or "
+                          "two.")
+            return _t("That is more video than one DVD holds at a watchable "
+                      "quality. Remove a video or two.")
+        bad = self._unreadable()
+        if bad is not None:
+            return (_t("“%s” cannot be read. Remove it to burn the disc.")
+                    % bad["name"])
+        return ""
+
     def _refresh(self):
         on = self.mode == self.AUDIO
+        # The mode pair is ToggleButtons and _refresh is reached from their own
+        # "clicked" handler (_on_mode, including its restore-native-state
+        # branch), so a plain set_active here re-emits "clicked" and recurses
+        # to RecursionError on every mode press. Restate them quietly.
         for b, want in ((self.audio_btn, on), (self.video_btn, not on)):
+            nbapp.set_active_quietly(b, want)
             ctx = b.get_style_context()
             if want:
                 ctx.add_class("db-mode-on")
@@ -1087,6 +1226,33 @@ class DiscBurner(nbapp.AppWindow):
                 ctx.remove_class("db-mode-on")
         self.name_box.set_visible(not on)
         self.name_box.set_no_show_all(on)
+        # A blank name field silently became "My Disc" on the disc itself, so
+        # what the field said was not what the disc was called. The hint that
+        # is already under it says the name it will get.
+        self.name_hint.set_text(
+            _t("Shown at the top of the disc menu.")
+            if self.name_entry.get_text().strip()
+            else _t("The disc will be named %s.") % _t("My Disc"))
+        # The DISC NAME block only exists in Video DVD mode, and it has to be
+        # paid for out of the list rather than out of the status bar.
+        self.scroll.set_size_request(-1, LIST_MIN_AUDIO if on
+                                     else LIST_MIN_VIDEO)
+        writing = _t("The disc is being written.") if self.busy else ""
+        set_reason(self.add_btn, writing or (_t("A file is being added.")
+                                               if self._add_pending else ""))
+        # Remove all declines the click while a disc is being written, so it
+        # has to look declined — the File menu already greys the same action.
+        set_reason(self.clear_btn, writing)
+
+        # Rebuilding the list destroys the row widget holding the keyboard,
+        # so the chosen row takes it back at the end — but ONLY when the
+        # keyboard was in the list to begin with. _refresh also runs on every
+        # keystroke in the DISC NAME field (its "changed" handler), and pulling
+        # focus out of that field left the disc unnameable: the first letter
+        # typed moved the keyboard to the chosen title and the rest went
+        # nowhere.
+        keyboard_in_list = any(self.get_focus() is btn for btn
+                               in getattr(self, "_row_buttons", {}).values())
 
         for child in list(self.rows.get_children()):
             self.rows.remove(child)
@@ -1104,15 +1270,38 @@ class DiscBurner(nbapp.AppWindow):
             self.rows.pack_start(self._item_row(i, item, first=(i == 0)),
                                  False, False, 0)
         self.rows.show_all()
+        selected = getattr(self, "_sel", None)
+        valid_selection = (isinstance(selected, int)
+                           and 0 <= selected < len(self.items))
+        if writing:
+            up_reason = down_reason = writing
+        elif not valid_selection:
+            pick = (_t("Select a song to move it.") if on
+                    else _t("Select a video to move it."))
+            up_reason = down_reason = pick
+        else:
+            up_reason = (_t("This is already first in the list.")
+                         if selected == 0 else "")
+            down_reason = (_t("This is already last in the list.")
+                           if selected >= len(self.items) - 1 else "")
+        set_reason(self.move_up_btn, up_reason)
+        set_reason(self.move_down_btn, down_reason)
+        if valid_selection and keyboard_in_list:
+            chosen = getattr(self, "_row_buttons", {}).get(selected)
+            if chosen is not None:
+                chosen.grab_focus()
         self._refresh_meter()
         self._refresh_drive()
-        self.go_btn.set_sensitive(
-            bool(self.items) and self.drive is not None and not self.busy
-            and not self._over_capacity())
+        set_reason(self.go_btn, self._burn_blocked())
 
     def _item_row(self, i, item, first=False):
-        btn = Gtk.Button()
+        btn = Gtk.ToggleButton()
         btn.get_style_context().add_class("db-btn")
+        btn.set_active(i == getattr(self, "_sel", None))
+        btn.get_accessible().set_name(item["name"])
+        if not hasattr(self, "_row_buttons"):
+            self._row_buttons = {}
+        self._row_buttons[i] = btn
         btn.set_relief(Gtk.ReliefStyle.NONE)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.get_style_context().add_class("db-row")
@@ -1122,7 +1311,8 @@ class DiscBurner(nbapp.AppWindow):
         num.get_style_context().add_class("db-meta")
         num.set_size_request(22, -1)
         row.pack_start(num, False, False, 0)
-        name = Gtk.Label(label=item["name"], xalign=0)
+        name = Gtk.Label(xalign=0)
+        _set_user_text(name, item["name"])
         name.get_style_context().add_class("db-name")
         name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         row.pack_start(name, True, True, 0)
@@ -1133,6 +1323,9 @@ class DiscBurner(nbapp.AppWindow):
         row.pack_start(meta, False, False, 0)
         drop = Gtk.Button(label=_t("Remove"))
         drop.get_style_context().add_class("db-btn")
+        drop.set_sensitive(not self.busy)
+        drop.get_accessible().set_name("%s %s" % (_t("Remove"), item["name"]))
+        drop.set_tooltip_text("%s %s" % (_t("Remove"), item["name"]))
         drop.connect("clicked", self._on_remove, i)
         row.pack_start(drop, False, False, 0)
         btn.add(row)
@@ -1145,6 +1338,19 @@ class DiscBurner(nbapp.AppWindow):
         del self.items[i]
         self._sel = None
         self._refresh()
+
+    def _unreadable(self):
+        """The first listed file whose length could not be read, or None.
+
+        A file the probe could not read is a file the decoder will not read
+        either, so a burn that contains one runs every track before it and
+        then fails — on a disc that is already being written, in the audio
+        case. The row says "unreadable"; this is what stops the burn starting.
+        """
+        for item in self.items:
+            if not item["seconds"]:
+                return item
+        return None
 
     def _durations(self):
         return [it["seconds"] or 0.0 for it in self.items]
@@ -1167,10 +1373,9 @@ class DiscBurner(nbapp.AppWindow):
                                        fmt_time(CD_MAX_SECONDS)))
         else:
             frac = total and min(1.0, total / (2.0 * 60 * 60)) or 0.0
-            kbit = dvd_video_bitrate(total) if total else 0
             self.meter_lbl.set_text(
                 _t("%s of video, %s") % (fmt_time(total),
-                                         _t("%d kbit per second") % kbit)
+                                         self._picture_quality(total))
                 if total else "")
         self.meter.set_fraction(max(0.0, min(1.0, frac)))
         ctx = self.meter.get_style_context()
@@ -1186,7 +1391,26 @@ class DiscBurner(nbapp.AppWindow):
                 _t("That is more video than one DVD holds at a watchable "
                    "quality. Remove a video or two."))
         else:
-            self.warn.set_text("")
+            bad = self._unreadable()
+            self.warn.set_text(
+                (_t("“%s” cannot be read. Remove it to burn the disc.")
+                 % bad["name"]) if bad else "")
+
+    @staticmethod
+    def _picture_quality(total_seconds):
+        """How the disc will look, said the way somebody watching it would.
+
+        This line used to print the encoder's bitrate — "8000 kbit per
+        second" — which is a number nobody watching a television can act on:
+        it is solved from the running time and there is no control for it.
+        What they can act on is how good the picture will be.
+        """
+        kbit = dvd_video_bitrate(total_seconds)
+        if kbit >= DVD_PEAK_KBIT:
+            return _t("best picture quality")
+        if kbit > DVD_MIN_KBIT * 2:
+            return _t("good picture quality")
+        return _t("lower picture quality to fit")
 
     def _refresh_drive(self):
         if not self.drive:
@@ -1217,6 +1441,18 @@ class DiscBurner(nbapp.AppWindow):
     def _on_go(self, _btn):
         if self.busy or not self.items or not self.drive:
             return
+        if getattr(self, "disc", {}).get("present") is not True:
+            self._say(_t("No disc in the drive."))
+            return
+        if not compatible_media(self.mode, self.disc):
+            # The drive row already names the inserted medium, so this says why
+            # that medium cannot be used and what to put in instead — rather
+            # than the two-word name of the mode, which read as the button
+            # having done nothing at all. The button itself stays live: a drive
+            # that answers only half the probe (disc_info's normal case) must
+            # still be allowed to try.
+            self._say(self._wrong_medium())
+            return
         missing = [n for n, ok in tools_present().items() if not ok]
         needed = (("ffmpeg", "wodim") if self.mode == self.AUDIO
                   else ("ffmpeg", "ffprobe", "dvdauthor", "spumux",
@@ -1228,14 +1464,36 @@ class DiscBurner(nbapp.AppWindow):
             return
         self._confirm()
 
+    def _wrong_medium(self):
+        """Why the disc in the drive cannot be written, and what to put in."""
+        info = getattr(self, "disc", None) or {}
+        if info.get("blank") is False:
+            return _t("That disc has already been written. Put in a blank "
+                      "one.")
+        if self.mode == self.AUDIO:
+            return _t("The disc in the drive cannot be used. A music CD needs "
+                      "a blank CD-R or CD-RW.")
+        return _t("The disc in the drive cannot be used. A video DVD needs a "
+                  "blank DVD-R or DVD+R.")
+
     def _confirm(self):
+        # WHOLE SENTENCES per count, not one string with a number in it: "1
+        # songs" is wrong in English and a language's plural rule is not ours
+        # to compose out of a format string.
         audio = self.mode == self.AUDIO
-        body = (_t("%d songs will be written to the disc in the drive. "
-                   "Anything already on it is lost.") % len(self.items)
-                if audio else
-                _t("%d videos will be converted and written to the disc in "
-                   "the drive. Anything already on it is lost.")
-                % len(self.items))
+        one = len(self.items) == 1
+        if audio:
+            body = (_t("1 song will be written to the disc in the drive. "
+                       "Anything already on it is lost.") if one else
+                    _t("%d songs will be written to the disc in the drive. "
+                       "Anything already on it is lost.") % len(self.items))
+        else:
+            body = (_t("1 video will be converted and written to the disc in "
+                       "the drive. Anything already on it is lost.") if one
+                    else
+                    _t("%d videos will be converted and written to the disc "
+                       "in the drive. Anything already on it is lost.")
+                    % len(self.items))
         dlg = Gtk.MessageDialog(
             transient_for=self, modal=True,
             message_type=Gtk.MessageType.QUESTION,
@@ -1263,9 +1521,11 @@ class DiscBurner(nbapp.AppWindow):
                           % (fmt_size(want), fmt_size(have)))
                 return
         self.busy = True
-        self.go_btn.set_sensitive(False)
-        self.add_btn.set_sensitive(False)
-        self.rescan_btn.set_sensitive(False)
+        # Re-render with the burn running: Burn disc, Add…, Remove all and
+        # every row's Remove are drawn from self.busy, and a control that will
+        # decline the click has to look declined.
+        self._refresh()
+        set_reason(self.rescan_btn, _t("The disc is being written."))
         self.prog.set_fraction(0.0)
         self.prog.show()
         self.stop_btn.show()
@@ -1333,10 +1593,18 @@ class DiscBurner(nbapp.AppWindow):
 
     def _finished(self, how, message):
         self.busy = False
+        if getattr(self, "_closing_after_stop", False):
+            # Cancellation has now reached the worker's terminal callback, so
+            # its external process group has been killed/reaped and the
+            # workdir is no longer in use.  Only now may teardown close the
+            # JobOwner and remove that directory.
+            self._clean_workdir()
+            self.destroy()
+            return
         self.prog.hide()
         self.stop_btn.hide()
-        self.add_btn.set_sensitive(True)
-        self.rescan_btn.set_sensitive(True)
+        set_reason(self.add_btn, "")
+        set_reason(self.rescan_btn, "")
         self._clean_workdir()
         # A burn is a several-minute job and its result is a physical thing
         # somebody has to go and take out of the drive, so the outcome is also
@@ -1351,8 +1619,12 @@ class DiscBurner(nbapp.AppWindow):
             self.notify(_t("The burn was stopped"),
                         _t("The disc may be unusable."))
         else:
-            self._say(message or _t("The disc was not written."))
-            self.notify(_t("The disc was not written."), message or "")
+            headline = _t("The disc was not written.")
+            self._say(message or headline)
+            # The tray shows title then body; an error with no sentence of its
+            # own printed the same one twice.
+            self.notify(headline, "" if message in (None, "", headline)
+                        else message)
         self._refresh()
         if self.drive:
             self._probe_disc()
@@ -1366,7 +1638,8 @@ class DiscBurner(nbapp.AppWindow):
         # a None callback, so the menu does not shift under the user's hand.
         if name == "File":
             return [
-                ("Add…", self._on_add if not self.busy else None),
+                ("Add…", self._on_add
+                 if not self.busy and not self._add_pending else None),
                 ("Remove All", self._on_clear if not self.busy else None),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
@@ -1374,9 +1647,50 @@ class DiscBurner(nbapp.AppWindow):
         return super().menu_items(name)
 
     def close(self, *_a):
-        if self.busy:
-            self._jobs.cancel("burn")
+        if DiscBurner._on_delete(self):
+            return
         self.destroy()
+
+    def _on_delete(self, *_a):
+        """Route WM/menu/Escape close through active-burn cancellation."""
+        if getattr(self, "_closing_after_stop", False):
+            return True
+        if self.busy and not self._confirm_stop_burn():
+            return True
+        if self.busy:
+            self._closing_after_stop = True
+            self._say(_t("Stopping…"))
+            set_reason(self.stop_btn, _t("Stopping…"))
+            set_reason(self.add_btn, _t("Stopping…"))
+            set_reason(self.rescan_btn, _t("Stopping…"))
+            self._jobs.cancel("burn")
+            # Keep the window and JobOwner alive until _finished receives the
+            # cancellation and performs the normal cleanup/destroy sequence.
+            return True
+        return False
+
+    def _confirm_stop_burn(self):
+        """Closing an active writer can leave its physical disc unusable.
+
+        Headed the way USB Writer heads the same moment: the card has to say
+        that a disc is being written and that leaving stops it, not repeat the
+        word on its own button.
+        """
+        dlg = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=_t("Stop writing?"))
+        dlg.format_secondary_text(
+            _t("The disc is only part-written. Stopping now may leave it "
+               "unusable."))
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        stop = dlg.add_button(_t("Stop writing"), Gtk.ResponseType.OK)
+        stop.get_style_context().add_class("destructive-action")
+        dlg.set_default_response(Gtk.ResponseType.CANCEL)
+        answer = dlg.run()
+        dlg.destroy()
+        return answer == Gtk.ResponseType.OK
 
 
 def main():

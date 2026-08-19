@@ -38,6 +38,8 @@ _SHAPE_SET = 0         # replace the existing shape
 _UNSORTED = 0
 
 _dpy = None
+_SHORT_MIN, _SHORT_MAX = -32768, 32767
+_USHORT_MAX = 65535
 
 
 def _display():
@@ -47,16 +49,41 @@ def _display():
     return _dpy
 
 
+def validated_rects(rects):
+    """XRectangle-safe integer tuples, or None if any rectangle is unsafe."""
+    if rects is None:
+        return None
+    out = []
+    try:
+        for rect in rects:
+            x, y, width, height = (int(value) for value in rect)
+            if (not _SHORT_MIN <= x <= _SHORT_MAX
+                    or not _SHORT_MIN <= y <= _SHORT_MAX
+                    or not 1 <= width <= _USHORT_MAX
+                    or not 1 <= height <= _USHORT_MAX):
+                return None
+            out.append((x, y, width, height))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return out
+
+
 def combine(xid, rects, kind):
     """Set the `kind` shape of window `xid` to the union of `rects`
     (each (x, y, w, h)). Replaces any previous shape of that kind."""
-    dpy = _display()
-    if not dpy or not xid or not rects:
+    values = validated_rects(rects)
+    if not xid or values is None:
         return
-    arr = (_XRectangle * len(rects))(
+    dpy = _display()
+    if not dpy:
+        return
+    # An empty rectangle list is meaningful to XShape: replacing the input
+    # shape with it makes a window fully click-through.  Pass NULL/count=0
+    # rather than treating it as a no-op.
+    arr = None if not values else (_XRectangle * len(values))(
         *[_XRectangle(int(x), int(y), int(w), int(h))
-          for (x, y, w, h) in rects])
-    _xext.XShapeCombineRectangles(dpy, xid, kind, 0, 0, arr, len(rects),
+          for (x, y, w, h) in values])
+    _xext.XShapeCombineRectangles(dpy, xid, kind, 0, 0, arr, len(values),
                                   _SHAPE_SET, _UNSORTED)
     _x11.XFlush(dpy)
 

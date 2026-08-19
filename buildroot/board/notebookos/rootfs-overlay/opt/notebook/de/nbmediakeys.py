@@ -25,6 +25,7 @@ Design notes for THIS stack:
 """
 import ctypes
 import glob
+import json
 import os
 import subprocess
 from ctypes import c_int, c_uint, c_ulong, c_long, c_void_p, c_char_p, Structure
@@ -38,6 +39,8 @@ from gi.repository import Gtk, Gdk, GLib, Pango, PangoCairo  # noqa: E402
 import cairo
 
 import nbaudio
+import nbapp
+import nbprefs
 from nbi18n import _t
 
 # ---- XF86 media keysyms ----------------------------------------------------
@@ -118,8 +121,8 @@ class _KeyGrabber:
         # map them (normal on real hardware).
         std = {
             121: XF86_AudioMute, 122: XF86_AudioLowerVolume,
-            123: XF86_AudioRaiseVolume, 232: XF86_MonBrightnessUp,
-            233: XF86_MonBrightnessDown,
+            123: XF86_AudioRaiseVolume, 232: XF86_MonBrightnessDown,
+            233: XF86_MonBrightnessUp,
         }
         for code, sym in std.items():
             self._code_to_sym[code] = sym
@@ -170,11 +173,10 @@ def _run(cmd):
         return 1, ""
 
 
-def _amixer_state():
-    """(percent:int, muted:bool) for Master, or (None, False) if unavailable."""
-    rc, out = _run(["amixer", "-M", "get", "Master"])
-    if rc != 0:
-        return None, False
+_MIXER_CONTROLS = nbaudio.PLAYBACK_CTLS
+
+
+def _parse_amixer(out):
     pct, muted = None, False
     for ln in out.splitlines():
         if "%]" in ln:
@@ -187,47 +189,102 @@ def _amixer_state():
     return pct, muted
 
 
+def _find_mixer_control(require_switch=False):
+    """First usable playback-volume control and its current state output."""
+    # The ordered policy is shared with Settings through nbaudio; retain the
+    # first probe's output so a failed mutation is never followed by a second
+    # read that misleadingly reports the old level.
+    for control in nbaudio.PLAYBACK_CTLS:
+        rc, out = _run(["amixer", "-M", "get", control])
+        has_switch = "[on]" in out or "[off]" in out
+        if (rc == 0 and _parse_amixer(out)[0] is not None
+                and (not require_switch or has_switch)):
+            return control, out
+    return None, ""
+
+
+def _amixer_state(control=None):
+    """(percent, muted) for the selected usable playback control."""
+    if control is None:
+        control, out = _find_mixer_control()
+        return _parse_amixer(out) if control else (None, False)
+    rc, out = _run(["amixer", "-M", "get", control])
+    return _parse_amixer(out) if rc == 0 else (None, False)
+
+
 def _volume(delta=None, toggle=False):
+    control, _out = _find_mixer_control(require_switch=toggle)
+    if control is None:
+        return None, False
     if toggle:
-        _run(["amixer", "-M", "-q", "sset", "Master", "toggle"])
+        rc, _out = _run(["amixer", "-M", "-q", "sset", control, "toggle"])
+        if rc != 0:
+            return None, False
     elif delta:
         sign = "%d%%%s" % (abs(delta), "+" if delta > 0 else "-")
-        _run(["amixer", "-M", "-q", "sset", "Master", sign, "unmute"])
-    return _amixer_state()
+        rc, _out = _run(["amixer", "-M", "-q", "sset", control, sign,
+                         "unmute"])
+        if rc != 0:
+            return None, False
+    return _amixer_state(control)
+
+
+def _persist_sound(percent, muted):
+    """Keep successful media-key changes aligned with login restoration."""
+    path = nbprefs.config_path()
+    try:
+        level = max(0, min(100, int(percent)))
+        def update(settings):
+            settings["sound.volume"] = level
+            settings["sound.muted"] = bool(muted)
+            return settings
+        nbapp.atomic_update_json(path, update, indent=2)
+        return True
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
+def _backlight_devs():
+    devs = sorted(glob.glob("/sys/class/backlight/*"))
+    ranks = {"raw": 0, "platform": 1, "firmware": 2}
+
+    def rank(dev):
+        try:
+            with open(os.path.join(dev, "type"), encoding="ascii") as fh:
+                kind = fh.read().strip().lower()
+        except OSError:
+            kind = ""
+        return ranks.get(kind, 3), dev
+
+    return sorted(devs, key=rank)
 
 
 def _backlight_dev():
-    devs = sorted(glob.glob("/sys/class/backlight/*"))
+    devs = _backlight_devs()
     return devs[0] if devs else None
 
 
 def _brightness(delta):
     """Adjust the first backlight by delta percent; return the new percent, or
     None if there is no backlight device."""
-    dev = _backlight_dev()
-    if not dev:
-        return None
-    try:
-        with open(os.path.join(dev, "max_brightness")) as fh:
-            mx = int(fh.read().strip())
-        with open(os.path.join(dev, "brightness")) as fh:
-            cur = int(fh.read().strip())
-        if mx <= 0:
-            return None
-        step = max(1, mx * abs(delta) // 100)
-        new = cur + step if delta > 0 else cur - step
-        # Never all the way off. A backlight at 0 is a black panel, and the
-        # only controls for getting back are on the screen you can no longer
-        # read — two presses from 16% used to reach it. 5% of the device's own
-        # range, and at least one step, so a panel whose max_brightness is 7
-        # still lands somewhere visible.
-        floor = max(1, mx // 20)
-        new = max(floor, min(mx, new))
-        with open(os.path.join(dev, "brightness"), "w") as fh:
-            fh.write(str(new))
-        return int(round(new * 100.0 / mx))
-    except (OSError, ValueError):
-        return None
+    for dev in _backlight_devs():
+        try:
+            with open(os.path.join(dev, "max_brightness")) as fh:
+                mx = int(fh.read().strip())
+            with open(os.path.join(dev, "brightness")) as fh:
+                cur = int(fh.read().strip())
+            if mx <= 0:
+                continue
+            step = max(1, mx * abs(delta) // 100)
+            new = cur + step if delta > 0 else cur - step
+            floor = max(1, mx // 20)
+            new = max(floor, min(mx, new))
+            with open(os.path.join(dev, "brightness"), "w") as fh:
+                fh.write(str(new))
+            return int(round(new * 100.0 / mx))
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 # ---- the OSD popup ---------------------------------------------------------
@@ -448,6 +505,7 @@ class MediaKeys:
         if sym == XF86_AudioRaiseVolume:
             pct, muted = _volume(delta=VOL_STEP)
             if pct is not None:
+                _persist_sound(pct, muted)
                 self.osd.show_level("volume", pct, muted)
             else:
                 self.osd.show_note("volume",
@@ -455,6 +513,7 @@ class MediaKeys:
         elif sym == XF86_AudioLowerVolume:
             pct, muted = _volume(delta=-VOL_STEP)
             if pct is not None:
+                _persist_sound(pct, muted)
                 self.osd.show_level("volume", pct, muted)
             else:
                 self.osd.show_note("volume",
@@ -462,6 +521,7 @@ class MediaKeys:
         elif sym == XF86_AudioMute:
             pct, muted = _volume(toggle=True)
             if pct is not None:
+                _persist_sound(pct, muted)
                 self.osd.show_level("volume", pct, muted)
             else:
                 self.osd.show_note("volume",

@@ -63,17 +63,20 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, PangoCairo  # noqa: E402
 
 import os
 import json
+import math
 import time
 import datetime
 import subprocess
 
 import nbapp  # shared base: nbapp.screen_size() gives the REAL primary-monitor
+import nbprefs
 # The shared motion engine, for the board's settle-in (PAPER-PHYSICS G1).
 # Never fatal: a desktop that cannot animate still shows its cards.
 try:
     import nbmotion
 except Exception:                                                 # noqa: BLE001
     nbmotion = None
+import nbi18n
 from nbi18n import _t, ltr  # noqa: E402
               # size (never a hardcoded 1920x1080) for sizing this board.
 
@@ -112,6 +115,7 @@ CAL_FILE = os.path.join(CFG_DIR, "calendar.json")       # Calendar app's events
 # the app agree at a glance about which event is which.
 CALS_FILE = os.path.join(CFG_DIR, "calendars.json")
 BOARD_FILE = os.path.join(CFG_DIR, "widgets.json")      # which tiles are on
+SETTINGS_FILE = os.path.join(CFG_DIR, "settings.json")  # timezone is process-local
 ACADEMICS_FILE = os.path.join(CFG_DIR, "academics.json")  # classes + homework
 # The same store under the name it had when the app was called Academic Notes.
 # The app itself reads this as a fallback (academics.LEGACY_FILE); the board has
@@ -197,6 +201,25 @@ TILE_ALIAS = {"academics": "schedule"}
 SHIPPED_TILES = ("schedule", "homework", "meals",
                  "workout", "journal", "bills")
 TILE_DEFAULT_ON = {tid: tid in SHIPPED_TILES for tid in TILE_ORDER}
+
+
+def _set_record_text(label, text, fallback=""):
+    """Put a name out of ANOTHER APP'S store on a tile row, exactly as stored.
+
+    Every tile on this board reads a file some other app wrote: a task the user
+    typed, a bill payee, a contact, a book title, a chapter heading, a dish, an
+    exercise. nbi18n looks up every label, so the board showed "Travail" for a
+    task tasks.json still calls "Work" — the desktop and the app disagreed
+    about the same record. Only an empty-state word is ours."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)
+    except AttributeError:
+        label.set_label(empty)
 
 
 def board_order(data):
@@ -390,7 +413,16 @@ _VALUE_CHARS = 18
 # cards are really using and clips the bottom of a card off the screen;
 # over-counting is what once left a 768px panel refusing to grant rows it had
 # 100px of room for.
-_HEAD_PX = 42         # a card header (.chead: 11+11 padding + title + rule)
+_HEAD_PX = 46         # a card header (.chead: 11+11 padding + title + rule),
+                      # rounded UP from the 39px it measures. Tasks and the
+                      # calendar used to hand-roll a shorter header of their
+                      # own; sharing the real one (which fixed "2 / 10 done"
+                      # rendering as "...") made both cards taller, and the
+                      # pinned column then wanted 1004px of a 998px panel at
+                      # 1920x1080 — six pixels that put a tile below the
+                      # bottom edge. The budget is a MODEL of the layout, so
+                      # it must err high: a row fewer is a row you can still
+                      # reach, a row too many is one you cannot.
 _TASK_ROW_PX = 31     # a .taskrow (5+5 padding + the 21px checkbox)
 _MORE_ROW_PX = 34     # the quieter "+N more" tail row (.moretail)
 _AGENDA_ROW_PX = 33   # an .agrow (6+6 padding + the 18px serif title)
@@ -505,8 +537,9 @@ WIDGETS_CSS = b"""
 /* A fill card (today's three meals) has only a few rows and the whole tile to
    put them in, so it is set larger -- at the shared 13px those three lines sat
    in the top third of the card and the rest read as a tile that failed to
-   draw. The lead is wider too: at the shared 46px "Breakfast" came out as
-   "Brea...", which is a strange thing for a card to call a meal. */
+   draw. The lead sits ABOVE the name rather than beside it (see _content_row):
+   a card this narrow cannot hold a lead column and a 16px name on one line, so
+   "Breakfast" is the eyebrow and the dish gets the width. */
 .crow.fill { padding: 10px 0; }
 .crow.fill .clead { font-size: 14px; }
 .crow.fill .cname { font-size: 16px; }
@@ -531,13 +564,13 @@ WIDGETS_CSS = b"""
    difference between their list text reads as a mistake. */
 .tasktext { font-family: "Nimbus Sans","Helvetica",sans-serif;
             font-size: 13px; color: #2A2620; }
-.tasktext.done { color: #9A9484; }
+.tasktext.done { color: #6E695E; }
 .emptytext { font-family: "Nimbus Sans","Helvetica",sans-serif;
              font-size: 14px; color: #6E695E; }
 /* the one line under an empty card's heading that says what to do about it:
    quieter than the state above it, so it reads as guidance, not as content. */
 .emptyhint { font-family: "Nimbus Sans","Helvetica",sans-serif;
-             font-size: 12px; color: #9A9484; }
+             font-size: 12px; color: #6E695E; }
 /* the "+N more" overflow read-out shown when a card is longer than its cap. */
 .moretext { font-family: "Nimbus Sans","Helvetica",sans-serif;
             font-size: 12px; color: #6E695E; }
@@ -574,6 +607,18 @@ def _css():
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(), prov,
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    # ...and the shared input rules. the desktop board does not build an nbapp.AppWindow, so
+    # it never reached nbapp.install_css -- which is where the OS-wide GDK
+    # dispatcher is armed. Two rules were therefore missing on exactly the
+    # surfaces a person meets first: focus rings stayed on for the mouse, and
+    # (measured on target) clicking this window did not give it the keyboard,
+    # so the Finder's search box could not be typed into at all.
+    try:
+        import nbapp as _nbapp
+        _nbapp.track_input_modality()
+    except Exception:                                             # noqa: BLE001
+        pass
+
 
 
 def _minutes(hhmm):
@@ -1065,6 +1110,25 @@ class Widgets(Gtk.Window):
         self.set_title("nb-desktop-widgets")
         nbapp.force_opaque_visual(self)   # see nbapp: no RGBA visual
         self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        # THE BOARD DOES NOT TAKE THE KEYBOARD, and this is not a preference:
+        # it is what makes the keyboard work anywhere at all on this machine.
+        #
+        # Measured on target. With set_accept_focus(True) the window manager
+        # made the board its focused client for the whole session -- it mapped
+        # last, and matchbox re-asserted focus onto it after every click. The
+        # X input focus therefore never reached the Finder, so its search box
+        # (the only way to find one app among twenty-nine) could not be typed
+        # into AT ALL: `xdotool getwindowfocus getwindowname` answered
+        # "nb-desktop-widgets" no matter what was clicked, and neither
+        # XSetInputFocus nor _NET_ACTIVE_WINDOW moved it back -- matchbox
+        # advertises that atom and ignores it. Declining focus here hands the
+        # keyboard straight to the Finder ("finder.py"), and typing lands.
+        #
+        # The cost, stated plainly: the board's own cards cannot be reached by
+        # Tab. They are clickable, they keep their accessible names, and every
+        # app they open is fully keyboard-driven -- which is the trade a desktop
+        # backdrop should make. A window that is furniture must not hold the
+        # keyboard the whole session.
         self.set_accept_focus(False)
         self.set_focus_on_map(False)
         # ...but PINNED TO THE DESKTOP LAYER. The hide-while-an-app-is-active
@@ -1193,8 +1257,10 @@ class Widgets(Gtk.Window):
         # board-settle transition 2026-08-09 on the design owner's direction:
         # it ran on every return from a closed app and read as buggy.)
 
-        GLib.timeout_add(2000, self._ensure_mapped)
-        GLib.timeout_add(6000, self._ensure_mapped)
+        self._destroyed = False
+        self._owned_sources = []
+        self._own_timeout_once(2000, self._ensure_mapped)
+        self._own_timeout_once(6000, self._ensure_mapped)
         # Watch the app-active flag with an inotify-backed file monitor instead
         # of stat-polling it ~2.5x a second forever.
         self._app_flag_monitor = None
@@ -1215,7 +1281,8 @@ class Widgets(Gtk.Window):
         # A monitor event NEVER rebuilds the board on the spot -- it asks for a
         # rebuild and the burst is coalesced into one (see _queue_reload).
         self._reload_pending = 0
-        for path in (BOARD_FILE, WORKOUT_FILE, ACADEMICS_FILE, ACADEMICS_LEGACY,
+        for path in (BOARD_FILE, SETTINGS_FILE, WORKOUT_FILE,
+                     ACADEMICS_FILE, ACADEMICS_LEGACY,
                      JOURNAL_FILE, ACCOUNTING_FILE, MEALS_FILE, TASKS_FILE,
                      CAL_FILE, CALS_FILE):
             try:
@@ -1228,16 +1295,56 @@ class Widgets(Gtk.Window):
                 pass
         # Drop a pending rebuild when the board goes away, so a coalescing
         # timeout can never fire into a destroyed window.
-        self.connect("destroy", lambda *_a: self._cancel_reload())
+        self.connect("destroy", self._on_destroy)
         # Reconcile once after start: covers a flag already present when the
         # board (re)launches, which produces no future monitor event.
-        GLib.timeout_add(500, lambda: (self._poll_home(), False)[1])
+        self._own_timeout_once(500, self._poll_home)
         # Periodic backstop (every 2s): the Gio monitor can MISS a flag
         # create/delete, and the app-flag itself is best-effort.
-        GLib.timeout_add_seconds(2, self._poll_home)
+        self._owned_sources.append(GLib.timeout_add_seconds(2, self._poll_home))
         # rebuild the calendar when the day rolls over so the circled day, date
         # header and TODAY agenda stay correct if the OS runs across midnight.
-        GLib.timeout_add_seconds(60, self._check_day_rollover)
+        self._owned_sources.append(
+            GLib.timeout_add_seconds(60, self._check_day_rollover))
+
+    def _on_destroy(self, *_args):
+        self._destroyed = True
+        self._cancel_reload()
+        for source_id in self._owned_sources:
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass
+        self._owned_sources = []
+        for monitor in ([self._app_flag_monitor]
+                        + list(getattr(self, "_store_monitors", []))):
+            if monitor is not None:
+                try:
+                    monitor.cancel()
+                except Exception:
+                    pass
+        self._app_flag_monitor = None
+        self._store_monitors = []
+
+    def _own_timeout_once(self, delay_ms, callback):
+        """Own a one-shot only until it fires; GLib may then reuse its ID."""
+        holder = [None]
+
+        def run():
+            source_id = holder[0]
+            try:
+                self._owned_sources.remove(source_id)
+            except ValueError:
+                pass
+            if getattr(self, "_destroyed", False):
+                return False
+            callback()
+            return False
+
+        source_id = GLib.timeout_add(delay_ms, run)
+        holder[0] = source_id
+        self._owned_sources.append(source_id)
+        return source_id
 
     # (The board-settle transition was removed 2026-08-09: the desktop board
     # does not animate — see the note in __init__.)
@@ -1261,7 +1368,7 @@ class Widgets(Gtk.Window):
         try:
             live = False
             for name in os.listdir(APP_DIR):
-                if name.isdigit() and os.path.isdir("/proc/" + name):
+                if name.isdigit() and nbapp.app_marker_live(name):
                     live = True
                     break
             return live
@@ -1272,6 +1379,8 @@ class Widgets(Gtk.Window):
         # follow the desktop home: hide while a fullscreen app owns the screen,
         # and -- crucially -- keep the board BELOW every real window whenever it
         # is shown, so a window is never rendered beneath it.
+        if getattr(self, "_destroyed", False):
+            return False
         try:
             active = self._app_active()
             if active and self.get_visible():
@@ -1290,6 +1399,11 @@ class Widgets(Gtk.Window):
         return True
 
     def _ensure_mapped(self):
+        # A hidden board is correct while a real app owns the desktop.  The
+        # startup watchdog used to mistake that state for a failed map and
+        # briefly remap the board over the app at its 2s/6s checkpoints.
+        if self._app_active():
+            return False
         win = self.get_window()
         if win is not None and not win.is_viewable():
             self.hide()
@@ -1339,6 +1453,10 @@ class Widgets(Gtk.Window):
 
     def _reload_now(self):
         self._reload_pending = 0
+        # TZ belongs to each process. The panel and newly launched apps update
+        # elsewhere; this always-running board must update its own environment
+        # before rebuilding date-keyed cards.
+        self._safe(nbprefs.apply_timezone)
         self._reload()
         return False           # one-shot: the next burst arms a fresh timeout
 
@@ -1358,7 +1476,15 @@ class Widgets(Gtk.Window):
         # Anything already queued is now redundant -- this IS that rebuild.
         self._cancel_reload()
         self._safe(self._load_stores)
-        self._safe(self._rebuild_tasks)
+        # A tick made HERE writes tasks.json, and that write comes straight back
+        # through the store monitor a fifth of a second later. Rebuilding on it
+        # re-sorts unfinished-first, so the row the user had just ticked slid
+        # down the card under the pointer -- undoing the in-place restyle
+        # _toggle_task exists to do. The list this board wrote is exactly what
+        # its rows already show, so only a change made ELSEWHERE is rebuilt.
+        if getattr(self, "tasks", None) != getattr(self, "_own_tasks", None):
+            self._own_tasks = None
+            self._safe(self._rebuild_tasks)
         self._safe(self._rebuild_calendar)
         self._safe(self._rebuild_tiles)
 
@@ -1383,7 +1509,11 @@ class Widgets(Gtk.Window):
         # The calendar card computes "today" once when built; if the OS is left
         # running across midnight, rebuild it so the circled day, date header
         # and TODAY agenda track the real date instead of the boot day.
+        if getattr(self, "_destroyed", False):
+            return False
         try:
+            # Backstop a missed settings monitor event as well as midnight.
+            nbprefs.apply_timezone()
             if time.localtime()[:3] != self._cal_day:
                 self._rebuild_calendar()
                 # The tiles date from the same moment: "due in 2 days", "next
@@ -1409,12 +1539,17 @@ class Widgets(Gtk.Window):
             if not isinstance(data, dict):
                 return blank
             today = time.strftime("%Y-%m-%d")
-            log = data.get("log")
-            entry = log.get(today, {}) if isinstance(log, dict) else {}
+            log = dict(self._workout_days(data.get("log")))
+            entry = log.get(today, {})
             if not isinstance(entry, dict):
                 entry = {}
             rows, done, goal = [], 0, 0
-            for ex in (data.get("exercises") or []):
+            exercises = data.get("exercises")
+            if isinstance(exercises, dict):
+                exercises = list(exercises.values())
+            if not isinstance(exercises, list):
+                exercises = []
+            for ex in exercises:
                 if not isinstance(ex, dict):
                     continue
                 name = ex.get("name")
@@ -1444,11 +1579,8 @@ class Widgets(Gtk.Window):
         arithmetic, so the desktop and the app can never quote two different
         numbers at the same moment. A past day is measured against the goal it
         was LOGGED against (data["goals"]), not today's."""
-        log = data.get("log")
-        if not isinstance(log, dict):
-            return 0
-        goals = data.get("goals")
-        goals = goals if isinstance(goals, dict) else {}
+        log = dict(Widgets._workout_days(data.get("log")))
+        goals = dict(Widgets._workout_days(data.get("goals")))
         today = time.strftime("%Y-%m-%d")
         done_days = set()
         for day, entry in log.items():
@@ -1467,6 +1599,29 @@ class Widgets(Gtk.Window):
             cur += 1
             at -= 1
         return cur
+
+    @staticmethod
+    def _workout_days(value, depth=0):
+        """Normalize every date-map shape the Workout app preserves."""
+        if isinstance(value, dict):
+            parts = [value]
+        elif isinstance(value, list):
+            parts = [part for part in value if isinstance(part, dict)]
+        else:
+            parts = []
+        out = []
+        for part in parts:
+            for day, item in part.items():
+                if not isinstance(day, str):
+                    continue
+                if nbapp.day_ordinal(day) is None and depth < 3:
+                    nested = Widgets._workout_days(item, depth + 1)
+                    if nested and any(nbapp.day_ordinal(key) is not None
+                                      for key, _value in nested):
+                        out.extend(nested)
+                        continue
+                out.append((day, item))
+        return out
 
     # -- the tile board ------------------------------------------------------
 
@@ -1652,10 +1807,16 @@ class Widgets(Gtk.Window):
                                TILE_ARG.get("schedule"),
                                _t("Open %s") % _t(TILE_APP_NAME["schedule"]))
 
-    def _card_shell(self, title, meta, strong=False):
-        """(card, body) -- the header row every card on this board shares."""
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        card.get_style_context().add_class("card")
+    @staticmethod
+    def _card_head(title, meta, strong=False):
+        """(head, title label, summary label) -- THE header row of this board.
+
+        Every card on the board wears this one row, and it is built here and
+        nowhere else: Tasks and the calendar each hand-rolled their own copy of
+        it, both of them still carrying the max_width_chars(1) bug this builder
+        had already been fixed for, so "2 / 10 done" and "Mon 17" drew as a
+        bare "..." on the shipped desktop while the six tiles beside them read
+        correctly. A second copy of a fixed thing is a re-broken thing."""
         head = Gtk.Box(spacing=8)
         head.get_style_context().add_class("chead")
         tl = Gtk.Label(label=title, xalign=0)
@@ -1678,8 +1839,15 @@ class Widgets(Gtk.Window):
         # must never be 1: on a pack_end child that IS the width it gets, and
         # every summary on the board came out as a single "..." once.
         ml.set_ellipsize(Pango.EllipsizeMode.END)
-        ml.set_max_width_chars(18)
+        ml.set_max_width_chars(_VALUE_CHARS)
         head.pack_end(ml, False, False, 0)
+        return head, tl, ml
+
+    def _card_shell(self, title, meta, strong=False):
+        """(card, body) -- the header row every card on this board shares."""
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        card.get_style_context().add_class("card")
+        head, _title, _meta = self._card_head(title, meta, strong)
         card.pack_start(head, False, False, 0)
 
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -1692,54 +1860,79 @@ class Widgets(Gtk.Window):
 
         `fill` is the variant used by cards with only a handful of rows and a
         whole tile to put them in (see FILL_TILES): larger type, more room to
-        breathe, and a wider lead column."""
+        breathe, and the lead on a line of its own.
+
+        A fill card is TALL and NARROW -- one cell of a four-column board is
+        about 200px of usable width -- and side by side the lead column and the
+        16px name could not both fit in it: the Meals tile clipped ordinary
+        dishes and even its own words, "Nothing plann...", "Thai ...", at every
+        panel size. The height a fill card has going spare is what pays for it,
+        so the lead takes a line above the name and the name takes the whole
+        width. Neither can crowd the other, in any language -- the fixed lead
+        column could not fit "Petit-dejeuner" either."""
         lead, name, value, hit = spec[0], spec[1], spec[2], spec[3]
         row = Gtk.Box(spacing=9)
         row.get_style_context().add_class("crow")
         if fill:
             row.get_style_context().add_class("fill")
-        if isinstance(lead, (tuple, list)) and lead and lead[0] == "check":
+        check_lead = (isinstance(lead, (tuple, list)) and lead
+                      and lead[0] == "check")
+        # A tick stays beside what it is about; only a WORD moves above it.
+        stacked = bool(fill and lead and not check_lead)
+        line = row                       # where [name][value] are packed
+        if stacked:
+            row.set_orientation(Gtk.Orientation.VERTICAL)
+            row.set_spacing(2)
+            line = Gtk.Box(spacing=9)
+        if check_lead:
             chk = _Check(bool(lead[1]), 15)
             row.pack_start(chk, False, False, 0)
         elif lead:
-            ll = Gtk.Label(label=str(lead), xalign=0)
+            ll = Gtk.Label(xalign=0)
+            _set_record_text(ll, lead)
             ll.get_style_context().add_class("clead")
             ll.set_ellipsize(Pango.EllipsizeMode.END)
             ll.set_max_width_chars(1)
-            ll.set_size_request(74 if fill else 46, -1)
+            if not stacked:
+                ll.set_size_request(46, -1)
             row.pack_start(ll, False, False, 0)
-        nl = Gtk.Label(label=str(name), xalign=0)
+        nl = Gtk.Label(xalign=0)
+        _set_record_text(nl, name)
         nctx = nl.get_style_context()
         nctx.add_class("cname")
         if hit:
             nctx.add_class("hit")
         nl.set_ellipsize(Pango.EllipsizeMode.END)
         nl.set_max_width_chars(1)
-        row.pack_start(nl, True, True, 0)
+        line.pack_start(nl, True, True, 0)
         if isinstance(value, (tuple, list)) and value and value[0] == "dots":
-            row.pack_end(self._dots_cell(value[1], value[2], hit),
-                         False, False, 0)
+            line.pack_end(self._dots_cell(value[1], value[2], hit),
+                          False, False, 0)
         elif isinstance(value, (tuple, list)) and value and value[0] == "alert":
             # The one row tone that means ACT ON THIS. `hit` cannot carry it:
             # that flag is green (.cname.hit / .cval.hit) and means finished,
             # which is the opposite thing. Reserved for a state a person is
             # late for -- an accent that appears on every row means nothing.
-            al = Gtk.Label(label=str(value[1]), xalign=1)
+            al = Gtk.Label(xalign=1)
+            _set_record_text(al, value[1])
             actx = al.get_style_context()
             actx.add_class("cval")
             actx.add_class("alert")
             al.set_ellipsize(Pango.EllipsizeMode.END)
             al.set_max_width_chars(_VALUE_CHARS)
-            row.pack_end(al, False, False, 0)
+            line.pack_end(al, False, False, 0)
         elif value:
-            vl = Gtk.Label(label=str(value), xalign=1)
+            vl = Gtk.Label(xalign=1)
+            _set_record_text(vl, value)
             vctx = vl.get_style_context()
             vctx.add_class("cval")
             if hit:
                 vctx.add_class("hit")
             vl.set_ellipsize(Pango.EllipsizeMode.END)
             vl.set_max_width_chars(_VALUE_CHARS)
-            row.pack_end(vl, False, False, 0)
+            line.pack_end(vl, False, False, 0)
+        if stacked:
+            row.pack_start(line, False, False, 0)
         return row
 
     def _mark_block(self, mark):
@@ -1940,6 +2133,33 @@ class Widgets(Gtk.Window):
         return data if isinstance(data, dict) else {}
 
     @staticmethod
+    def _read_records(path, key):
+        """Read the record shapes preserved by Contacts/E-book/Journal.
+
+        Those owning apps accept a bare list, their canonical wrapper, a
+        keyed object inside that wrapper, and a legacy wrapper containing a
+        plausible list.  Their desktop cards share the files and must accept
+        the same non-destructive recovery shapes.
+        """
+        try:
+            with open(path) as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        raw = data.get(key)
+        if raw is None:
+            raw = next((value for value in data.values()
+                        if isinstance(value, list)
+                        and any(isinstance(item, dict) for item in value)), [])
+        if isinstance(raw, dict):
+            return list(raw.values())
+        return raw if isinstance(raw, list) else []
+
+    @staticmethod
     def _as_list(value):
         """`value` if it is a list, else an empty one. A store field that
         should hold a list can hold anything at all once it has been
@@ -1947,14 +2167,33 @@ class Widgets(Gtk.Window):
         return value if isinstance(value, list) else []
 
     @staticmethod
-    def _when(days):
-        """A due/starts-on date, as few words as a value column can carry."""
+    def _as_records(value):
+        """Record collections accepted by owning apps: list or keyed object."""
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            return list(value.values())
+        return []
+
+    @staticmethod
+    def _when(days, iso=None):
+        """A due/starts-on date, as few words as a value column can carry.
+
+        A day count only means something inside the horizon a person plans in.
+        Past a year out it stops being a fact and becomes arithmetic -- a store
+        holding 9999-12-31 read "in 2912214 days" -- so the date itself is said
+        instead, in the same words the calendar card names a day with. `iso` is
+        the stored date; without it a far-off day count is all there is."""
         if days < 0:
             return _t("overdue")
         if days == 0:
             return _t("today")
         if days == 1:
             return _t("tomorrow")
+        if days > 365:
+            ymd = Widgets._parse_iso(iso)
+            if ymd is not None and 1 <= ymd[1] <= 12:
+                return "%d %s %d" % (ymd[2], _t(MONTHS[ymd[1] - 1]), ymd[0])
         return _t("in %d days") % days
 
     # -- readers -------------------------------------------------------------
@@ -2001,7 +2240,7 @@ class Widgets(Gtk.Window):
         if now is None:
             now = time.localtime()
         data = self._read_store(self._academics_store())
-        timed = _schedule_classes_for_day(self._as_list(data.get("classes")),
+        timed = _schedule_classes_for_day(self._as_records(data.get("classes")),
                                           now.tm_wday)
         events, allday = _schedule_events_for_day(
             getattr(self, "events", []),
@@ -2034,7 +2273,7 @@ class Widgets(Gtk.Window):
         mark, the title, and when it is due. Unfinished first, in due order --
         the cap must never bury a pending assignment behind handed-in ones."""
         data = self._read_store(self._academics_store())
-        items = [h for h in self._as_list(data.get("homework"))
+        items = [h for h in self._as_records(data.get("homework"))
                  if isinstance(h, dict) and h.get("title")]
         if not items:
             return None
@@ -2053,7 +2292,7 @@ class Widgets(Gtk.Window):
             elif o is None or today is None:
                 when = ""
             else:
-                when = self._when(o - today)
+                when = self._when(o - today, h.get("due"))
             rows.append((("check", is_done), str(h["title"]), when, is_done))
         n = len(open_)
         meta = _t("Nothing to do") if not n else _t("%d to do") % n
@@ -2102,8 +2341,7 @@ class Widgets(Gtk.Window):
             import contacts
         except Exception:
             return None
-        data = self._read_store(CONTACTS_FILE)
-        people = self._as_list(data.get("people"))
+        people = self._read_records(CONTACTS_FILE, "people")
         soon = []
         for person in people:
             if not isinstance(person, dict):
@@ -2133,15 +2371,18 @@ class Widgets(Gtk.Window):
         means a thing that is done."""
         data = self._read_store(EBOOK_FILE)
         books = []
-        for book in self._as_list(data.get("books")):
+        for book in self._read_records(EBOOK_FILE, "books"):
             if not isinstance(book, dict):
                 continue
             title = str(book.get("title") or "").strip()
             if not title:
                 continue
             try:
-                frac = min(max(float(book.get("frac") or 0.0), 0.0), 1.0)
-            except (TypeError, ValueError):
+                frac = float(book.get("frac") or 0.0)
+                if not math.isfinite(frac):
+                    frac = 0.0
+                frac = min(max(frac, 0.0), 1.0)
+            except (TypeError, ValueError, OverflowError):
                 frac = 0.0
             books.append({"title": title, "frac": frac,
                           "path": str(book.get("path") or "")})
@@ -2168,6 +2409,7 @@ class Widgets(Gtk.Window):
         try:
             import language
             goals, default = language.GOALS, language.DEFAULT_GOAL
+            data = language.Language.norm_progress(data)
         except Exception:
             goals, default = (10, 20, 30, 50), 20
         goal = data.get("goal")
@@ -2199,11 +2441,23 @@ class Widgets(Gtk.Window):
         outside it, and the card's job is to show the shape of the book without
         opening it."""
         data = self._read_store(NOVEL_FILE)
+        legacy = data.get("format_version") is None
         chapters = []
         for i, chapter in enumerate(self._as_list(data.get("chapters"))):
             if not isinstance(chapter, dict):
                 continue
             body = chapter.get("body")
+            if legacy and isinstance(body, str):
+                # Versionless Novel stores mirrored the chapter title into
+                # line one. Novel removes that line during migration; count
+                # the same manuscript here before the owner next autosaves.
+                title_for_migration = str(chapter.get("title") or "")
+                try:
+                    import novel
+                    body, _ranges = novel.Novel._migrate_legacy_body(
+                        title_for_migration, body, {})
+                except Exception:
+                    pass
             words = len(body.split()) if isinstance(body, str) else 0
             title = str(chapter.get("title") or "").strip()
             if not title:
@@ -2304,18 +2558,16 @@ class Widgets(Gtk.Window):
 
         Returns (meta, rows, cta, chart, mark) -- `mark` is what _tile() draws.
         """
-        data = self._read_store(JOURNAL_FILE)
-        entries = [e for e in self._as_list(data.get("entries"))
+        entries = [e for e in self._read_records(JOURNAL_FILE, "entries")
                    if isinstance(e, dict)]
-        if not entries:
-            # Day zero: no entry has EVER been written, so the streak
-            # question this mark asks ("did you write today?") is not live
-            # yet — and a signage-red cross was the first thing a fresh
-            # system said to its owner, while every sibling tile spoke
-            # gently. The shared empty state ("No entries / Write entries
-            # in Journal") says it the house way; the cross returns the
-            # day after the FIRST entry, when it means something.
-            return None
+        # EVERY day gets the mark, including day zero. A version of this card
+        # withheld the cross until the first entry existed, on the reasoning
+        # that a signage-red cross is a harsh first thing for a fresh machine
+        # to say — but it cost the card the one job it has. The question is
+        # "has today been written", the answer on a new machine is no, and a
+        # tile that answers a different question on day one is a tile whose
+        # meaning changes under you. The wording carries the gentleness
+        # instead: "Not written yet" is a state, not a reprimand.
         today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
         newest = None
         for e in entries:
@@ -2326,13 +2578,12 @@ class Widgets(Gtk.Window):
         when = time.strftime("%A %d %B")
         return ("", [], None, None,
                 {"done": done,
-                 "label": _t("Written") if done else _t("Not written"),
+                 "label": _t("Written") if done else _t("Not written yet"),
                  "date": when})
 
     def _read_journal_history(self):
         """Kept for the tests that walk the older shape; not used by the tile."""
-        data = self._read_store(JOURNAL_FILE)
-        entries = [e for e in self._as_list(data.get("entries"))
+        entries = [e for e in self._read_records(JOURNAL_FILE, "entries")
                    if isinstance(e, dict)]
         today = nbapp.day_ordinal(time.strftime("%Y-%m-%d"))
         dated = sorted(((self._journal_ordinal(e), e) for e in entries),
@@ -2370,33 +2621,37 @@ class Widgets(Gtk.Window):
         the opening figure plus every amount, formatted exactly as
         accounting._money formats it, so the tile and the app can never show
         two different balances for the same ledger."""
-        data = self._read_store(ACCOUNTING_FILE)
-        txns = [t for t in self._as_list(data.get("tx")) if isinstance(t, dict)]
         try:
-            total = float(data.get("opening") or 0)
-        except (TypeError, ValueError):
-            total = 0.0
-        for t in txns:
+            with open(ACCOUNTING_FILE) as fh:
+                raw = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        data = raw if isinstance(raw, dict) else {"tx": raw}
+        txns = [t for t in self._as_records(data.get("tx"))
+                if isinstance(t, dict)]
+
+        def finite(value, default=0.0):
+            if isinstance(value, bool):
+                return default
             try:
-                total += float(t.get("amt") or 0)
-            except (TypeError, ValueError):
-                continue
+                number = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return default
+            return number if math.isfinite(number) else default
+
+        total = finite(data.get("opening"))
+        for t in txns:
+            total += finite(t.get("amt"))
         if not txns and not total:
             return None
         # The balance, and the SHAPE of how it got there -- nothing else. The
         # list of individual entries belongs in the app; on a card it was six
         # lines of detail answering a question ("am I alright?") that the
         # number and the curve answer at a glance.
-        try:
-            opening = float(data.get("opening") or 0)
-        except (TypeError, ValueError):
-            opening = 0.0
+        opening = finite(data.get("opening"))
         series = [opening]
         for t in sorted(txns, key=lambda x: str(x.get("date") or "")):
-            try:
-                series.append(series[-1] + float(t.get("amt") or 0))
-            except (TypeError, ValueError):
-                continue
+            series.append(series[-1] + finite(t.get("amt")))
         return _fmt_money(total), [], None, series
 
     def _load_tasks(self):
@@ -2406,6 +2661,12 @@ class Widgets(Gtk.Window):
         try:
             with open(TASKS_FILE) as fh:
                 data = json.load(fh)
+            if isinstance(data, dict):
+                # Tasks accepts legacy/foreign keyed objects and preserves
+                # their insertion order. The desktop card shares this file,
+                # so it must normalize the same shape instead of claiming the
+                # list is empty while the owning app displays its records.
+                data = list(data.values())
             if isinstance(data, list):
                 return [{"text": str(t.get("text", "")), "done": bool(t.get("done"))}
                         for t in data if isinstance(t, dict)]
@@ -2415,11 +2676,27 @@ class Widgets(Gtk.Window):
 
     def _save_tasks(self, tasks):
         """Write the flat list back in the shared {"text","done"} shape so a tick
-        made on the desktop card round-trips into the Tasks app."""
+        made on the desktop card round-trips into the Tasks app.
+
+        What was written is remembered so the store monitor can tell this
+        board's own write from a change made in the Tasks app (see _reload)."""
         try:
             nbapp.atomic_write_json(TASKS_FILE, tasks)
-        except Exception:
-            pass
+            self._own_tasks = [dict(t) for t in tasks]
+            return True
+        except Exception as exc:
+            reason = nbapp.save_failure_reason(exc, TASKS_FILE)
+            try:
+                import nbnotify
+                nbnotify.post(_t("Not saved"), reason, app="tasks",
+                              app_name=_t("Tasks"), icon="tasks")
+            except Exception:
+                pass
+            try:
+                self._progress.set_text(_t("Not saved"))
+            except Exception:
+                pass
+            return False
 
     def _load_events(self):
         """Read the Calendar app's shared event store (calendar.json:
@@ -2437,7 +2714,8 @@ class Widgets(Gtk.Window):
                 data = json.load(fh)
         except Exception:
             return []
-        if not isinstance(data, list):
+        data = self._event_records(data)
+        if data is None:
             return []
         out = []
         for item in data:
@@ -2450,11 +2728,37 @@ class Widgets(Gtk.Window):
             out.append({"ymd": ymd, "start_min": start_min,
                         "end_min": self._start_minutes(item.get("end")),
                         "time": self._fmt_hhmm(start_min),
-                        "title": str(item.get("title", "")),
+                        # `or ""`, never a get() default: the default is only
+                        # used for a MISSING key, so a stored null came through
+                        # str(None) and the board drew an event called "None".
+                        "title": str(item.get("title") or ""),
                         "cal": str(item.get("cal", "") or ""),
                         "where": str(item.get("location", "") or ""),
                         "all_day": bool(item.get("all_day", False))})
         return out
+
+    @staticmethod
+    def _event_records(data):
+        """Return event records from every shape Calendar preserves.
+
+        Calendar accepts a bare list, ``{"events": [...]}``, an object keyed
+        by event id, and legacy wrappers containing a record list.  The board
+        reads the same store and must not claim those calendars are empty.
+        """
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            inner = data.get("events")
+            if isinstance(inner, list):
+                return inner
+            vals = list(data.values())
+            if vals and all(isinstance(v, dict) for v in vals):
+                return vals
+            for value in vals:
+                if (isinstance(value, list)
+                        and any(isinstance(item, dict) for item in value)):
+                    return value
+        return None
 
     @staticmethod
     def _parse_iso(s):
@@ -2470,16 +2774,21 @@ class Widgets(Gtk.Window):
     def _start_minutes(val):
         """A Calendar float hour (9.0, 18.5) -> minutes since midnight, or None
         when absent/unparseable (a timeless event, which sorts last)."""
+        if isinstance(val, bool):
+            return None
         try:
             f = float(val)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(f) or not (0.0 <= f < 24.0):
             return None
         h = int(f)
         m = int(round((f - h) * 60))
         if m >= 60:
             h += 1
             m -= 60
-        return h * 60 + m
+        total = h * 60 + m
+        return total if 0 <= total < 1440 else None
 
     @staticmethod
     def _fmt_hhmm(mins):
@@ -2489,12 +2798,22 @@ class Widgets(Gtk.Window):
         return "%02d:%02d" % (mins // 60, mins % 60)
 
     def _today_events(self):
-        """Today's events from the cached store, ordered by start time; timeless
-        events (start_min is None) sort last."""
+        """Today's events from the cached store: all-day events first, then the
+        rest by start time, with timeless ones (start_min is None) last.
+
+        An all-day event heads the day everywhere else the OS says what today
+        holds -- the Calendar's own day view sorts key=(not all_day, start) and
+        draws it in a band above the clock, and the Schedule tile beside this
+        card leads with that band. Sorted only by start time, this agenda put
+        "Book fair" behind the "+N more" tail while the tile next to it showed
+        the same event first, and the two cards described one day differently.
+        The stored start is no help either way: the Calendar writes 0.0 for an
+        all-day event and a hand-made record has none at all."""
         now = time.localtime()
         ymd = (now.tm_year, now.tm_mon, now.tm_mday)
         agenda = [e for e in getattr(self, "events", []) if e["ymd"] == ymd]
-        agenda.sort(key=lambda e: (e["start_min"] is None,
+        agenda.sort(key=lambda e: (not e.get("all_day"),
+                                   e["start_min"] is None,
                                    e["start_min"] if e["start_min"] is not None
                                    else 0))
         return agenda
@@ -2548,9 +2867,9 @@ class Widgets(Gtk.Window):
         hairline frame, the padding and every pixel of the geometry stay owned
         by `child`, exactly as they were under the EventBox.
 
-        NOTE the board window sets accept_focus False (it is desktop furniture
-        and must never come forward), so these buttons are reachable from the
-        keyboard within the board, not from a window-manager focus switch."""
+        The board accepts deliberate focus but keeps focus_on_map False, so
+        these controls work after the user enters the desktop without stealing
+        focus whenever the board remaps."""
         hit = Gtk.Button()
         hit.set_relief(Gtk.ReliefStyle.NONE)
         hit.get_style_context().add_class("boardhit")
@@ -2574,18 +2893,7 @@ class Widgets(Gtk.Window):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         card.get_style_context().add_class("card")
 
-        head = Gtk.Box(spacing=8)
-        head.get_style_context().add_class("chead")
-        title = Gtk.Label(label=_t("Tasks"), xalign=0)
-        title.get_style_context().add_class("ctitle")
-        title.set_ellipsize(Pango.EllipsizeMode.END)
-        title.set_max_width_chars(1)
-        head.pack_start(title, True, True, 0)
-        self._progress = Gtk.Label(xalign=1)
-        self._progress.get_style_context().add_class("cmeta")
-        self._progress.set_ellipsize(Pango.EllipsizeMode.END)
-        self._progress.set_max_width_chars(1)
-        head.pack_end(self._progress, False, False, 0)
+        head, _title, self._progress = self._card_head(_t("Tasks"), "")
         # The card could tick a task but never ADD one -- the app that owns it
         # was unreachable from the desktop. Its heading now opens it.
         card.pack_start(self._clickable(head, "tasks", tip=_t("Open Tasks")),
@@ -2613,9 +2921,13 @@ class Widgets(Gtk.Window):
             # entered, and the block itself opens Tasks.
             row = self._cta_block(_t("No tasks"),
                                   _t("Click to add a task"))
+            # The prompt IS the card's whole contents, so it sits in the middle
+            # of the paper rather than clinging to the top edge over a blank
+            # half -- the treatment _tile gives every other empty card here.
+            row.set_valign(Gtk.Align.CENTER)
             self._tasklist.pack_start(
                 self._clickable(row, "tasks", tip=_t("Open Tasks")),
-                False, False, 0)
+                True, True, 0)
             self._tasklist.show_all()
             self._progress.set_text("")
             return
@@ -2632,23 +2944,27 @@ class Widgets(Gtk.Window):
             order = order[:cap - 1]
         for i in order:
             t = self.tasks[i]
-            # The whole row toggles the task (matching the design's full-row
-            # target and the Tasks app). A visible-window EventBox is the styled,
-            # opaque .taskrow surface: it draws the hairline + papertone reliably
-            # on the framebuffer and, being the child widgets' parent window,
-            # catches a click anywhere on the row -- including on the checkbox.
-            hit = Gtk.EventBox()
+            # The whole row toggles the task.  Use a real Button so assistive
+            # technology gets a named action/role and GTK supplies correct
+            # pointer, Space and Enter activation semantics.
+            hit = Gtk.ToggleButton()
+            hit.set_relief(Gtk.ReliefStyle.NONE)
+            hit.get_style_context().add_class("boardhit")
             hit.get_style_context().add_class("taskrow")
-            hit.set_can_focus(True)
             hit.set_tooltip_text(_t("Toggle task"))
-            hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+            hit.set_active(bool(t["done"]))
+            try:
+                hit.get_accessible().set_name(t["text"])
+            except Exception:
+                pass
             row = Gtk.Box(spacing=12)
             row.get_style_context().add_class("taskrowbody")
             hit.add(row)
             chk = _Check(t["done"])
             self._task_checks[i] = chk
             row.pack_start(chk, False, False, 0)
-            lbl = Gtk.Label(label=t["text"], xalign=0)
+            lbl = Gtk.Label(xalign=0)
+            _set_record_text(lbl, t["text"])
             lbl.get_style_context().add_class("tasktext")
             # a long task title must ellipsize, never widen the fixed column.
             lbl.set_ellipsize(Pango.EllipsizeMode.END)
@@ -2656,8 +2972,7 @@ class Widgets(Gtk.Window):
             self._apply_task_style(lbl, t["done"])
             self._task_labels[i] = lbl
             row.pack_start(lbl, True, True, 0)
-            hit.connect("button-press-event", self._on_task_row_press, i)
-            hit.connect("key-press-event", self._on_task_row_key, i)
+            hit.connect("clicked", self._on_task_button_clicked, i)
             self._tasklist.pack_start(hit, True, True, 0)
         if hidden:
             # "+3 more" is a promise that the rest is somewhere. Clicking it
@@ -2701,8 +3016,28 @@ class Widgets(Gtk.Window):
             return True
         return False
 
+    def _on_task_button_clicked(self, button, idx):
+        """Persist a toggle, then expose the state that actually survived.
+
+        Only this row is ever synced, and only while this handler is BLOCKED:
+        GtkToggleButton.set_active emits "clicked" again, which re-entered this
+        handler and toggled whatever task `idx` named by then -- a store that
+        had changed underneath sent one click into ~1000 read-modify-write
+        cycles of tasks.json, flipping a task the user never touched, and a
+        failed save reported "Not saved" twice. _toggle_task answers None when
+        it has rebuilt the list (this button and its row are gone with it), so
+        there is nothing left here to sync."""
+        done = self._toggle_task(idx)
+        if done is None or button.get_active() == done:
+            return
+        button.handler_block_by_func(self._on_task_button_clicked)
+        try:
+            button.set_active(done)
+        finally:
+            button.handler_unblock_by_func(self._on_task_button_clicked)
+
     @staticmethod
-    def _find_task(disk, text, was_done, idx):
+    def _find_task(disk, text, was_done, idx, occurrence=0):
         """Where the task we are showing sits in the list that is ACTUALLY on
         disk right now. Prefers the same slot (the ordinary case), then a slot
         holding the same text in the state we last saw it in, then any slot
@@ -2710,35 +3045,47 @@ class Widgets(Gtk.Window):
         deleted elsewhere, and must not be written back."""
         if 0 <= idx < len(disk) and disk[idx]["text"] == text:
             return idx
-        for i, t in enumerate(disk):
-            if t["text"] == text and t["done"] == was_done:
-                return i
-        for i, t in enumerate(disk):
-            if t["text"] == text:
-                return i
+        matches = [i for i, t in enumerate(disk)
+                   if t["text"] == text and t["done"] == was_done]
+        if matches:
+            return matches[min(max(occurrence, 0), len(matches) - 1)]
+        matches = [i for i, t in enumerate(disk) if t["text"] == text]
+        if matches:
+            return matches[min(max(occurrence, 0), len(matches) - 1)]
         return None
 
     def _toggle_task(self, idx):
+        """Tick/untick the task shown in row `idx` and persist it.
+
+        Returns the done-state that row must now show, or None when the row is
+        gone -- the list was rebuilt from a store that had changed underneath,
+        so the widgets this row was made of no longer exist."""
         # READ-MODIFY-WRITE against the file, never a blind write of the list
         # this card happens to be holding. self.tasks is a snapshot taken when
         # the desktop last came back, and the Tasks app can have written newer
         # tasks since. Writing the snapshot back would silently erase everything
         # added in between; applying the single change to what is on disk cannot.
         if not (0 <= idx < len(self.tasks)):
-            return
+            return None
         shown = self.tasks
         text, was = shown[idx]["text"], shown[idx]["done"]
+        occurrence = sum(1 for task in shown[:idx]
+                         if task["text"] == text and task["done"] == was)
         disk = self._load_tasks()
-        pos = self._find_task(disk, text, was, idx)
+        pos = self._find_task(disk, text, was, idx, occurrence)
         if pos is None:
             # gone from the store (renamed or deleted in the Tasks app): show
             # what is really there rather than re-creating what the user removed
             self.tasks = disk
             self._rebuild_tasks()
-            return
+            return None
         done = not was
         disk[pos]["done"] = done
-        self._save_tasks(disk)
+        if not self._save_tasks(disk):
+            # Do not paint a completion that never reached persistent state.
+            # The current model and row still describe the bytes on disk, so
+            # the row goes back to the state it was in before the click.
+            return was
         same_shape = (len(disk) == len(shown)
                       and all(a["text"] == b["text"]
                               for a, b in zip(disk, shown)))
@@ -2748,7 +3095,7 @@ class Widgets(Gtk.Window):
             # rows on screen no longer line up with the store, so rebuild from
             # it instead of restyling rows that mean something else now.
             self._rebuild_tasks()
-            return
+            return None
         lbl = self._task_labels.get(idx)
         if lbl is not None:
             self._apply_task_style(lbl, done)
@@ -2756,6 +3103,7 @@ class Widgets(Gtk.Window):
         if chk is not None:
             chk.set_done(done)          # repaints just the box, not the row
         self._update_progress()
+        return done
 
     def _update_progress(self):
         done = sum(1 for t in self.tasks if t["done"])
@@ -2774,19 +3122,9 @@ class Widgets(Gtk.Window):
                       if e["ymd"][0] == y and e["ymd"][1] == m}
         agenda = self._today_events()
 
-        head = Gtk.Box(spacing=8)
-        head.get_style_context().add_class("chead")
-        title = Gtk.Label(label="%s %d" % (_t(MONTHS[m - 1]), y), xalign=0)
-        title.get_style_context().add_class("ctitle")
-        title.set_ellipsize(Pango.EllipsizeMode.END)
-        title.set_max_width_chars(1)
-        head.pack_start(title, True, True, 0)
-        sub = Gtk.Label(label="%s %d" % (_t(WD_ABBR[now.tm_wday]), today),
-                        xalign=1)
-        sub.get_style_context().add_class("cmeta")
-        sub.set_ellipsize(Pango.EllipsizeMode.END)
-        sub.set_max_width_chars(1)
-        head.pack_end(sub, False, False, 0)
+        head, _title, _sub = self._card_head(
+            "%s %d" % (_t(MONTHS[m - 1]), y),
+            "%s %d" % (_t(WD_ABBR[now.tm_wday]), today))
         # the heading opens the Calendar on today, exactly as clicking a day
         # opens it on that day -- the card is a way in, not just a read-out.
         today_iso = "%04d-%02d-%02d" % (y, m, today)
@@ -2818,19 +3156,24 @@ class Widgets(Gtk.Window):
                     ctx.add_class("today")
                 elif day in event_days:
                     ctx.add_class("hasev")
-                # Clicking a day opens the Calendar app to that day. A windowless
-                # EventBox (set_visible_window False) is an input-only click
-                # target laid over the already-painted card surface, so it adds
-                # NO window that could paint black on the no-compositor
-                # framebuffer while still catching the press.
-                hit = Gtk.EventBox()
-                hit.set_visible_window(False)
+                # A real neutral Button gives every date pointer, keyboard and
+                # assistive-technology activation without changing its pixels.
+                hit = Gtk.Button()
+                hit.set_relief(Gtk.ReliefStyle.NONE)
+                hit.get_style_context().add_class("boardhit")
                 hit.set_halign(Gtk.Align.CENTER)
                 hit.set_vexpand(True)
-                hit.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
                 hit.add(lbl)
                 iso = "%04d-%02d-%02d" % (y, m, day)
-                hit.connect("button-press-event", self._on_day_press, iso)
+                hit.set_tooltip_text(_t("Open Calendar"))
+                try:
+                    hit.get_accessible().set_name(
+                        "%d %s %d" % (day, _t(MONTHS[m - 1]), y))
+                except Exception:
+                    pass
+                hit.connect("clicked",
+                            lambda _button, selected=iso:
+                            self._open_calendar(selected))
                 grid.attach(hit, c, r, 1, 1)
         # The month is the anchor of this card, so it takes the slack the card
         # has left over -- but only up to a comfortable week row. Past that the
@@ -2879,14 +3222,28 @@ class Widgets(Gtk.Window):
                 if len(agenda) > cap:
                     hidden = len(agenda) - (cap - 1)
                     agenda = agenda[:cap - 1]
+                # The time column is one column: every row's time cell shares
+                # the widest of them, so "All Day" cannot clip and cannot knock
+                # the titles beneath it out of line. 42px is its floor.
+                times = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
                 for ev in agenda:
                     row = Gtk.Box(spacing=12)
                     row.get_style_context().add_class("agrow")
-                    tl = Gtk.Label(label=ev["time"], xalign=0)
+                    # An all-day event has no clock time. The Calendar stores it
+                    # as 0.0 and this card read that back as a flat "00:00",
+                    # which is a time the event is not at; the Calendar app says
+                    # "All Day" in the same place, so this card does too.
+                    tl = Gtk.Label(label=(_t("All Day") if ev.get("all_day")
+                                          else ev["time"]), xalign=0)
                     tl.get_style_context().add_class("agtime")
                     tl.set_size_request(42, -1)
+                    times.add_widget(tl)
                     row.pack_start(tl, False, False, 0)
-                    xl = Gtk.Label(label=ev["title"], xalign=0)
+                    # A record can carry no title at all (JSON null, or a blank
+                    # string): an agenda row with nothing in it says less than
+                    # the word every other app in the OS uses for that.
+                    xl = Gtk.Label(xalign=0)
+                    _set_record_text(xl, ev["title"], "Untitled")
                     xl.get_style_context().add_class("agtext")
                     xl.set_ellipsize(Pango.EllipsizeMode.END)
                     xl.set_max_width_chars(1)

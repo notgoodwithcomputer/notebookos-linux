@@ -197,7 +197,7 @@ typedef struct Instance {
     s16 scale;              /* 8.8 size, 0 or 256 = normal, 128 = half */
     u8  anim_lo, anim_hi;   /* animation frame range; hi == 0 = all frames */
     /* ---- appended; 0 = the original behaviour ---- */
-    s16 gx, gy;             /* glide target */
+    s32 gx, gy;             /* glide target (rooms and instance positions are 32-bit) */
     u16 glide;              /* frames of glide left, 0 = not gliding */
     u8  inv;                /* mercy frames left; collision tests of an object
                                with hurt_frames report nothing while set */

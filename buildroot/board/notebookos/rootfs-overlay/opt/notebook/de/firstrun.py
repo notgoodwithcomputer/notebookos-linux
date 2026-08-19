@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 # The marker the installer leaves. Under /var so it survives on the installed
@@ -152,28 +153,115 @@ def set_root_password(hashed):
         out.append(ln)
     if not found:
         out.append("root:%s:%s:0:99999:7:::\n" % (field, lastchg))
-    shadow_tmp = SHADOW + ".firstrun"
+    shadow_tmp = None
     try:
-        with open(shadow_tmp, "w") as fh:
+        try:
+            old_stat = os.stat(SHADOW)
+        except OSError:
+            old_stat = None
+        fd, shadow_tmp = tempfile.mkstemp(
+            prefix=".shadow.firstrun-", dir=os.path.dirname(SHADOW) or ".")
+        with os.fdopen(fd, "w") as fh:
             fh.writelines(out)
-        os.chmod(shadow_tmp, 0o600)
+            if old_stat is not None:
+                os.fchmod(fh.fileno(), old_stat.st_mode & 0o7777)
+                try:
+                    os.fchown(fh.fileno(), old_stat.st_uid, old_stat.st_gid)
+                except PermissionError:
+                    pass
+            else:
+                os.fchmod(fh.fileno(), 0o600)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(shadow_tmp, SHADOW)
+        shadow_tmp = None
+        dirfd = os.open(os.path.dirname(SHADOW) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dirfd)
+        finally:
+            os.close(dirfd)
         return True
     except OSError:
-        try:
-            os.unlink(shadow_tmp)
-        except OSError:
-            pass
+        if shadow_tmp is not None:
+            try:
+                os.unlink(shadow_tmp)
+            except OSError:
+                pass
         return False
 
 
 def write_user_name(name):
-    """What the machine calls its owner: shown at sign-in in place of "root"."""
+    """What the machine calls its owner: shown at sign-in in place of "root".
+
+    THE NAME GOES DOWN WHOLE. This used to cut at 40 characters, silently and
+    at the writing end, so a 53-character name reached the disk as
+    "Bartholomew Alexander Fitzgerald-Montgom" -- chopped mid-word, while the
+    full name sat on screen looking kept, and reported as saved. The sign-in
+    screen then greets that stump every morning: this screen never runs again,
+    Settings has no owner-name field, and nothing else in the OS asks.
+
+    The other two ends of this file already agree: de/login.py reads up to 120
+    and ellipsizes the greeting instead, which is what a cut is supposed to
+    look like, and de/installer.py writes the same file with no cut at all. A
+    limit belongs where the person can see it -- the entry is capped at that
+    same 120 while the name is being typed (see _build) -- and never here,
+    after they have been told it was saved.
+    """
     try:
         with open(USER_NAME_FILE, "w") as fh:
-            fh.write((name or "").strip()[:40] + "\n")
+            fh.write((name or "").strip() + "\n")
         return True
     except OSError:
+        return False
+
+
+class _InLang:
+    """nbi18n, answering in the language picked ON THIS SCREEN.
+
+    nbi18n resolves every string through ONE module-level catalog, fixed when
+    the process started from the language the machine was installed with. That
+    is right everywhere else in the OS and wrong here: this is the screen where
+    somebody changes it, and the answer has to be legible to the person who
+    just gave it. settings.py reaches for the same catalog by hand for the same
+    reason (_on_region_lang).
+
+    Swapping the catalog for the length of a redraw makes BOTH the _t() calls
+    in this file and nbi18n's own auto-translate hooks -- which look up every
+    string handed to set_text/set_label -- answer in the chosen language. The
+    process's own language is put back immediately: what the rest of the
+    desktop reads is locale.json, written at Finish.
+    """
+    _cache = {}
+
+    def __init__(self, code):
+        self.code = code
+        self._saved = None
+
+    def __enter__(self):
+        # Nothing in here may raise. This screen runs before anything has
+        # proved the de/ tree is intact, and a setup screen that cannot be
+        # finished is a machine that cannot be used: a catalog that will not
+        # load leaves the language as the process found it, which is the same
+        # graceful English fallback nbi18n itself makes.
+        try:
+            import nbi18n                                      # noqa: PLC0415
+            self._saved = (nbi18n._LANG, nbi18n._CAT)
+            if self.code not in self._cache:
+                self._cache[self.code] = nbi18n._load_catalog(self.code)
+            nbi18n._LANG = self.code
+            nbi18n._CAT = self._cache[self.code]
+        except Exception:                                      # noqa: BLE001
+            self._saved = None
+        return self
+
+    def __exit__(self, *_exc):
+        if self._saved is None:
+            return False
+        try:
+            import nbi18n                                      # noqa: PLC0415
+            nbi18n._LANG, nbi18n._CAT = self._saved
+        except Exception:                                      # noqa: BLE001
+            pass
         return False
 
 
@@ -235,9 +323,12 @@ def write_keyboard(code):
     # bound after moving to a single one.
     try:
         import nbi18n                                          # noqa: PLC0415
-        subprocess.run(nbi18n.xkb_args(code), capture_output=True, timeout=10)
+        result = subprocess.run(nbi18n.xkb_args(code), capture_output=True,
+                                timeout=10)
+        if result.returncode != 0:
+            ok = False
     except Exception:
-        pass
+        ok = False
     return ok
 
 
@@ -316,7 +407,7 @@ def clear_marker():
 # the wrong field as often as the right one.
 PART_NAMES = {"username": "Name", "hostname": "Computer name",
               "keyboard": "Keyboard", "language": "Language",
-              "password": "Password"}
+              "password": "Password", "completion": "Finish"}
 
 
 def apply(answers):
@@ -331,20 +422,27 @@ def apply(answers):
         failed.append("username")
     if not write_hostname(answers["hostname"]):
         failed.append("hostname")
-    if not write_keyboard(answers["kbd"]):
+    keyboard_ok = write_keyboard(answers["kbd"])
+    if not keyboard_ok:
         failed.append("keyboard")
     if not write_locale(answers["lang"], answers["kbd"]):
         failed.append("language")
-    if answers.get("password"):
+    # Never hash a password while the running keyboard differs from the layout
+    # just persisted for boot.  Retrying setup is recoverable; storing bytes
+    # typed through the wrong keymap can lock the owner out after restart.
+    if not keyboard_ok:
+        pass
+    elif answers.get("password"):
         hashed = hash_password(answers["password"])
         if hashed is None or not set_root_password(hashed):
             failed.append("password")
     else:
         # No password: leave root locked, exactly as the image ships. login.py
         # then has nothing to ask for and the machine starts straight in.
-        set_root_password(None)
-    if not failed:
-        clear_marker()
+        if not set_root_password(None):
+            failed.append("password")
+    if not failed and not clear_marker():
+        failed.append("completion")
     return failed
 
 
@@ -382,6 +480,29 @@ def main():
     .fr-label { font-size: 12px; letter-spacing: 0.08em; color: #6E695E; }
     .fr-entry { font-size: 15px; padding: 8px 10px; background: #FCFBF8;
                 border: 1px solid #C9C4B6; border-radius: 8px; color: #1A1916; }
+    /* A FIELD THAT CANNOT BE TYPED INTO MUST LOOK IT. The rule above sets
+       colour, background and border unconditionally at APPLICATION priority,
+       so it repainted the two password fields to look exactly alive after
+       "start straight into the desktop without a password" had switched them
+       off -- the one tick on this screen that decides a machine has no
+       password at all, and it showed nothing. These are Papertone's own
+       UNAVAILABLE tones (inkoff/hairoff/paperoff), written out because this
+       string must stay ASCII and self-contained. */
+    .fr-entry:disabled { color: #A9A395; background: #F1EEE6;
+                border-color: #DDD8CB; }
+    /* The tick that goes off with them, for the same reason: the theme's
+       `* { color: ... }` reaches every label in the OS, so a switched-off
+       checkbutton keeps full-strength ink in its caption unless something
+       says otherwise. */
+    .fr-bg checkbutton:disabled label { color: #A9A395; }
+    /* The 6px between a tick box and its own caption is written in the theme
+       as `margin-right` -- a physical side with no right-to-left counterpart
+       -- so in Yiddish, the one RTL interface language, the gap lands on the
+       far side of the box and the caption's last letter touches the border.
+       Mirrored here for the first screen a Yiddish owner meets; the OS-wide
+       fix belongs in Papertone's own `check, radio` rule. */
+    .fr-bg check:dir(rtl), .fr-bg radio:dir(rtl) {
+                margin-right: 0; margin-left: 6px; }
     .fr-go { background: #1A1916; border: 1px solid #1A1916; border-radius: 8px;
              padding: 9px 26px; font-size: 15px; }
     .fr-go label { color: #FCFBF8; }
@@ -406,6 +527,11 @@ def main():
             self._fit_screen()
             self.connect("map-event", lambda *_a: self._fit_screen())
             self.connect("destroy", Gtk.main_quit)
+            # The language this screen is SPEAKING, and what it is saying in
+            # it. Both start as the process's own; _on_lang moves them.
+            self._lang = nbi18n.current_lang()
+            self._said = []                 # (widget, its English source)
+            self._line = None               # what _say() last put up
             self._build()
 
         def _fit_screen(self):
@@ -447,11 +573,13 @@ def main():
             if mark is None:
                 mark = Gtk.Label(label=_t("Notebook OS"))
                 mark.get_style_context().add_class("fr-sub")
+                self._said.append((mark, "Notebook OS"))
             mark.set_margin_bottom(10)
             outer.pack_start(mark, False, False, 0)
 
             t = Gtk.Label(label=_t("Setup"))
             t.get_style_context().add_class("fr-title")
+            self._said.append((t, "Setup"))
             # The scene-setting line under this title is gone; its bottom margin
             # moves here so the gap above the fields is unchanged.
             t.set_margin_bottom(22)
@@ -460,23 +588,49 @@ def main():
             grid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
             grid.set_size_request(420, -1)
 
-            def field(label_text, widget):
+            # `src` is the ENGLISH source, not the finished caption: the
+            # language can change while this screen is open (see _on_lang), and
+            # a widget cannot be asked what it used to say.
+            def field(src, widget):
                 box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-                lb = Gtk.Label(label=label_text, xalign=0)
+                lb = Gtk.Label(label=_t(src), xalign=0)
                 lb.get_style_context().add_class("fr-label")
+                lb.set_mnemonic_widget(widget)
+                self._said.append((lb, src))
+                try:
+                    widget.get_accessible().set_name(lb.get_text())
+                except Exception:
+                    pass
                 box.pack_start(lb, False, False, 0)
                 box.pack_start(widget, False, False, 0)
                 return box
 
             self.e_user = Gtk.Entry()
             self.e_user.get_style_context().add_class("fr-entry")
-            grid.pack_start(field(_t("NAME"), self.e_user),
+            # WHICH name, and what it is for. "NAME" sits directly above
+            # "COMPUTER NAME" with nothing to tell the two questions apart, and
+            # leaving it empty is not an error here -- it just leaves the
+            # sign-in screen greeting "root" every morning, on a screen that
+            # never runs again and that nothing else in the OS can re-ask.
+            # These are the installer's own words for the same field, and as a
+            # placeholder they show exactly when the field is empty, which is
+            # the case they are about. Not a line UNDER the field, which is
+            # what installer.py can afford: this form already measures 737px in
+            # ja/zh/ko against a 740px panel, and a second line would be 20 of
+            # them.
+            self.e_user.set_placeholder_text(_t("Shown on the sign-in screen"))
+            self._said.append((self.e_user, "Shown on the sign-in screen"))
+            # The only limit, and it is visible while typing: what the machine
+            # keeps used to be silently cut to 40 characters at write time.
+            # 120 is what de/login.py reads back.
+            self.e_user.set_max_length(120)
+            grid.pack_start(field("NAME", self.e_user),
                             False, False, 0)
 
             self.e_name = Gtk.Entry()
             self.e_name.set_text("notebook")
             self.e_name.get_style_context().add_class("fr-entry")
-            grid.pack_start(field(_t("COMPUTER NAME"),
+            grid.pack_start(field("COMPUTER NAME",
                                   self.e_name), False, False, 0)
 
             self.c_lang = Gtk.ComboBoxText()
@@ -488,7 +642,16 @@ def main():
                 if code == nbi18n.current_lang():
                     cur_lang = i
             self.c_lang.set_active(cur_lang)
-            grid.pack_start(field(_t("LANGUAGE"), self.c_lang), False, False, 0)
+            # What the screen is SPEAKING is whatever the drop-down ended up
+            # showing, not what the file said: a language the list does not
+            # carry lands the combo on its first row, and the two must not
+            # disagree or _on_lang's "nothing changed" guard reads the wrong
+            # one.
+            self._lang = self._langs[cur_lang][0]
+            # Connected AFTER set_active, exactly as the keyboard below is, so
+            # building the form does not count as choosing a language.
+            self.c_lang.connect("changed", self._on_lang)
+            grid.pack_start(field("LANGUAGE", self.c_lang), False, False, 0)
 
             self.c_kbd = Gtk.ComboBoxText()
             self._kbds = list(nbi18n.KEYBOARDS)
@@ -498,22 +661,24 @@ def main():
                 if code == nbi18n.keyboard():
                     cur_kbd = i
             self.c_kbd.set_active(cur_kbd)
+            self._kbd_active = cur_kbd
+            self._kbd_changing = False
             # Connected AFTER set_active, so choosing the layout the machine is
             # already using does not fire and wipe the fields below.
             self.c_kbd.connect("changed", self._on_kbd)
-            grid.pack_start(field(_t("KEYBOARD"), self.c_kbd), False, False, 0)
+            grid.pack_start(field("KEYBOARD", self.c_kbd), False, False, 0)
 
             self.e_pw = Gtk.Entry()
             self.e_pw.set_visibility(False)
             self.e_pw.get_style_context().add_class("fr-entry")
             self.e_pw.set_activates_default(True)
-            grid.pack_start(field(_t("PASSWORD"), self.e_pw), False, False, 0)
+            grid.pack_start(field("PASSWORD", self.e_pw), False, False, 0)
 
             self.e_pw2 = Gtk.Entry()
             self.e_pw2.set_visibility(False)
             self.e_pw2.get_style_context().add_class("fr-entry")
             self.e_pw2.set_activates_default(True)
-            grid.pack_start(field(_t("PASSWORD AGAIN"), self.e_pw2),
+            grid.pack_start(field("PASSWORD AGAIN", self.e_pw2),
                             False, False, 0)
 
             # Read back what is being typed. It matters more here than anywhere
@@ -523,17 +688,24 @@ def main():
             # thinks they chose is invisible behind dots. There is no way back
             # into this machine afterwards.
             self.cb_show = Gtk.CheckButton(label=_t("Show password"))
-            self.cb_show.connect("toggled", self._on_show)
+            # The id is kept because _on_none turns this tick off, and a
+            # set_active fires "toggled" like a click does.
+            self._show_h = self.cb_show.connect("toggled", self._on_show)
+            self._said.append((self.cb_show, "Show password"))
             grid.pack_start(self.cb_show, False, False, 0)
 
             self.cb_none = Gtk.CheckButton(
                 label=_t("Start straight into the desktop without a password"))
             self.cb_none.connect("toggled", self._on_none)
+            self._said.append(
+                (self.cb_none,
+                 "Start straight into the desktop without a password"))
             grid.pack_start(self.cb_none, False, False, 0)
 
             note = Gtk.Label(
                 label=_t("This password cannot be recovered."), xalign=0)
             note.get_style_context().add_class("fr-note")
+            self._said.append((note, "This password cannot be recovered."))
             note.set_line_wrap(True)
             note.set_max_width_chars(48)
             grid.pack_start(note, False, False, 0)
@@ -546,6 +718,7 @@ def main():
 
             go = Gtk.Button(label=_t("Finish"))
             go.get_style_context().add_class("fr-go")
+            self._said.append((go, "Finish"))
             go.set_halign(Gtk.Align.CENTER)
             go.connect("clicked", self._finish)
             go.set_can_default(True)
@@ -573,9 +746,15 @@ def main():
             # budget, so the one screen a machine cannot be used without had to
             # be scrolled in three languages. Trimming the outer margin is the
             # least invasive 24px available: it touches no type, no field
-            # spacing and no rhythm between the rows, and it leaves ja/zh/ko at
-            # 734 with room to spare rather than exactly on the line, where one
-            # longer translation would put them back over.
+            # spacing and no rhythm between the rows, and it leaves ja/zh/ko
+            # with room rather than exactly on the line, where one longer
+            # translation would put them back over.
+            # Measured again after the NAME placeholder went in: ja/zh/ko come
+            # to 737 (the placeholder makes that one entry 3px taller, because
+            # its CJK line box is taller than a Latin one), en/de/ru to 683,
+            # against the 740 panel. Still fits with the button whole; the
+            # scroller below is what carries anything a future translation
+            # adds.
             outer.set_margin_top(12)
             outer.set_margin_bottom(12)
             # `page` is a FULL-WIDTH painted box that the centred form sits in,
@@ -600,11 +779,117 @@ def main():
             self.set_default(go)
             self.e_user.grab_focus()
 
+        def _say(self, src=None, parts=(), problem=True, about=""):
+            """Put one line on this screen's single message row, or take it
+            down.
+
+            The ENGLISH source is kept as well as the finished sentence,
+            because the language can change while the screen is open (see
+            _on_lang) and the line has to change with it. `problem` picks the
+            ink -- a complaint is red, something that merely happened is a
+            note in the quiet grey -- since this one row now carries both.
+            `about` says what the line concerns, so a line about a password
+            can be taken down when there is not going to be one.
+
+            The literal stays at the CALL SITE and is translated here, which
+            is also what keeps these sentences visible to the text gates: a
+            message parked in a module constant is a string no scanner
+            following _t() can see.
+            """
+            self._line = (src, tuple(parts), problem, about) if src else None
+            with _InLang(self._lang):
+                text = _t(src) if src else ""
+                if text and parts:
+                    text = text % ", ".join(_t(p) for p in parts)
+            ctx = self.err.get_style_context()
+            ctx.remove_class("fr-note" if problem else "fr-err")
+            ctx.add_class("fr-err" if problem else "fr-note")
+            self.err.set_text(text)
+
+        def _render_line(self):
+            """Whatever the line says, said again in the language now chosen."""
+            if self._line:
+                self._say(*self._line)
+
+        def _on_lang(self, combo):
+            """Say the whole screen again in the language just chosen.
+
+            THIS SCREEN HAS TO ANSWER. The keyboard drop-down below applies to
+            the running server the moment it is picked; the language one
+            changed nothing anybody could see -- on the one screen built for
+            somebody handed a machine set up by a shop or a school, who may not
+            read the language it was installed in. They chose their own, got no
+            answer at all, and then had to finish setup, every caption and
+            every error message included, in a language they could not read.
+
+            Only the words change. Nothing typed is touched, and the keyboard
+            is left exactly where the owner put it: following the language with
+            its default layout would move a choice they may have just made by
+            hand and would clear the password fields with it. The answer is
+            still WRITTEN at Finish, by write_locale, which is what the rest of
+            the desktop reads.
+            """
+            i = combo.get_active()
+            if not (0 <= i < len(self._langs)):
+                return
+            # By INDEX, never get_active_text(): the visible text is the
+            # translated language name, not the code it was built from.
+            code = self._langs[i][0]
+            if code == self._lang:
+                return
+            self._lang = code
+            self._redraw()
+
+        def _redraw(self):
+            """Every string this screen shows, said again in self._lang."""
+            with _InLang(self._lang):
+                for w, source in self._said:
+                    text = _t(source)
+                    if isinstance(w, Gtk.Entry):
+                        w.set_placeholder_text(text)
+                    elif isinstance(w, Gtk.Button):
+                        w.set_label(text)
+                    else:
+                        w.set_text(text)
+            self._render_line()
+            # Yiddish reads the other way, and one call mirrors packing,
+            # alignment and widget order for the whole process -- the same
+            # thing nbapp.apply_direction() does at import for an app that
+            # STARTS in a right-to-left language.
+            Gtk.Widget.set_default_direction(
+                Gtk.TextDirection.RTL if self._lang in nbi18n.RTL
+                else Gtk.TextDirection.LTR)
+
         def _on_none(self, cb):
+            """Ticking this is how a machine ends up with no password at all,
+            so it has to LOOK like it happened.
+
+            The two fields go insensitive -- and the .fr-entry:disabled rule
+            above is what makes that visible, since the rule beside it used to
+            repaint them alive again. They are also EMPTIED, because _finish()
+            throws their contents away and locks the account: a password left
+            standing in a dead field says the machine will have one when it
+            will not. Show password goes off with them; there is nothing left
+            to show.
+            """
             on = cb.get_active()
             self.e_pw.set_sensitive(not on)
             self.e_pw2.set_sensitive(not on)
             self.cb_show.set_sensitive(not on)
+            if not on:
+                return
+            self.e_pw.set_text("")
+            self.e_pw2.set_text("")
+            if self.cb_show.get_active():
+                # set_active fires "toggled" exactly as a click does, so the
+                # handler is blocked and its one job done here instead.
+                self.cb_show.handler_block(self._show_h)
+                self.cb_show.set_active(False)
+                self.cb_show.handler_unblock(self._show_h)
+                self.e_pw.set_visibility(False)
+                self.e_pw2.set_visibility(False)
+            if self._line and self._line[3] == "password":
+                self._say()          # it was about a password nobody will have
 
         def _on_show(self, cb):
             vis = cb.get_active()
@@ -630,6 +915,8 @@ def main():
             the old layout and is no longer what the person meant.
             """
             i = combo.get_active()
+            if self._kbd_changing:
+                return
             if not (0 <= i < len(self._kbds)):
                 return
             # By INDEX, never get_active_text(): nbi18n translates what a
@@ -640,29 +927,51 @@ def main():
                 # nbi18n owns the argv: "ru,us" needs grp:alt_shift_toggle or
                 # the Latin half is unreachable and a password with a digit or
                 # a Latin letter in it cannot be typed at all.
-                subprocess.run(nbi18n.xkb_args(code), capture_output=True,
-                               timeout=10)
+                result = subprocess.run(nbi18n.xkb_args(code),
+                                        capture_output=True, timeout=10)
+                if result.returncode != 0:
+                    raise RuntimeError("setxkbmap failed")
             except Exception:
-                pass
-            self.e_pw.set_text("")
-            self.e_pw2.set_text("")
+                self._kbd_changing = True
+                combo.set_active(self._kbd_active)
+                self._kbd_changing = False
+                self._say("This could not be saved: %s. Try again.",
+                          ("Keyboard",))
+                return
+            self._kbd_active = i
+            # AND SAY THAT THE PASSWORD WENT WITH IT. The clearing is right
+            # (see above) and it used to happen in silence: the fields simply
+            # emptied, with no message, no highlight and nothing where the
+            # message line is, and the next thing the owner met was "Choose a
+            # password", which names the wrong problem. Said only when
+            # something was actually cleared, so choosing a layout on an
+            # untouched form stays quiet.
+            if self.e_pw.get_text() or self.e_pw2.get_text():
+                self.e_pw.set_text("")
+                self.e_pw2.set_text("")
+                self._say("The keyboard changed, so the password was "
+                          "cleared. Type it again.",
+                          problem=False, about="password")
+            else:
+                self._say()
 
         def _finish(self, *_a):
             name = self.e_name.get_text().strip()
             if not valid_hostname(name):
-                self.err.set_text(_t("Use letters, digits and - for the name."))
+                self._say("Use letters, digits and - for the name.")
                 self.e_name.grab_focus()
                 return
             pw = ""
             if not self.cb_none.get_active():
                 pw = self.e_pw.get_text()
                 if not pw:
-                    self.err.set_text(_t("Choose a password, or tick the box "
-                                         "below to start without one."))
+                    self._say("Choose a password, or tick the box below "
+                              "to start without one.", about="password")
                     self.e_pw.grab_focus()
                     return
                 if pw != self.e_pw2.get_text():
-                    self.err.set_text(_t("The two passwords are different."))
+                    self._say("The two passwords are different.",
+                              about="password")
                     self.e_pw2.set_text("")
                     self.e_pw2.grab_focus()
                     return
@@ -676,9 +985,8 @@ def main():
                 # Say what did not stick and STAY on the screen: finishing on a
                 # half-written machine would hand somebody a computer whose
                 # password is not the one they just chose.
-                self.err.set_text(
-                    _t("This could not be saved: %s. Try again.")
-                    % ", ".join(_t(PART_NAMES.get(f, f)) for f in failed))
+                self._say("This could not be saved: %s. Try again.",
+                          [PART_NAMES.get(f, f) for f in failed])
                 return
             Gtk.main_quit()
 

@@ -121,17 +121,21 @@ class _Group(Gtk.Box):
             pane = self.ws.panes.get(pid)
             if pane is None:
                 continue
-            btn = Gtk.Button()
+            # Keep the tab action and its close action as siblings.  Nesting a
+            # GtkButton inside another GtkButton lets one click activate both
+            # controls (and GTK does not support nested interactive buttons).
+            row = Gtk.Box(spacing=0)
+            btn = Gtk.Button(label=pane.title)
             btn.set_relief(Gtk.ReliefStyle.NONE)
             ctx = btn.get_style_context()
             ctx.add_class("wstab")
             if pid == self.current:
                 ctx.add_class("on")
-            row = Gtk.Box(spacing=6)
-            lab = Gtk.Label(label=pane.title)
+            lab = btn.get_child()
             lab.set_ellipsize(Pango.EllipsizeMode.END)
             lab.set_max_width_chars(16)
-            row.pack_start(lab, False, False, 0)
+            btn.connect("clicked", lambda _b, p=pid: self.show_pane(p))
+            row.pack_start(btn, False, False, 0)
             if pane.closable:
                 x = Gtk.Button(label="×")
                 x.set_relief(Gtk.ReliefStyle.NONE)
@@ -139,9 +143,7 @@ class _Group(Gtk.Box):
                 x.set_tooltip_text("Close this pane")
                 x.connect("clicked", lambda _b, p=pid: self.ws.close(p))
                 row.pack_start(x, False, False, 0)
-            btn.add(row)
-            btn.connect("clicked", lambda _b, p=pid: self.show_pane(p))
-            self.tabs.pack_start(btn, False, False, 0)
+            self.tabs.pack_start(row, False, False, 0)
         self.tabs.show_all()
 
 

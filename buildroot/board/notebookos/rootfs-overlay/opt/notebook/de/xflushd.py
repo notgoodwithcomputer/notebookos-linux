@@ -21,18 +21,31 @@ import gi
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk  # noqa: E402
 
-_accel = os.environ.get("NB_ACCEL")
-if _accel == "1" or (_accel is None and os.path.exists("/dev/dri/renderD128")):
-    raise SystemExit(0)
+def flush_loop(display, pause=time.sleep):
+    """Flush until the X connection is lost; False means it went away."""
+    while True:
+        try:
+            display.flush()
+            display.sync()
+        except Exception:
+            # The daemon belongs to this X session. Retrying a dead connection
+            # forever leaves a wakeup loop behind each desktop restart.
+            return False
+        pause(0.5)
 
-d = Gdk.Display.get_default()
-if d is None:
-    raise SystemExit(0)
 
-while True:
-    try:
-        d.flush()
-        d.sync()
-    except Exception:
-        pass
-    time.sleep(0.5)
+def main():
+    accel = os.environ.get("NB_ACCEL")
+    # Normally an accelerated session must not pay for a blocking sync twice
+    # per second. The exception is session.sh's compositor-failure fallback.
+    if accel == "1" and os.environ.get("NB_XFLUSHD_FORCE") != "1":
+        return 0
+    display = Gdk.Display.get_default()
+    if display is None:
+        return 0
+    flush_loop(display)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

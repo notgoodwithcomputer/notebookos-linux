@@ -104,7 +104,7 @@ CSS = b"""
 .animation-dock, .animation-side { background: #FCFBF8; }
 .animation-mat { background: #DED4C2; }
 .animation-group { color: #6E695E; }
-.animation-muted { color: #9A9484; }
+.animation-muted { color: #6E695E; }
 .animation-row { border-bottom: 1px solid #C9C4B6; }
 .animation-row:checked, .animation-selected { background: #EAE3D2; }
 .animation-slot-tile { padding: 2px; }
@@ -1122,17 +1122,24 @@ def ffmpeg_path():
     return shutil.which('ffmpeg')
 
 def export_png_frames(doc, frames, directory, cancel=None, progress=None):
-    os.makedirs(directory, exist_ok=True)
-    for i, (scene, frame) in enumerate(frames):
+    parent = os.path.dirname(os.path.abspath(directory)) or '.'
+    os.makedirs(parent, exist_ok=True)
+    stage = tempfile.mkdtemp(dir=parent, prefix='.frames-')
+    try:
+        for i, (scene, frame) in enumerate(frames):
+            if cancel and cancel.is_set():
+                raise InterruptedError()
+            target = os.path.join(stage, 'frame-%04d.png' % (i + 1))
+            composite(doc, scene, frame).write_to_png(target)
+            if progress:
+                progress((i + 1) / len(frames))
         if cancel and cancel.is_set():
-            break
-        fd, tmp = tempfile.mkstemp(dir=directory, prefix='.frame-',
-                                   suffix='.png')
-        os.close(fd)
-        composite(doc, scene, frame).write_to_png(tmp)
-        os.replace(tmp, os.path.join(directory, 'frame-%04d.png' % (i + 1)))
-        if progress:
-            progress((i + 1) / len(frames))
+            raise InterruptedError()
+        os.makedirs(directory, exist_ok=True)
+        for name in os.listdir(stage):
+            os.replace(os.path.join(stage, name), os.path.join(directory, name))
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
 def _rgb24(image):
     """The frame as raw RGB for the encoder's stdin.
@@ -1399,17 +1406,28 @@ class Animation(nbapp.AppWindow):
         """
         if not isinstance(session, dict):
             return
+
+        def saved_int(key):
+            # Recovery metadata is not allowed to make an otherwise healthy
+            # film unopenable.  A partial/hand edit can leave any one of these
+            # as prose, a container, or null; that field returns to its first
+            # valid position while the rest of the working place is restored.
+            try:
+                return int(session.get(key, 0) or 0)
+            except (TypeError, ValueError, OverflowError):
+                return 0
+
         scenes = self.doc.scenes
         self.scene_i = max(0, min(len(scenes) - 1,
-                                  int(session.get('scene', 0) or 0)))
+                                  saved_int('scene')))
         scene = scenes[self.scene_i]
         self.sheet = Sheet(self.doc, self.scene_i)
         self.playhead = max(0, min(scene['length'] - 1,
-                                   int(session.get('frame', 0) or 0)))
+                                   saved_int('frame')))
         self.layer_i = max(0, min(len(scene['layers']) - 1,
-                                  int(session.get('layer', 0) or 0)))
+                                  saved_int('layer')))
         self.view_origin = max(0, min(scene['length'] - 1,
-                                      int(session.get('origin', 0) or 0)))
+                                      saved_int('origin')))
         tool = session.get('tool')
         if any(tool == name for name, _label, _key in TOOLS):
             self.tool = self.previous_tool = tool
@@ -2518,7 +2536,10 @@ class Animation(nbapp.AppWindow):
             name.set_ellipsize(Pango.EllipsizeMode.END)
             box.pack_start(name, True, True, 2)
             if layer.get('mouth_slots'):
-                mouth = Gtk.Label(label='M')
+                # A glyph, not a word: the catalog's "M" is the Bold/italic
+                # toolbar letter, and it turns this badge into "Б" in Russian.
+                mouth = Gtk.Label()
+                nbi18n.set_verbatim(mouth, 'M')
                 mouth.set_tooltip_text(_t('Mouth Slots'))
                 box.pack_start(mouth, False, False, 2)
             row.add(box)
@@ -3699,7 +3720,11 @@ class Animation(nbapp.AppWindow):
                     badge.get_style_context().add_class('animation-slot-badge')
                     stack.add_overlay(badge)
                     tile.add(stack)
-                    tile.set_tooltip_text(cel.name)
+                    # The drawing's own name. set_tooltip_text is patched by
+                    # nbi18n and set_tooltip_markup is not, so the hover text
+                    # and the accessible name below it agree again.
+                    tile.set_tooltip_markup(
+                        GLib.markup_escape_text(str(cel.name or '')))
                     tile.get_accessible().set_name(cel.name)
 
                     # Framing the ink makes the mouths legible but drops
@@ -3709,7 +3734,7 @@ class Animation(nbapp.AppWindow):
                     def _tile_name(_w, _e=None, name=cel.name):
                         note_label = getattr(self, '_prompt_note', None)
                         if note_label is not None:
-                            note_label.set_text(name)
+                            nbi18n.set_verbatim(note_label, name)
                         return False
 
                     def _tile_unname(_w, _e=None):
@@ -5655,6 +5680,12 @@ class Animation(nbapp.AppWindow):
             self._doc_dirty = False
             self._save_error = None
             self.set_title(_t('Animation') + ' - ' + os.path.basename(self.doc_path))
+            self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))
+            # Persist the clean file identity too. A prior recovery autosave
+            # may still say doc_path=None/doc_dirty=True; without this flush a
+            # restart resurrects the just-saved film as an unbound draft.
+            self._dirty = True
+            self._autosave()
             return True
         except Exception as e:
             self._save_error = e
@@ -5680,6 +5711,9 @@ class Animation(nbapp.AppWindow):
         self._doc_dirty = False
         self._save_error = None
         self.set_title(_t('Animation') + ' - ' + os.path.basename(path))
+        self.save_chip.set_text(_t('Saved %s') % time.strftime('%H:%M'))
+        self._dirty = True
+        self._autosave()
         return True
 
     def _new(self, *_):

@@ -56,6 +56,21 @@ if [ -d "$_OV/root/Applications" ]; then
 fi
 unset _OV
 
+# BUNDLE THE CURRENT GOVORIMO (daemon + app) into this build, so every ISO ships
+# the latest version. Runs AFTER the deletion-prune above (so the synced app is
+# not pruned as "not in the overlay") and BEFORE the compileall below (so
+# govorimo.py gets a .pyc of the target's CPython, not the build host's). The
+# helper builds the static-musl daemon from the Govorimo repo and installs the
+# latest daemon + app + catalogs + gazetteer + launcher registration. It is
+# self-guarding: a missing source tree or Rust toolchain only warns, never fails
+# the OS build. Point it elsewhere with GOVORIMO_SRC.
+_REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+if [ -x "$_REPO/tools/sync-govorimo.sh" ]; then
+    "$_REPO/tools/sync-govorimo.sh" "$TARGET" || \
+        echo "post-build: govorimo sync reported a problem (build continues)" >&2
+fi
+unset _REPO
+
 # Always start from a clean __pycache__: the host-side DE selftests
 # (tools/construct_all_host.py) import these modules with the DEVELOPER's system
 # python, which writes .pyc files for ITS version into the overlay — and the

@@ -269,7 +269,7 @@ switch { background: #DED4C2; border: 1px solid @hair;
          border-radius: 100px;
          min-width: 38px; min-height: 22px; }
 switch:checked { background: @accent; border-color: #B12D19; }
-switch:disabled { background: #ECE8DE; }
+switch:disabled { background: #ECE8DE; border-color: @hairoff; }
 /* `padding: 0` IS THE SIZING FIX, and it is the non-obvious one.
    GtkSwitch does not take its size from the switch node — it measures its
    SLIDER and doubles it. So min-width/min-height on `switch` are only a floor,

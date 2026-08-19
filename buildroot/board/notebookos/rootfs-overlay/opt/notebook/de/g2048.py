@@ -11,6 +11,7 @@ coming back resumes the same game rather than discarding it.
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
+gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gtk, Gdk, GLib  # noqa: E402
 
 import json
@@ -26,6 +27,18 @@ from nbi18n import _t  # noqa: E402
 HOME = os.environ.get("NB_HOME", "/root")
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 STATE_FILE = os.path.join(CFG_DIR, "g2048.json")
+MAX_STATE_BYTES = 1024 * 1024
+
+
+def _load_state_json(path=None, limit=MAX_STATE_BYTES):
+    """Load the small game store without trusting a damaged file's size."""
+    if path is None:
+        path = STATE_FILE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("2048 state is too large")
+    return json.loads(data)
 
 # tile value -> (background, foreground)
 TILE_COLORS = {
@@ -83,6 +96,7 @@ class Game2048(nbapp.AppWindow):
         self._quarantine_unrecognized_store()
         self.best = self._load_best()
         self._save_timer = None
+        self._closed = False
         self.status = "play"
         # What each tile label is currently showing, as (text, style class).
         # _refresh compares against this and touches only the cells that
@@ -111,7 +125,7 @@ class Game2048(nbapp.AppWindow):
         title = Gtk.Label(label="2048", xalign=0)
         title.get_style_context().add_class("g-title")
         sub = Gtk.Label(xalign=0)
-        sub.set_markup('Merge equal tiles to reach <b>2048</b>.')
+        sub.set_markup(_t('Merge equal tiles to reach <b>2048</b>.'))
         sub.get_style_context().add_class("g-sub")
         sub.set_margin_top(12)
         titlecol.pack_start(title, False, False, 0)
@@ -120,8 +134,8 @@ class Game2048(nbapp.AppWindow):
 
         scores = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         scores.set_valign(Gtk.Align.END)
-        self.score_lbl = self._score_box("Score", scores)
-        self.best_lbl = self._score_box("Best", scores)
+        self.score_lbl = self._score_box(_t("Score"), scores)
+        self.best_lbl = self._score_box(_t("Best"), scores)
         header.pack_end(scores, False, False, 0)
         outer.pack_start(header, False, False, 0)
 
@@ -143,6 +157,9 @@ class Game2048(nbapp.AppWindow):
                 cell = Gtk.Box()
                 cell.get_style_context().add_class("cell")
                 lbl = Gtk.Label(label="")
+                lbl.get_accessible().set_name(
+                    _t("Row %d, column %d: %s") % (r + 1, c + 1,
+                                                    _t("Empty")))
                 lbl.set_hexpand(True)
                 lbl.set_vexpand(True)
                 lbl.get_style_context().add_class("tile")
@@ -186,6 +203,7 @@ class Game2048(nbapp.AppWindow):
         again.set_relief(Gtk.ReliefStyle.NONE)
         again.get_style_context().add_class("dark-btn")
         again.connect("clicked", lambda *_: self.new_game())
+        self.again_btn = again
         btnrow.pack_start(self.keep_btn, False, False, 0)
         btnrow.pack_start(again, False, False, 0)
         inner.pack_start(self.ov_text, False, False, 0)
@@ -262,7 +280,9 @@ class Game2048(nbapp.AppWindow):
         saved = self._load_saved_game()
         if saved:
             self.board, self.score = saved
-            self.status = "play"
+            # A crash can leave the last full board saved just before move()
+            # records the loss. Restore the truth before the first repaint.
+            self.status = "play" if self._can_move() else "lose"
             self._won_shown = any(v >= 2048 for row in self.board for v in row)
             self._refresh()
         else:
@@ -288,19 +308,18 @@ class Game2048(nbapp.AppWindow):
         (preserve_damaged) and are not this method's business — a first run is
         not damage."""
         try:
-            with open(STATE_FILE) as fh:
-                data = json.load(fh)
+            data = _load_state_json()
         except Exception:
             return
         if not isinstance(data, dict):
             nbapp.quarantine_unrecognized(STATE_FILE)
+            self._quarantine_pending = os.path.exists(STATE_FILE)
 
     def _load_best(self):
         """Return the stored best score, or 0 when the file is missing or
         malformed. Reading must never crash the launch."""
         try:
-            with open(STATE_FILE) as fh:
-                data = json.load(fh)
+            data = _load_state_json()
             known = {"best", "board", "score", "_extra"}
             self._extra = (dict(data.get("_extra"))
                            if isinstance(data.get("_extra"), dict) else {})
@@ -323,8 +342,7 @@ class Game2048(nbapp.AppWindow):
         clean 4x4 of powers of two is ignored, so a hand-edited or truncated
         file just starts a fresh game."""
         try:
-            with open(STATE_FILE) as fh:
-                data = json.load(fh)
+            data = _load_state_json()
             board = data.get("board")
             score = data.get("score")
             if not (isinstance(board, list) and len(board) == 4):
@@ -351,30 +369,47 @@ class Game2048(nbapp.AppWindow):
         JSON file. Never crash on I/O — a read-only or missing config dir just
         skips the save."""
         try:
+            if getattr(self, "_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(STATE_FILE)
+                if os.path.exists(STATE_FILE):
+                    raise OSError("could not preserve the unrecognized game store")
+                self._quarantine_pending = False
             state = dict(getattr(self, "_extra", {}) or {})
             state["best"] = self.best
-            # A finished game is not worth resuming into its own end banner.
-            if self.status == "play":
+            # A WIN is not finished: its banner explicitly offers Continue,
+            # and closing while deciding must not silently throw that board
+            # away. On reopen `_won_shown` suppresses the banner and play can
+            # continue. A loss alone has no legal next move and is omitted.
+            if self.status in ("play", "win"):
                 state["board"] = self.board
                 state["score"] = self.score
             state["_extra"] = getattr(self, "_extra", {})
             nbapp.atomic_write_json(STATE_FILE, state)
+            return True
         except Exception as exc:
             nbapp.note_save_failure(self, exc, STATE_FILE)
+            return False
 
     def _queue_save(self):
         """Persist shortly after a move. Debounced, so mashing the arrow keys
         costs one write a second rather than an fsync per keypress."""
+        if self._closed:
+            return
         if self._save_timer is not None:
             return
         self._save_timer = GLib.timeout_add(1200, self._flush_save)
 
     def _flush_save(self):
         self._save_timer = None
+        if self._closed:
+            return False
         self._save_best()
         return False
 
     def _on_destroy(self, *_):
+        if self._closed:
+            return False
+        self._closed = True
         if self._save_timer is not None:
             GLib.source_remove(self._save_timer)
             self._save_timer = None
@@ -412,9 +447,12 @@ class Game2048(nbapp.AppWindow):
 
     def new_game(self):
         self._finish_anim_now()      # a fresh board owes nothing to the old
+        previous = None
+        previous_undo = getattr(self, "_new_game_undo", None)
         if getattr(self, "board", None) and any(v for row in self.board for v in row):
-            self._new_game_undo = ([list(row) for row in self.board], self.score,
-                                   self.status, self._won_shown)
+            previous = ([list(row) for row in self.board], self.score,
+                        self.status, self._won_shown)
+            self._new_game_undo = previous
         self.board = [[0] * 4 for _ in range(4)]
         self.score = 0
         self.status = "play"
@@ -422,7 +460,10 @@ class Game2048(nbapp.AppWindow):
         self._add_random()
         self._add_random()
         self._refresh()
-        self._save_best()
+        if not self._save_best() and previous is not None:
+            self.board, self.score, self.status, self._won_shown = previous
+            self._new_game_undo = previous_undo
+            self._refresh()
 
     def undo_new_game(self):
         """Restore the game replaced by New Game, once, without a warning card."""
@@ -430,10 +471,16 @@ class Game2048(nbapp.AppWindow):
         if not saved:
             return False
         self._finish_anim_now()
+        current = ([list(row) for row in self.board], self.score,
+                   self.status, self._won_shown)
         self.board, self.score, self.status, self._won_shown = saved
         self._new_game_undo = None
         self._refresh()
-        self._save_best()
+        if not self._save_best():
+            self.board, self.score, self.status, self._won_shown = current
+            self._new_game_undo = saved
+            self._refresh()
+            return False
         return True
 
     @staticmethod
@@ -528,6 +575,14 @@ class Game2048(nbapp.AppWindow):
                     moved = True
                 self.board[r][c] = res[j]
         if not moved:
+            # A terminal board can legitimately be restored after a crash:
+            # the immediate high-score save happens before the move's final
+            # game-over check. Do not leave that board stuck in "play"
+            # forever just because the attempted move changed no cells.
+            if not self._can_move():
+                self.status = "lose"
+                self._refresh()
+                self._save_best()
             return
         spawn = self._add_random()
         self.score += gained
@@ -544,7 +599,7 @@ class Game2048(nbapp.AppWindow):
                 v == 2048 for row in self.board for v in row):
             self.status = "win"
             self._won_shown = True
-        if not self._can_move():
+        if self.status != "win" and not self._can_move():
             self.status = "lose"
         # Labels take the final state NOW, under the cover of the motion
         # overlay; when the journey lands, hiding the overlay reveals an
@@ -717,8 +772,13 @@ class Game2048(nbapp.AppWindow):
             # are greyed (never dead) behind the win / no-moves overlay.
             # "Continue Past 2048" mirrors the win banner's Keep Going button
             # and is live only on a win. Reset Best Score wipes the persisted
-            # record, so it always confirms — and is itself greyed when there
-            # is no record to clear.
+            # record and is greyed when there is no record to clear; it takes
+            # NO ellipsis, because it asks nothing — its confirm was replaced
+            # by the one-level "Undo Reset Best Score" below (per the
+            # Interaction Constitution: confirm only when the loss is
+            # irreversible AND unasked-for AND undo cannot cover it; prefer
+            # undo over confirmation). The label kept the ellipsis after that
+            # swap, promising a dialog the user never got.
             playing = self.status == "play"
             return [
                 ("New Game", self.new_game),
@@ -738,7 +798,7 @@ class Game2048(nbapp.AppWindow):
                 ("Continue Past 2048",
                  self._continue_play if self.status == "win" else None),
                 nbapp.SEP,
-                ("Reset Best Score…",
+                ("Reset Best Score",
                  self._reset_best if self.best > 0 else None),
                 (_t("Undo %s") % _t("Reset Best Score"), self.undo_reset_best
                  if getattr(self, "_best_undo", None) else None),
@@ -753,22 +813,38 @@ class Game2048(nbapp.AppWindow):
     def _do_reset_best(self):
         # Persist the cleared value too, or the old best would return on the
         # next launch and the reset would look like it did nothing.
-        self._best_undo = self.best
+        old_best = self.best
+        old_undo = getattr(self, "_best_undo", None)
+        self._best_undo = old_best
         self.best = 0
-        self._save_best()
+        if not self._save_best():
+            self.best = old_best
+            self._best_undo = old_undo
         self._refresh()
 
     def undo_reset_best(self):
         if not getattr(self, "_best_undo", None):
             return False
-        self.best, self._best_undo = self._best_undo, None
-        self._save_best()
+        restore = self._best_undo
+        old_best = self.best
+        self.best, self._best_undo = restore, None
+        if not self._save_best():
+            self.best, self._best_undo = old_best, restore
+            self._refresh()
+            return False
         self._refresh()
         return True
 
     def _confirm(self, title, message, ok_label, on_yes):
         """Modal confirmation for a destructive action. Runs `on_yes` only when
-        the primary button is pressed; crash-safe if the dialog can't build."""
+        the primary button is pressed; crash-safe if the dialog can't build.
+
+        NOT WIRED TO ANY MENU ITEM. Both of this app's destructive actions —
+        New Game over a live board, Reset Best Score — are one-level undoable
+        instead, which is the policy the OS asks for, so neither asks first.
+        Kept as this app's entry in the shared-confirm migration the
+        Interaction Constitution schedules (Article IV §3); do not read it as
+        evidence that a menu item confirms."""
         try:
             dlg = Gtk.Dialog(title=title, transient_for=self, modal=True)
             dlg.set_decorated(False)
@@ -817,6 +893,29 @@ class Game2048(nbapp.AppWindow):
             self.status = "play"
             self._refresh()
 
+    def _on_key(self, w, ev):
+        """Esc leaves the INNERMOST thing, then the app.
+
+        The base ladder (nbapp.AppWindow._on_key) knows two rungs, About and
+        the open dropdown, and quits when neither is up. The "2048 reached"
+        banner is a third: it is an overlay layer with pass-through off, it
+        takes the focus onto Continue, and move() refuses every arrow key
+        while it is showing — so Esc on it used to skip straight past a live
+        overlay and close the app mid-game. Dismissing it is exactly what its
+        own Continue button does, so nothing is decided for the player and a
+        second Esc leaves as usual (Interaction Constitution §4, "overlay ->
+        menu -> app"; §"Esc is never destructive").
+
+        The no-moves banner is deliberately left to the base ladder: it offers
+        only New Game, so there is nothing to continue to and Esc rightly
+        leaves the app."""
+        if (ev.keyval == Gdk.KEY_Escape
+                and getattr(self, "status", "play") == "win"
+                and not self._chrome_open()):
+            self._continue_play()
+            return True
+        return super()._on_key(w, ev)
+
     def _refresh(self):
         # Repaint only the cells that changed. _refresh runs on every keypress,
         # and setting a label's text or swapping its style class invalidates
@@ -843,6 +942,9 @@ class Game2048(nbapp.AppWindow):
                     if old.startswith("t-"):
                         ctx.remove_class(old)
                 lbl.set_text(want[0])
+                lbl.get_accessible().set_name(
+                    _t("Row %d, column %d: %s")
+                    % (r + 1, c + 1, want[0] or _t("Empty")))
                 if cls:
                     ctx.add_class(cls)
         score = "{:,}".format(self.score)
@@ -855,16 +957,25 @@ class Game2048(nbapp.AppWindow):
             self.best_lbl.set_text(best)
         if self.status == "play":
             self.ov_box.hide()
+            self._overlay_status = None
         elif self.status == "win":
             # the player's moment, phrased as one: "Target 2048 reached" read
             # like a status readout, and mirrors the goal line in the header
             self.ov_text.set_text(_t("2048 reached"))
+            self.ov_box.get_accessible().set_name(_t("2048 reached"))
             self.keep_btn.show()   # offer to keep playing past 2048
             self.ov_box.show()
+            if getattr(self, "_overlay_status", None) != "win":
+                self.keep_btn.grab_focus()
+            self._overlay_status = "win"
         else:
             self.ov_text.set_text(_t("No moves left"))
+            self.ov_box.get_accessible().set_name(_t("No moves left"))
             self.keep_btn.hide()   # nothing left to continue
             self.ov_box.show()
+            if getattr(self, "_overlay_status", None) != "lose":
+                self.again_btn.grab_focus()
+            self._overlay_status = "lose"
 
     _KEYMAP = {
         Gdk.KEY_Left: "left", Gdk.KEY_Right: "right",
@@ -875,11 +986,30 @@ class Game2048(nbapp.AppWindow):
         Gdk.KEY_W: "up", Gdk.KEY_S: "down",
     }
 
+    def _chrome_open(self):
+        """True while the base window's own chrome owns the keyboard: an open
+        dropdown, or the About card.
+
+        The About card's live handle is `_about_close` — the attribute nbapp
+        sets when it presents the card and clears from present_card's on_close,
+        and the same one nbapp's own Esc ladder consults. The guard here used
+        to read `_about_layer`, a name nothing in the tree ever assigns, so it
+        was always falsy: arrow keys slid tiles and spawned new ones behind an
+        open About while the player was reading it. One predicate now, so the
+        two places that ask the question cannot drift apart again."""
+        return (self._menu_open is not None
+                or getattr(self, "_about_close", None) is not None)
+
     def _on_game_key(self, _w, ev):
         # While a dropdown menu or the About card is open, let the base window
         # own the keyboard (Esc closes the overlay) instead of sliding tiles
         # invisibly behind the popup.
-        if self._menu_open is not None or getattr(self, "_about_layer", None):
+        if self._chrome_open():
+            return False
+        blocked = (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD1_MASK |
+                   Gdk.ModifierType.SUPER_MASK | Gdk.ModifierType.HYPER_MASK |
+                   Gdk.ModifierType.META_MASK)
+        if ev.state & blocked:
             return False
         direction = self._KEYMAP.get(ev.keyval)
         if direction:
@@ -902,13 +1032,13 @@ class Game2048(nbapp.AppWindow):
         .gameroot * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .g-title { font-size: 60px; font-weight: 700; color: #1A1916;
                    letter-spacing: -2px; }
-        .g-sub { font-size: 14px; color: #6E695E; }
-        .g-hint { font-size: 13px; color: #6E695E; }
+        .g-sub { font-size: 14px; color: #3A362E; }
+        .g-hint { font-size: 13px; color: #3A362E; }
         .scorebox { background: #BCAE93; border-radius: 4px;
                     padding: 9px 18px; min-width: 88px; }
-        .score-cap { font-size: 11px; letter-spacing: 1px; color: #EFEBE0;
+        .score-cap { font-size: 11px; letter-spacing: 1px; color: #3A362E;
                      font-weight: 700; }
-        .score-val { font-size: 24px; font-weight: 700; color: #FCFBF8; }
+        .score-val { font-size: 24px; font-weight: 700; color: #1A1916; }
         .boardbg { background: %(board_bg)s; border-radius: 4px; padding: 14px; }
         .cell { background: %(cell_bg)s; border-radius: 4px; }
         .tile { border-radius: 4px; font-weight: 700;

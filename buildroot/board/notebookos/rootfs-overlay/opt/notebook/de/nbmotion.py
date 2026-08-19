@@ -217,7 +217,7 @@ def reduced_motion():
             with open(_store_path()) as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
-                value = bool(data.get("reduced_motion", False))
+                value = data.get("reduced_motion") is True
         except Exception:                                         # noqa: BLE001
             pass
         _REDUCED = value
@@ -512,6 +512,10 @@ class Scalar:
         now = self.clock() if now is None else now
         done = self._track.done_at(now)
         self._set(self._track.value_at(now))
+        if not self._running:
+            # _set contains a bad on_frame callback by stopping this scalar.
+            # Report that post-callback state to manual drivers immediately.
+            return False
         if self._trace is not None:
             self._trace.append(float(now))
             if done:
@@ -596,7 +600,8 @@ class _Driver:
             self.anims.remove(scalar)
         if not self.anims:
             self._stop_tick()
-            _drop_driver(self.widget)
+            self._disconnect_handlers()
+            _drop_driver(self.widget, self)
 
     # ---- the frame clock ----
     def _ensure_tick(self):
@@ -648,7 +653,8 @@ class _Driver:
             self._in_tick = False
         if not self.anims:
             self._tick = None        # returning False removes it; do not re-remove
-            _drop_driver(self.widget)
+            self._disconnect_handlers()
+            _drop_driver(self.widget, self)
             return False             # GLib.SOURCE_REMOVE
         return True                  # GLib.SOURCE_CONTINUE
 
@@ -677,7 +683,10 @@ class _Driver:
             else:
                 scalar._running = False
                 scalar._finish_pending(False)
-        _drop_driver(self.widget)
+        _drop_driver(self.widget, self)
+        self._disconnect_handlers()
+
+    def _disconnect_handlers(self):
         for hid in self._handlers:
             try:
                 self.widget.disconnect(hid)
@@ -703,8 +712,10 @@ def _driver_for(widget):
     return d
 
 
-def _drop_driver(widget):
-    _DRIVERS.pop(id(widget), None)
+def _drop_driver(widget, driver=None):
+    key = id(widget)
+    if driver is None or _DRIVERS.get(key) is driver:
+        _DRIVERS.pop(key, None)
 
 
 def live_drivers():

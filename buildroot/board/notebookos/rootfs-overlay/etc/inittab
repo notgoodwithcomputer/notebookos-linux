@@ -7,6 +7,15 @@
 ::sysinit:/bin/mount -o remount,rw /
 ::sysinit:/bin/mkdir -p /dev/pts /dev/shm
 ::sysinit:/bin/mount -a
+# securityfs, after `mount -a` has put sysfs under /sys. The kernel is locked
+# down from its own configuration whether or not this is mounted — enforcement
+# is in the LSM, not in the file — but /sys/kernel/security/lockdown is the
+# only way to ASK a running machine what state it is in, and a hardening
+# campaign that cannot be checked on the machine it hardened is a claim rather
+# than a measurement (docs/APP-TRUST.md L0). Reads `none [integrity]
+# confidentiality`; the file can only ever be written to raise the level.
+::sysinit:/bin/mkdir -p /sys/kernel/security
+::sysinit:/bin/mount -t securityfs none /sys/kernel/security
 ::sysinit:/bin/mkdir -p /run/lock/subsys
 ::sysinit:/sbin/swapon -a
 null::sysinit:/bin/ln -sf /proc/self/fd /dev/fd

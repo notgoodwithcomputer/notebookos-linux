@@ -28,6 +28,13 @@ import nbicons
 import nbapp
 import nbmotion
 import finder
+from nbi18n import _t
+
+
+def _visible_leaf(name):
+    """A single non-hidden name the picker can show again after creating it."""
+    return bool(name) and not name.startswith(".") \
+        and os.sep not in name and not (os.altsep and os.altsep in name)
 
 LIST_ICON_PX = 20
 GRID_ICON_PX = 84
@@ -469,13 +476,22 @@ class _Picker:
         self._populate()
 
     def _new_folder(self):
+        if not self._save_dir_safe():
+            self.warn.set_text(_t("That name cannot be used"))
+            return
         name = self._ask_folder_name()
         if not name:
             return
         # keep the typed name to a single path component; reject separators so a
         # slip like "a/b" can't quietly create a nested tree or escape self.cur.
-        name = os.path.basename(name.strip().strip("/"))
-        if not name or name in (".", ".."):
+        name = name.strip()
+        if os.sep in name or (os.altsep and os.altsep in name):
+            self.warn.set_text(_t("A name cannot contain a slash"))
+            return
+        if not name:
+            return
+        if not _visible_leaf(name):
+            self.warn.set_text(_t("That name cannot be used"))
             return
         path = os.path.join(self.cur, name)
         if os.path.exists(path):
@@ -494,6 +510,7 @@ class _Picker:
         """Small undecorated modal prompt (same chrome as the picker). Returns the
         typed name or None if cancelled/empty."""
         dlg = Gtk.Dialog(transient_for=self.dlg, modal=True)
+        nbapp.force_opaque_visual(dlg)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("finder")
         dlg.get_style_context().add_class("nbpicker")
@@ -612,26 +629,72 @@ class _Picker:
         self._finish(os.path.join(self.cur, name))
 
     def _commit_save(self):
-        name = os.path.basename(self.name_entry.get_text().strip())
+        name = self.name_entry.get_text().strip()
         if not name:
             self.name_entry.grab_focus()
             return
-        if self.default_ext and not os.path.splitext(name)[1]:
-            name += self.default_ext
+        if os.sep in name or (os.altsep and os.altsep in name):
+            self.warn.set_text(_t("A name cannot contain a slash"))
+            self.name_entry.grab_focus()
+            return
+        if self.default_ext:
+            _root, ext = os.path.splitext(name)
+            if ext in ("", "."):
+                name = name.rstrip(".") + self.default_ext
+        if not _visible_leaf(name):
+            # Open/listing deliberately hides dotfiles and this picker offers
+            # no Show Hidden mode. Never report a successful save to a name the
+            # same app cannot subsequently display or reopen.
+            self.warn.set_text(_t("That name cannot be used"))
+            self.name_entry.grab_focus()
+            return
+        if not self._save_dir_safe():
+            # Breadcrumbs describe the lexical Home path. A symlinked parent
+            # must not make that promise while redirecting the caller's write
+            # somewhere outside Home (the process runs as root on-device).
+            self.warn.set_text(_t("That name cannot be used"))
+            self.name_entry.grab_focus()
+            return
         path = os.path.join(self.cur, name)
+        if os.path.islink(path):
+            # Never hand a Save caller a symlink pathname. Ordinary writers
+            # follow it, which can create/replace a target outside the folder
+            # this picker shows—especially when the link is dangling and
+            # exists() would otherwise say the name is free.
+            self.warn.set_text(_t("That name cannot be used"))
+            self.name_entry.grab_focus()
+            return
         if os.path.isdir(path):
             # Not a replaceable file at all — saving onto a folder cannot work,
             # and offering to "replace" one would be a promise we can't keep.
             self.warn.set_text('A folder here is already called “%s”' % name)
             self.name_entry.grab_focus()
             return
-        if os.path.exists(path) and not self._confirm_replace(name):
+        if os.path.lexists(path) and not self._confirm_replace(name):
             # Declined: change nothing, leave the name in the box so the user
             # can edit it into a new one.
             self.warn.set_text("")
             self.name_entry.grab_focus()
             return
         self._finish(path)
+
+    def _save_dir_safe(self):
+        """Whether a displayed Home directory still resolves inside Home.
+
+        Explicit external start directories remain usable (USB export is a
+        supported workflow); this closes only the deceptive Home breadcrumb
+        case where a parent symlink escapes the place being shown.
+        """
+        home = os.path.normpath(finder.HOME)
+        cur = os.path.normpath(self.cur)
+        if cur != home and not cur.startswith(home + os.sep):
+            return True
+        try:
+            return os.path.commonpath((os.path.realpath(home),
+                                       os.path.realpath(cur))) == \
+                   os.path.realpath(home)
+        except (OSError, ValueError):
+            return False
 
     def _confirm_replace(self, name):
         """Ask, in so many words, before an existing file is overwritten.
@@ -647,6 +710,7 @@ class _Picker:
 
         Returns True only if the user explicitly chose Replace."""
         dlg = Gtk.Dialog(transient_for=self.dlg, modal=True)
+        nbapp.force_opaque_visual(dlg)
         dlg.set_decorated(False)
         dlg.get_style_context().add_class("finder")
         dlg.get_style_context().add_class("nbpicker")

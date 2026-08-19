@@ -18,6 +18,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,8 @@ import nbapp
 import nbpicker
 import nbicons
 import nbgame
+import nbjobs
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -49,7 +52,58 @@ ROM_EXT = {
 }
 # ROMs are also accepted zipped (vbam reads .zip directly).
 ARCHIVE_EXT = {".zip"}
+# The library grid is built from one tile size, so the same games make the
+# same grid in every language. 200px puts four cartridges on the 1024px panel
+# (4x200 + 3x16 of column spacing + 2x24 of flow padding = 896), and the row
+# only re-flows when the window itself changes -- not when a translation is
+# longer than the English it replaced.
+CARD_WIDTH = 200
 MAX_ROMS = 600
+MAX_LIBRARY_ROM_BYTES = 64 * 1024 * 1024
+MAX_EMULATOR_LOG_VIEW = 1024 * 1024
+GAME_DATA_DIR = os.path.join(HOME, ".local", "share", "notebook", "gbaemu")
+IDENTITY_CACHE = os.path.join(GAME_DATA_DIR, "rom-identities.json")
+
+
+def _read_log_tail(path, limit=MAX_EMULATOR_LOG_VIEW):
+    """Read only the useful recent end of an emulator-owned diagnostic log."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - limit), os.SEEK_SET)
+        return fh.read(limit).decode("utf-8", "replace").strip()
+_identity_cache = None
+
+
+def _saved_text(stamp):
+    """When a slot was last written, phrased the way the rest of the OS phrases
+    dates ("15 Aug 2026, 14:05" -- finder.py uses the same call), so nbi18n's
+    date rule can translate the month and reorder it per language. The
+    "%Y-%m-%d %H:%M" stamp this replaced was a machine's way of writing a date
+    and, being all digits, unreachable by that rule in all 17 languages."""
+    if stamp is None:
+        return _t("Not saved")
+    return _t(time.strftime("%d %b %Y, %H:%M", time.localtime(stamp)))
+
+
+def _fit_caption(label):
+    """Keep a card's caption inside the tile: wrap onto a second line rather
+    than push the column wider. Ellipsis is wrong here -- both captions end in
+    the part that matters (which F-key, which date) -- and a wrapped card is
+    only taller, which the homogeneous grid absorbs for the whole row."""
+    label.set_line_wrap(True)
+    label.set_max_width_chars(30)
+    label.set_justify(Gtk.Justification.CENTER)
+
+
+def _same_game_key(path):
+    """game_key(path), or None for a row whose file cannot be read now. Used
+    to find the OTHER cards backed by one record, where a raising sibling must
+    not stop the card the person actually clicked from being restated."""
+    try:
+        return game_key(path)
+    except (OSError, ValueError):
+        return None
 
 
 def _is_rom(path):
@@ -57,16 +111,115 @@ def _is_rom(path):
 
 
 def game_key(path):
-    """Stable per-game metadata key (the same file reached by one path)."""
-    return os.path.realpath(os.path.abspath(path))
+    """Stable per-game key based on cartridge bytes, not its current name."""
+    global _identity_cache
+    real = os.path.realpath(os.path.abspath(path))
+    try:
+        st = os.stat(real)
+        token = [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+    except OSError:
+        # Missing library rows are never launched; retain a deterministic key
+        # so rendering their stale metadata still cannot raise.
+        return "path:" + real
+    if _identity_cache is None:
+        try:
+            with open(IDENTITY_CACHE, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            _identity_cache = raw if isinstance(raw, dict) else {}
+        except Exception:
+            _identity_cache = {}
+    rec = _identity_cache.get(real)
+    if isinstance(rec, dict) and rec.get("stat") == token:
+        digest = rec.get("sha256")
+        if isinstance(digest, str) and len(digest) == 64:
+            return "sha256:" + digest
+    # A rename on the same filesystem keeps device/inode. Reuse that cached
+    # digest without rereading a large cartridge, then remember its new path.
+    digest = None
+    for old in _identity_cache.values():
+        if isinstance(old, dict) and old.get("stat") == token:
+            candidate = old.get("sha256")
+            if isinstance(candidate, str) and len(candidate) == 64:
+                digest = candidate
+                break
+    if digest is None:
+        h = hashlib.sha256()
+        with open(real, "rb") as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+        digest = h.hexdigest()
+    _identity_cache[real] = {"stat": token, "sha256": digest}
+    try:
+        os.makedirs(GAME_DATA_DIR, exist_ok=True)
+        nbapp.atomic_write_json(IDENTITY_CACHE, _identity_cache)
+    except Exception:
+        pass
+    return "sha256:" + digest
 
 
 def state_path(path, slot):
-    """State name used by SDL.cpp:sdlStateName for a writable ROM folder."""
+    """State name used by SDL.cpp:sdlStateName in durable user storage."""
     if slot not in STATE_SLOTS:
         raise ValueError("save-state slot must be 1, 2, or 3")
-    return os.path.join(os.path.dirname(path),
+    return os.path.join(game_storage_dir(path),
                         os.path.basename(path) + str(slot) + ".sgm")
+
+
+def game_storage_dir(path):
+    identity = game_key(path).encode("utf-8", errors="surrogateescape")
+    return os.path.join(GAME_DATA_DIR, hashlib.sha256(identity).hexdigest()[:20])
+
+
+def _legacy_storage_dir(path):
+    identity = os.path.realpath(os.path.abspath(path)).encode(
+        "utf-8", errors="surrogateescape")
+    return os.path.join(GAME_DATA_DIR, hashlib.sha256(identity).hexdigest()[:20])
+
+
+def prepare_game_storage(path):
+    """Create writable save/battery storage and preserve legacy sidecars."""
+    dest = game_storage_dir(path)
+    os.makedirs(dest, exist_ok=True)
+    old_dest = _legacy_storage_dir(path)
+    if old_dest != dest and os.path.isdir(old_dest):
+        for name in os.listdir(old_dest):
+            old = os.path.join(old_dest, name)
+            new = os.path.join(dest, name)
+            if os.path.isfile(old) and not os.path.exists(new):
+                try:
+                    shutil.copy2(old, new)
+                except OSError:
+                    pass
+    base = os.path.basename(path)
+    legacy = [base + str(slot) + ".sgm" for slot in STATE_SLOTS]
+    legacy.append(base + ".sav")
+    for name in legacy:
+        old = os.path.join(os.path.dirname(path), name)
+        new = os.path.join(dest, name)
+        if os.path.isfile(old) and not os.path.exists(new):
+            try:
+                shutil.copy2(old, new)
+            except OSError:
+                pass
+    # VBA-M names files from the ROM basename even when --save-dir is stable.
+    # After a Finder rename, carry the one prior basename forward so the core
+    # opens the same battery/slot bytes under the new requested name.
+    for suffix in (["%d.sgm" % slot for slot in STATE_SLOTS] + [".sav"]):
+        new = os.path.join(dest, base + suffix)
+        if os.path.exists(new):
+            continue
+        candidates = [os.path.join(dest, n) for n in os.listdir(dest)
+                      if n.endswith(suffix) and os.path.isfile(
+                          os.path.join(dest, n))]
+        if len(candidates) == 1:
+            try:
+                shutil.copy2(candidates[0], new)
+            except OSError:
+                pass
+    return dest
 
 
 # The smallest a file can be and still hold the cartridge header its system
@@ -141,7 +294,9 @@ class GbaEmu(nbapp.AppWindow):
         # belongs to is still there. Same gate accounting.py and contacts.py
         # carry.
         self._closed = False
+        self._scan_source = 0           # the pending first library scan idle
         self._launch_source = 0         # the pending command-line launch idle
+        self._jobs = nbjobs.JobOwner(name="gbaemu")
 
         # This file is metadata, not emulator configuration: vbam owns the
         # binary .sgm files and its SDL frontend owns the F-key bindings.
@@ -150,6 +305,7 @@ class GbaEmu(nbapp.AppWindow):
         self._launch_time = 0.0
         self._session = None            # the running nbgame.GameSession, if any
         self._active_rom = None
+        self._flashed = False           # a message about what just happened
         # NB: the vbam process, its stdout log and the Ctrl+Esc watch all live in
         # nbgame.GameSession now — gbaemu only owns the library + the session.
 
@@ -174,12 +330,7 @@ class GbaEmu(nbapp.AppWindow):
 
         # First paint beats first scan: even the bounded walk belongs after
         # the window is on screen, not between construct and map.
-        def _first_scan():
-            self._scan_roms()
-            self._render_library()
-            self._render_controllers()
-            return False
-        GLib.idle_add(_first_scan)
+        self._scan_source = GLib.idle_add(self._first_scan)
 
         # A ROM passed on the command line (Finder double-click) plays at once.
         rompath = next((a for a in sys.argv[1:]
@@ -192,7 +343,28 @@ class GbaEmu(nbapp.AppWindow):
         if rompath:
             self._launch_source = GLib.idle_add(self._launch_pending, rompath)
 
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
+
+    def _first_scan(self):
+        """Populate the library once, unless its window has already closed."""
+        self._scan_source = 0
+        if self._closed:
+            return False
+        self._request_scan()
+        return False
+
+    def _request_scan(self):
+        """Discover and hash cartridges off the GTK thread, then redraw."""
+        def work(job):
+            return self._scan_roms(job.token, apply=False)
+
+        def done(found):
+            self._apply_scan(found)
+            self._render_library()
+            self._render_controllers()
+
+        self._jobs.start("scan", work, on_done=done)
 
     def _launch_pending(self, rompath):
         """Play the command-line ROM, once, if the window is still alive."""
@@ -234,7 +406,7 @@ class GbaEmu(nbapp.AppWindow):
         return bar
 
     # ================= library =================
-    def _scan_roms(self):
+    def _scan_roms(self, token=None, apply=True):
         """Scan Home (recursively; hidden dirs skipped) for real ROM files.
 
         BOUNDED: the walk itself is capped by directories visited and by
@@ -248,6 +420,8 @@ class GbaEmu(nbapp.AppWindow):
         dirs_left = 4000
         try:
             for root, dirs, files in os.walk(HOME):
+                if token is not None:
+                    token.checkpoint()
                 dirs_left -= 1
                 if dirs_left <= 0 or time.monotonic() > deadline:
                     raise StopIteration
@@ -257,6 +431,11 @@ class GbaEmu(nbapp.AppWindow):
                     if ext not in ROM_EXT:
                         continue
                     p = os.path.join(root, f)
+                    try:
+                        if os.path.getsize(p) > MAX_LIBRARY_ROM_BYTES:
+                            continue
+                    except OSError:
+                        continue
                     if p in seen:
                         continue
                     seen.add(p)
@@ -269,6 +448,22 @@ class GbaEmu(nbapp.AppWindow):
         except Exception:
             pass
         found.sort(key=lambda m: m["name"].lower())
+        if not apply:
+            # Populate the content-identity cache in the worker. Reconciliation
+            # on the GTK thread below then does no cartridge-sized I/O.
+            for item in found:
+                if token is not None:
+                    token.checkpoint()
+                try:
+                    game_key(item["path"])
+                except (OSError, ValueError):
+                    pass
+            return found
+        self._apply_scan(found)
+        return found
+
+    def _apply_scan(self, found):
+        """Publish a completed scan and reconcile its small metadata."""
         self._roms = found
         changed = False
         for item in found:
@@ -278,40 +473,57 @@ class GbaEmu(nbapp.AppWindow):
 
     # ================= save-state metadata =================
     def _load_state_meta(self):
+        self._meta_quarantine_pending = False
         try:
             with open(CFG_PATH, encoding="utf-8") as fh:
                 data = json.load(fh)
             if not isinstance(data, dict):
                 nbapp.quarantine_unrecognized(CFG_PATH)
+                self._meta_quarantine_pending = os.path.exists(CFG_PATH)
                 data = {}
         except (ValueError, UnicodeDecodeError):
             nbapp.preserve_damaged(CFG_PATH)
+            self._meta_quarantine_pending = os.path.exists(CFG_PATH)
             data = {}
         except (OSError, TypeError):
             data = {}
         games = data.get("games")
         if not isinstance(games, dict):
             games = {}
-        return {"version": 1, "games": games}
+        # A newer emulator may add root metadata beside `games`. This version
+        # does not need to understand it to keep it: rebuilding only the two
+        # known keys erased those fields on the first slot selection or close.
+        out = dict(data)
+        out.update({"version": 1, "games": games})
+        return out
 
     def _save_state_meta(self):
         try:
+            if getattr(self, "_meta_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(CFG_PATH)
+                if os.path.exists(CFG_PATH):
+                    raise OSError("could not preserve damaged emulator metadata")
+                self._meta_quarantine_pending = False
             os.makedirs(CFG_DIR, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(prefix=".gbaemu-", suffix=".json",
-                                       dir=CFG_DIR)
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(self._state_meta, fh, indent=2, sort_keys=True)
-                fh.write("\n")
-            os.replace(tmp, CFG_PATH)
-        except OSError:
-            try:
-                os.unlink(tmp)
-            except (OSError, UnboundLocalError):
-                pass
+            nbapp.atomic_write_json(CFG_PATH, self._state_meta)
+            return True
+        except Exception as exc:                                  # noqa: BLE001
+            nbapp.note_save_failure(self, exc, CFG_PATH)
+            return False
 
     def _game_state(self, path):
         games = self._state_meta["games"]
-        rec = games.setdefault(game_key(path), {})
+        key = game_key(path)
+        rec = games.get(key)
+        legacy_key = os.path.realpath(os.path.abspath(path))
+        if not isinstance(rec, dict) and isinstance(games.get(legacy_key), dict):
+            rec = games.pop(legacy_key)
+            games[key] = rec
+        if not isinstance(rec, dict):
+            # Damage in one ROM's metadata must not prevent the whole library
+            # from rendering or discard healthy records belonging to siblings.
+            rec = {}
+            games[key] = rec
         slot = rec.get("last_slot", 1)
         rec["last_slot"] = slot if slot in STATE_SLOTS else 1
         if not isinstance(rec.get("last_saved"), dict):
@@ -321,9 +533,43 @@ class GbaEmu(nbapp.AppWindow):
     def _select_slot(self, path, slot):
         if slot not in STATE_SLOTS:
             return
-        self._game_state(path)["last_slot"] = slot
-        self._save_state_meta()
-        self._render_library()
+        rec = self._game_state(path)
+        previous = rec["last_slot"]
+        rec["last_slot"] = slot
+        if not self._save_state_meta():
+            rec["last_slot"] = previous
+        # ONE record can be behind SEVERAL cards: the key is the cartridge's
+        # bytes, so the same game in Documents and on the Desktop shares its
+        # slot deliberately. Restating only the clicked card left the sibling
+        # showing the old slot -- and then changing to the new one at the next
+        # redraw, with nobody having touched it. Restate them together.
+        # (game_key is cached by dev/ino/size/mtime: no cartridge is re-read.)
+        key = _same_game_key(path)
+        for other in [path] + [p for p in getattr(self, "_slot_widgets", {})
+                               if p != path and key is not None
+                               and _same_game_key(p) == key]:
+            self._update_slot_widgets(other)
+
+    def _update_slot_widgets(self, path):
+        """Refresh one card's slot chrome without rebuilding the library."""
+        widgets = getattr(self, "_slot_widgets", {}).get(path)
+        if not widgets:
+            return
+        rec = self._game_state(path)
+        selected = rec["last_slot"]
+        # The slots are a radio group; lighting one deactivates its sibling
+        # with set_active(FALSE), which emits "clicked"/"toggled" on the
+        # sibling too. Restating the row from inside _select_slot therefore
+        # re-entered _select_slot for the slot being unlit, which relit it, …
+        # until the stack blew (every slot click printed a RecursionError).
+        # choose_segment restates the row with every handler blocked.
+        nbapp.choose_segment(widgets["buttons"].items(), selected, None)
+        widgets["keys"].set_text(
+            (_t("Load F%d") % selected) + "  ·  "
+            + (_t("Save Shift+F%d") % selected))
+        widgets["last"].set_text(
+            _t("Last saved: %s") % _saved_text(rec["last_saved"].get(
+                str(selected))))
 
     def _reconcile_states(self, path, save=True):
         rec = self._game_state(path)
@@ -342,14 +588,21 @@ class GbaEmu(nbapp.AppWindow):
         return changed
 
     def _render_library(self):
+        self._slot_widgets = {}
         for c in self._lib_body.get_children():
             self._lib_body.remove(c)
         if not self._vbam_path():
             # pack tight: as an expanding child this warning stretched into a
-            # tall pink slab with two lines of text floating at the top of it
+            # tall pink slab with two lines of text floating at the top of it.
+            #
+            # Both sentences go through _t(). The body used to be a bare
+            # literal with no catalog entry in ANY of the 17 languages, so a
+            # French library showed a French heading over an English sentence;
+            # it now says what _play() already flashes when the core is
+            # missing, which every catalog carries.
             self._lib_body.pack_start(self._notice(
-                "Games can’t be played on this system",
-                "The emulator is not installed. Games cannot be started."),
+                _t("Games can’t be played on this system"),
+                _t("The emulator core isn’t installed.")),
                 False, False, 0)
         if not self._roms:
             self._lib_body.pack_start(self._empty_state(), True, True, 0)
@@ -366,7 +619,12 @@ class GbaEmu(nbapp.AppWindow):
         flow.get_style_context().add_class("libflow")
         for m in self._roms:
             flow.add(self._rom_card(m))
-        self._lib_body.pack_start(flow, False, False, 0)
+        # fill=True, or GtkBox CENTRES the flow in the height this expanding
+        # body has left: a library of one to four games hung ~103px lower than
+        # the first row of a library that filled the window, with a blank band
+        # under the notice. (valign START above is not enough -- the centring
+        # is the box's, in the child's allocation, not the widget's own.)
+        self._lib_body.pack_start(flow, False, True, 0)
         self._lib_body.show_all()
 
     def _rom_card(self, m):
@@ -381,6 +639,13 @@ class GbaEmu(nbapp.AppWindow):
         # or focus lands on the inner control, so it looks intermittent.
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         outer.get_style_context().add_class("romcard")
+        # The tile has a width of its own. Without it the FlowBox sized every
+        # column by the widest card, which is the widest LABEL in it, so the
+        # grid changed shape with the language: four games per row in English,
+        # three in Spanish, two in French. Everything below is kept inside this
+        # width (the numbered slot chips, the two captions capped and wrapping)
+        # so a longer translation makes a taller card, never a wider grid.
+        outer.set_size_request(CARD_WIDTH, -1)
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         art = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         art.get_style_context().add_class("romart")
@@ -391,7 +656,11 @@ class GbaEmu(nbapp.AppWindow):
         img.set_vexpand(True)
         art.pack_start(img, True, True, 0)
         card.pack_start(art, False, False, 0)
-        nm = Gtk.Label(label=m["name"])
+        # The ROM's filename with its extension stripped. A game exported
+        # from the SDK with the default project name lands here as "Game",
+        # which is a catalog key.
+        nm = Gtk.Label()
+        nbi18n.set_verbatim(nm, m["name"])
         nm.get_style_context().add_class("romname")
         nm.set_ellipsize(Pango.EllipsizeMode.END)
         nm.set_max_width_chars(15)
@@ -404,25 +673,53 @@ class GbaEmu(nbapp.AppWindow):
         selected = rec["last_slot"]
         slots = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
         slots.set_halign(Gtk.Align.CENTER)
+        slot_buttons = {}
+        slot_group = None
         for slot in STATE_SLOTS:
-            sb = Gtk.ToggleButton(label=_t("Slot %d") % slot)
+            # The chip shows the NUMBER and names itself "Slot 2" to the
+            # pointer and to assistive technology. Spelled out three times
+            # across the card, the word was the widest thing in the library
+            # and sized every column by its longest translation -- three
+            # "Emplacement 1" chips are 333px, and French cards came out
+            # 462px wide with two games per row where English had four.
+            sb = Gtk.RadioButton.new_with_label_from_widget(
+                slot_group, "%d" % slot)
+            # Drawn as a chip, not as a radio: the bordered box lit by
+            # .stateslot:checked already says which slot is chosen, and the
+            # indicator's filled dot would state it a second time in the
+            # blackest ink on a card whose game name should carry that
+            # weight. set_mode(False) is only how the group LOOKS -- one
+            # slot at a time, arrow keys between them, all still the radio's.
+            sb.set_mode(False)
+            sb.set_tooltip_text(_t("Slot %d") % slot)
+            try:
+                sb.get_accessible().set_name(_t("Slot %d") % slot)
+            except Exception:                                     # noqa: BLE001
+                pass
+            if slot_group is None:
+                slot_group = sb
             sb.set_active(slot == selected)
             sb.set_relief(Gtk.ReliefStyle.NONE)
             sb.get_style_context().add_class("stateslot")
-            sb.connect("clicked", lambda _w, p=m["path"], s=slot:
-                       self._select_slot(p, s))
+            # "toggled" and only when this slot became ACTIVE: a radio
+            # sibling being unlit is not a choice (see _update_slot_widgets)
+            sb.connect("toggled", lambda w, p=m["path"], s=slot:
+                       w.get_active() and self._select_slot(p, s))
             slots.pack_start(sb, False, False, 0)
+            slot_buttons[slot] = sb
         outer.pack_start(slots, False, False, 0)
         keys = Gtk.Label(label=(_t("Load F%d") % selected) + "  ·  " +
                          (_t("Save Shift+F%d") % selected))
         keys.get_style_context().add_class("statekeys")
+        _fit_caption(keys)
         outer.pack_start(keys, False, False, 0)
-        stamp = rec["last_saved"].get(str(selected))
-        saved = (time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp))
-                 if stamp is not None else _t("Not saved"))
-        last = Gtk.Label(label=_t("Last saved: %s") % saved)
+        last = Gtk.Label(label=_t("Last saved: %s") % _saved_text(
+            rec["last_saved"].get(str(selected))))
         last.get_style_context().add_class("statetime")
+        _fit_caption(last)
         outer.pack_start(last, False, False, 0)
+        self._slot_widgets[m["path"]] = {
+            "buttons": slot_buttons, "keys": keys, "last": last}
         # The card is wrapped in a real button, not an EventBox. An EventBox
         # takes no focus and answers no key, so the library was reachable by
         # pointer only: Tab skipped every game and there was no way to start
@@ -490,11 +787,17 @@ class GbaEmu(nbapp.AppWindow):
         self._ctrl_label.get_style_context().add_class("ctrllabel")
         self._ctrl_label.set_ellipsize(Pango.EllipsizeMode.END)
         bar.pack_start(self._ctrl_label, True, True, 0)
-        rb = Gtk.Button(label=_t("Rescan"))
+        # The SAME name as the File menu item that runs the same callback.
+        # It said "Rescan" here and "Look for New Games" there, so one window
+        # offered one action under two names -- and the card raised when a
+        # game has been deleted sends the reader to the menu while the button
+        # sat in the same window under the other word. The menu's wording is
+        # the one that keeps: an action names its outcome, not the machine's
+        # word for how it looks (docs/MENU-CONVENTIONS.md section 6).
+        rb = Gtk.Button(label=_t("Look for New Games"))
         rb.set_relief(Gtk.ReliefStyle.NONE)
         rb.get_style_context().add_class("emutoggle")
-        rb.connect("clicked", lambda *_: (self._scan_roms(),
-                   self._render_library(), self._render_controllers()))
+        rb.connect("clicked", lambda *_: self._request_scan())
         bar.pack_end(rb, False, False, 0)
         return bar
 
@@ -576,7 +879,14 @@ class GbaEmu(nbapp.AppWindow):
             pads.append(name)
         return pads
 
-    def _render_controllers(self):
+    def _render_controllers(self, force=False):
+        """Write the status line's RESTING text: which controllers are here.
+
+        It must not overwrite a message about what the person just did. Opening
+        a game from the browser starts a library scan and then plays it, and
+        the scan finishing ~0.1s later called this and wiped "Playing Zelda —
+        press Ctrl+Esc to exit" (and, when the launch had failed, wiped the
+        only sentence that said so, after one frame)."""
         pads = self._detect_controllers()
         if pads:
             txt = "Controller ready: " + ", ".join(pads[:2])
@@ -584,7 +894,12 @@ class GbaEmu(nbapp.AppWindow):
                 txt += " +%d more" % (len(pads) - 2)
         else:
             txt = "No controller detected. Keyboard: arrow keys, Z, X."
-        self._ctrl_label.set_text(txt)
+        if getattr(self, "_flashed", False) and not force:
+            return
+        try:
+            self._ctrl_label.set_text(txt)
+        except Exception:                                         # noqa: BLE001
+            pass
 
     # ================= launch =================
     def _vbam_path(self):
@@ -624,6 +939,11 @@ class GbaEmu(nbapp.AppWindow):
             return
         if self._session is not None:       # a game is already running
             return
+        try:
+            save_dir = prepare_game_storage(rompath)
+        except OSError as exc:
+            self._flash(nbapp.save_failure_reason(exc, GAME_DATA_DIR))
+            return
         self._launch_time = time.monotonic()
         self._active_rom = rompath
         self._flash("Playing %s — press Ctrl+Esc to exit."
@@ -633,8 +953,10 @@ class GbaEmu(nbapp.AppWindow):
         # window (which also puts the desktop menu bar behind the game), and
         # wires a global Ctrl+Esc to quit. See de/nbgame.py.
         try:
-            self._session = nbgame.GameSession(self, vbam, rompath,
-                                               self._on_game_end)
+            self._session = nbgame.GameSession(
+                self, vbam, rompath, self._on_game_end,
+                extra_args=["--save-dir", save_dir,
+                            "--battery-dir", save_dir])
             self._session.run()
         except Exception:
             self._session = None
@@ -671,6 +993,13 @@ class GbaEmu(nbapp.AppWindow):
             pass
 
     def _flash(self, text):
+        """Say what just happened, over the resting controller line, until
+        something newer replaces it. An EMPTY flash is not an empty status
+        line: it returns the line to what it rests on."""
+        self._flashed = bool(text)
+        if not text:
+            self._render_controllers(force=True)
+            return
         try:
             self._ctrl_label.set_text(text)
         except Exception:
@@ -736,8 +1065,7 @@ class GbaEmu(nbapp.AppWindow):
             if _is_rom(path):
                 # bring a newly-opened ROM into the library, then play it
                 if not any(m["path"] == path for m in self._roms):
-                    self._scan_roms()
-                    self._render_library()
+                    self._request_scan()
                 self._play(path)
             else:
                 self._play(path)     # e.g. a .zip — let vbam try
@@ -753,9 +1081,19 @@ class GbaEmu(nbapp.AppWindow):
         if self._closed:
             return False
         self._closed = True
+        jobs = getattr(self, "_jobs", None)
+        if jobs is not None:
+            jobs.close()
 
         # Clear the id before removing the source, so a failed removal still
         # leaves nothing armed to fire against a destroyed widget tree.
+        scan_sid = self._scan_source
+        self._scan_source = 0
+        if scan_sid:
+            try:
+                GLib.source_remove(scan_sid)
+            except Exception:
+                pass
         sid = self._launch_source
         self._launch_source = 0
         if sid:
@@ -775,6 +1113,42 @@ class GbaEmu(nbapp.AppWindow):
         return False
 
     # ================= menu =================
+    def close(self, *_args):
+        # Menu/Escape calls this override; the window manager emits
+        # delete-event. Keep both on the same active-game decision.
+        if self._on_delete():
+            return
+        self.destroy()
+
+    def _on_delete(self, *_args):
+        """Veto every close path until active-game loss is confirmed."""
+        return bool(self._session is not None
+                    and not self._confirm_stop_game())
+
+    def _confirm_stop_game(self):
+        """An interactive close must not silently discard game progress."""
+        dlg = Gtk.MessageDialog(
+            transient_for=self, modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.NONE,
+            text=_t("Stop"))
+        # The name of the game that is running, which this window knows.
+        # It used to substitute the literal word "Game", so a destructive
+        # prompt read End “Game”? -- which reads as a substitution that
+        # failed. _t("Game") stays as the fallback for the one case where
+        # there is no name to give.
+        running = getattr(self, "_active_rom", None)
+        dlg.format_secondary_text(
+            _t("End “%s”? Anything it has not saved will be lost.")
+            % (os.path.basename(running) if running else _t("Game")))
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        stop = dlg.add_button(_t("Stop"), Gtk.ResponseType.OK)
+        stop.get_style_context().add_class("destructive-action")
+        dlg.set_default_response(Gtk.ResponseType.CANCEL)
+        answer = dlg.run()
+        dlg.destroy()
+        return answer == Gtk.ResponseType.OK
+
     def menu_items(self, name):
         if name == "File":
             return [
@@ -782,8 +1156,7 @@ class GbaEmu(nbapp.AppWindow):
                 # Names the outcome — find games added since this window opened,
                 # e.g. one just exported from the GBA SDK — rather than the
                 # machine's word for how it looks ("Rescan").
-                ("Look for New Games", lambda: (self._scan_roms(),
-                 self._render_library(), self._render_controllers())),
+                ("Look for New Games", self._request_scan),
                 ("Emulator Log…", self._show_log),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
@@ -792,28 +1165,65 @@ class GbaEmu(nbapp.AppWindow):
 
     def _show_log(self):
         try:
-            with open(self._log_path()) as fh:
-                text = fh.read().strip()
+            text = _read_log_tail(self._log_path())
         except OSError:
             text = ""
         if not text:
-            text = "The log is empty."
-        dlg = Gtk.Dialog(title="Emulator Log", transient_for=self, modal=True)
+            # Through a TextView buffer, which nbi18n's automatic translation
+            # never sees (it hooks labels, buttons and menu items), so this
+            # sentence has to be looked up here. Every catalog carries it.
+            text = _t("The log is empty.")
+        # The same card as _alert: this window has no title bar to name it, so
+        # a bare panel put the log text against the very top-left corner of a
+        # box with no heading, no padding and a raw theme button.
+        dlg = Gtk.Dialog(title=_t("Emulator Log"), transient_for=self,
+                         modal=True)
         dlg.set_decorated(False)
         dlg.set_default_size(560, 380)
-        box = dlg.get_content_area()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.get_style_context().add_class("emualert")
+        head = Gtk.Label(label=_t("Emulator Log"), xalign=0)
+        head.get_style_context().add_class("alerttitle")
+        box.pack_start(head, False, False, 0)
         sw = Gtk.ScrolledWindow()
         sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         sw.set_vexpand(True)
+        sw.get_style_context().add_class("logview")
         tv = Gtk.TextView()
         tv.set_editable(False)
         tv.set_cursor_visible(False)
         tv.set_monospace(True)
+        tv.get_style_context().add_class("logtext")
+        tv.set_left_margin(10)
+        tv.set_right_margin(10)
+        tv.set_top_margin(8)
+        tv.set_bottom_margin(8)
         tv.get_buffer().set_text(text)
         sw.add(tv)
         box.pack_start(sw, True, True, 0)
-        dlg.add_button("Close", Gtk.ResponseType.CLOSE)
+        done = Gtk.Button(label=_t("Close"))
+        done.set_relief(Gtk.ReliefStyle.NONE)
+        done.get_style_context().add_class("emubtn")
+        done.set_halign(Gtk.Align.END)
+        done.connect("clicked", lambda *_: dlg.response(Gtk.ResponseType.CLOSE))
+        box.pack_start(done, False, False, 0)
+        dlg.get_content_area().add(box)
+        try:                     # the card carries its own button
+            area = dlg.get_action_area()
+            area.set_no_show_all(True)
+            area.hide()
+        except Exception:
+            pass
+        # Esc must dismiss it: there is no title bar to close.
+        def _escape(_w, ev):
+            if ev.keyval != Gdk.KEY_Escape:
+                return False
+            dlg.response(Gtk.ResponseType.CLOSE)
+            return True
+
+        dlg.connect("key-press-event", _escape)
         dlg.show_all()
+        done.grab_focus()
         dlg.run()
         dlg.destroy()
 
@@ -824,7 +1234,7 @@ class GbaEmu(nbapp.AppWindow):
         .emuhead { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                    padding: 16px 22px; }
         .emutitle { font-size: 17px; font-weight: 600; color: #1A1916; }
-        .emusub { font-size: 12px; color: #9A9484; letter-spacing: 0.03em; }
+        .emusub { font-size: 12px; color: #6E695E; letter-spacing: 0.03em; }
         .emubtn { min-height: 30px; padding: 0 14px; border: 1px solid #C9C4B6;
                   background: #FCFBF8; border-radius: 8px; box-shadow: none;
                   font-size: 12px; font-weight: 600; color: #1A1916; }
@@ -857,16 +1267,16 @@ class GbaEmu(nbapp.AppWindow):
         .rombutton:hover .romart { background: #F4F2EC;
                                    border-color: #C8341E; }
         .romname { font-size: 13px; color: #1A1916; font-weight: 600; }
-        .romsys { font-size: 11px; color: #9A9484; }
+        .romsys { font-size: 11px; color: #6E695E; }
         .stateslot { padding: 2px 5px; min-height: 20px; min-width: 0;
                      border: 1px solid #C9C4B6; background: #FCFBF8;
                      box-shadow: none; font-size: 10px; color: #6E695E; }
         .stateslot:checked { background: #EAE3D2; border-color: #6E695E;
                             color: #1A1916; }
         .statekeys { font-size: 10px; color: #6E695E; }
-        .statetime { font-size: 10px; color: #9A9484; }
+        .statetime { font-size: 10px; color: #6E695E; }
         .emptytitle { font-size: 15px; font-weight: 600; color: #6E695E; }
-        .emptysub { font-size: 13px; color: #9A9484; }
+        .emptysub { font-size: 13px; color: #6E695E; }
         .emunotice { margin: 20px 24px 0; padding: 12px 16px;
                      background: #F4F2EC; border: 1px solid #C9C4B6;
                      border-radius: 12px; }
@@ -877,6 +1287,12 @@ class GbaEmu(nbapp.AppWindow):
         .ctrllabel { font-size: 12px; color: #6E695E; }
         .emualert { background: #FCFBF8; border: 1px solid #C9C4B6;
                     padding: 22px 26px 16px; }
+        .logview, .logtext, .logtext text { background: #FCFBF8;
+                    color: #1A1916; }
+        .logtext, .logtext text {
+                    font-family: "Liberation Mono","DejaVu Sans Mono",monospace;
+                    font-size: 11px; }
+        .logview { border: 1px solid #C9C4B6; border-radius: 4px; }
         .alerttitle { font-size: 16px; font-weight: 700; color: #1A1916; }
         .alertbody { font-size: 13px; color: #6E695E; }
         """

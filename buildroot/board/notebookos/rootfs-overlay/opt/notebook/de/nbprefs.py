@@ -28,6 +28,7 @@ item is made of.
 import os
 import sys
 import json
+import re
 import subprocess
 
 CFG_DIR = ".config/notebook"
@@ -35,7 +36,8 @@ CFG_NAME = "settings.json"
 
 # The scales the Displays page offers. Anything else in the file is ignored
 # rather than passed to xrandr, which would take an arbitrary float.
-SCALES = ("1.25", "1.5", "2.0")
+SCALES = ("1.0", "1.25", "1.5", "2.0")
+MODE_RE = re.compile(r"^[1-9][0-9]{2,4}x[1-9][0-9]{2,4}$")
 
 
 def run(cmd, timeout=4):
@@ -72,6 +74,63 @@ def cfg_int(settings, key, default):
         return default
 
 
+def tz_of(settings):
+    """The POSIX TZ string this machine should be keeping time in, or "".
+
+    The POSIX form ("EST5EDT,M3.2.0,M11.1.0"), not the IANA name: NO ZONEINFO
+    SHIPS in this image, so /etc/localtime cannot be pointed anywhere and the
+    IANA name on its own would tell the C library nothing. The name is kept
+    beside it in `tz` only so the Settings page can show the row it belongs to.
+    """
+    tz = settings.get("tz_posix")
+    return tz if isinstance(tz, str) and tz.strip() else ""
+
+
+def apply_timezone(settings=None, base=None):
+    """Put the saved zone into THIS process, and say what was applied.
+
+    The whole difficulty of time zones on this machine is that the only lever
+    is the TZ environment variable — with no zoneinfo there is no /etc/localtime
+    to re-point — and an environment variable reaches exactly one process. So
+    changing the zone in Settings updated Settings and nothing else: the panel
+    clock, Calendar and the Journal each kept the zone their own process had
+    started with.
+
+    Three places therefore call this. session.sh exports TZ for the session at
+    start-up; the shell re-applies it when the setting changes, which fixes the
+    clock AND every app launched afterwards (they inherit the shell's
+    environment); and settings.py applies it as it saves.
+
+    Already-open apps keep the zone they started in — no process can reach into
+    another one's environment — so they show the new zone the next time they are
+    opened. Closing that last gap means every app re-checking on focus, which is
+    a change to nbapp and therefore to all forty of them; it is worth doing
+    deliberately rather than as a side effect of this fix.
+    """
+    settings = load(base) if settings is None else settings
+    tz = tz_of(settings)
+    if not tz:
+        # Empty means the appliance default, which session.sh represents by
+        # leaving TZ unset.  This function also runs in the long-lived shell:
+        # merely returning here would retain the previously selected zone and
+        # pass that stale environment to every subsequently launched app.
+        os.environ.pop("TZ", None)
+        try:
+            import time
+            time.tzset()
+        except (ImportError, AttributeError):
+            pass
+        return ""
+    if os.environ.get("TZ") != tz:
+        os.environ["TZ"] = tz
+    try:
+        import time
+        time.tzset()
+    except (ImportError, AttributeError):
+        pass          # a platform without tzset keeps whatever it had
+    return tz
+
+
 def x_output(o=None):
     """The screen these controls act on: the one the user is sitting at.
 
@@ -96,12 +155,13 @@ def apply_blank(secs):
     except (TypeError, ValueError):
         secs = 0
     if secs > 0:
-        run(["xset", "s", str(secs)])
-        run(["xset", "+dpms"])
-        run(["xset", "dpms", str(secs), str(secs), str(secs)])
+        results = [run(["xset", "s", str(secs)]),
+                   run(["xset", "+dpms"]),
+                   run(["xset", "dpms", str(secs), str(secs), str(secs)])]
     else:
-        run(["xset", "s", "off"])
-        run(["xset", "-dpms"])
+        results = [run(["xset", "s", "off"]),
+                   run(["xset", "-dpms"])]
+    return all(rc == 0 for rc, _output in results)
 
 
 def apply_repeat(delay, rate):
@@ -109,17 +169,91 @@ def apply_repeat(delay, rate):
         delay = int(delay)
         rate = int(rate)
     except (TypeError, ValueError):
-        return
-    run(["xset", "r", "rate", str(delay), str(rate)])
+        return False
+    rc, _output = run(["xset", "r", "rate", str(delay), str(rate)])
+    return rc == 0
+
+
+def _display_snapshot():
+    rc, output = run(["xrandr"])
+    return output if rc == 0 else ""
+
+
+def _connected_outputs(snapshot):
+    return [line.split()[0] for line in snapshot.splitlines()
+            if " connected" in line and line[:1].strip()]
+
+
+def _active_mode(snapshot, output):
+    for line in snapshot.splitlines():
+        if line.startswith(output + " connected"):
+            match = re.search(r"\b([0-9]+)x([0-9]+)\+[0-9]+\+[0-9]+", line)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+    return None
+
+
+def _mirror_canvas(primary, width, height, snapshot):
+    """Map every other connected output onto the primary's logical canvas."""
+    canvas = "%dx%d" % (width, height)
+    for output in _connected_outputs(snapshot):
+        if output == primary:
+            continue
+        rc, _text = run(["xrandr", "--output", output, "--auto",
+                         "--scale-from", canvas, "--same-as", primary])
+        if rc != 0:
+            # The primary preference has already succeeded and cannot be
+            # transactionally rolled back without another race. A TV may have
+            # vanished since the snapshot, or reject the transform. Do not
+            # report the whole setting as failed (which leaves UI/disk lying
+            # about the visibly changed panel). Re-read the connector state
+            # before deciding whether there is still a sink to reconcile.
+            fresh = _display_snapshot()
+            if output not in _connected_outputs(fresh):
+                continue                 # hot-unplug: nothing remains to fix
+            # XRandR can be briefly busy while the primary CRTC changes. Retry
+            # once against fresh topology; if the sink still rejects it, leave
+            # its existing picture intact rather than turning a connected TV
+            # black. A later hotplug/settings apply will reconcile it again.
+            run(["xrandr", "--output", output, "--auto",
+                 "--scale-from", canvas, "--same-as", primary])
+    return True
 
 
 def apply_scale(scale, out=None):
     scale = str(scale)
     if scale not in SCALES:
-        return          # 1.0 is native and a no-op; anything else is not ours
-    out = out if out is not None else x_output()
+        return False    # anything outside the offered list is not ours
+    snapshot = _display_snapshot()
+    out = out if out is not None else x_output(snapshot)
     if out:
-        run(["xrandr", "--output", out, "--scale", "%sx%s" % (scale, scale)])
+        rc, _output = run(["xrandr", "--output", out, "--scale",
+                           "%sx%s" % (scale, scale)])
+        if rc != 0:
+            return False
+        mode = _active_mode(snapshot, out)
+        if mode:
+            width = max(1, int(round(mode[0] * float(scale))))
+            height = max(1, int(round(mode[1] * float(scale))))
+            return _mirror_canvas(out, width, height, snapshot)
+        return True
+    return False
+
+
+def apply_resolution(mode, out=None):
+    """Apply a saved RandR mode to the internal/primary screen when valid."""
+    mode = str(mode)
+    if not MODE_RE.match(mode):
+        return False
+    snapshot = _display_snapshot()
+    out = out if out is not None else x_output(snapshot)
+    if out:
+        rc, _output = run(["xrandr", "--output", out, "--mode", mode])
+        if rc != 0:
+            return False
+        width, height = (int(part) for part in mode.split("x"))
+        return _mirror_canvas(out, width, height, snapshot)
+    return False
 
 
 def planned(settings):
@@ -137,6 +271,9 @@ def planned(settings):
     scale = str(settings.get("display_scale", "1.0"))
     if scale in SCALES:
         out.append(("display_scale", "supersample %sx" % scale))
+    mode = str(settings.get("display_resolution", ""))
+    if MODE_RE.match(mode):
+        out.append(("display_resolution", mode))
     return out
 
 
@@ -150,13 +287,22 @@ def apply_all(settings=None, base=None):
     settings = load(base) if settings is None else settings
     done = planned(settings)
     names = {n for n, _ in done}
+    # Before the rest: everything below shells out, and a subprocess inherits
+    # this process's environment, so the zone wants to be right first.
+    apply_timezone(settings)
     if "blank_timeout" in names:
-        apply_blank(cfg_int(settings, "blank_timeout", 0))
+        if not apply_blank(cfg_int(settings, "blank_timeout", 0)):
+            done = [item for item in done if item[0] != "blank_timeout"]
     if "kbd_repeat" in names:
-        apply_repeat(cfg_int(settings, "kbd_delay", 500),
-                     cfg_int(settings, "kbd_rate", 25))
+        if not apply_repeat(cfg_int(settings, "kbd_delay", 500),
+                            cfg_int(settings, "kbd_rate", 25)):
+            done = [item for item in done if item[0] != "kbd_repeat"]
+    if "display_resolution" in names:
+        if not apply_resolution(settings.get("display_resolution")):
+            done = [item for item in done if item[0] != "display_resolution"]
     if "display_scale" in names:
-        apply_scale(settings.get("display_scale"))
+        if not apply_scale(settings.get("display_scale")):
+            done = [item for item in done if item[0] != "display_scale"]
     return done
 
 

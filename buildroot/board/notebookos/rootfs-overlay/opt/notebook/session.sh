@@ -262,10 +262,13 @@ NB_SPLASH_PID=$!
 	# `-option -option grp:alt_shift_toggle`, i.e. an option literally named
 	# "-option". Handing the list straight to exec is the only shape that
 	# cannot lose an argument.
-	python3 -c 'import nbi18n, nbkeyboard
+	# Bound the whole process group, including setxkbmap/xkbcomp descendants.
+	# The login wait below is five seconds; nothing from this startup job may
+	# survive that boundary and change alphabets under a password field.
+	timeout 4 python3 -c 'import nbi18n, nbkeyboard
 raise SystemExit(0 if nbkeyboard.apply(
     nbkeyboard.ensure_latin(nbi18n.keyboard())) else 1)' 2>/dev/null \
-		|| setxkbmap us 2>/dev/null
+		|| timeout 1 setxkbmap us 2>/dev/null
 ) &
 # Remembered because the FIRST thing typed on this machine is the password, and
 # it has to be typed on the user's own layout. See the sign-in block below.
@@ -515,7 +518,8 @@ elif [ "$NB_ACCEL" = 1 ] || grep -qw nb.compositor=1 /proc/cmdline 2>/dev/null; 
 			# flushes -- so the comment was describing the wrong file.)
 			if [ "$NB_ACCEL" = 1 ]; then
 				echo "session: starting the software repaint daemon" >&2
-				python3 /opt/notebook/de/xflushd.py >/dev/null 2>&1 &
+				NB_XFLUSHD_FORCE=1 \
+					python3 /opt/notebook/de/xflushd.py >/dev/null 2>&1 &
 			fi
 		) &
 	fi
@@ -590,6 +594,19 @@ python3 /opt/notebook/de/login.py --needed && NB_WANT_LOGIN=1
 
 if [ "$NB_WANT_FIRSTRUN" = 1 ] || [ "$NB_WANT_LOGIN" = 1 ]; then
 	touch /tmp/nb-ready
+	# The ready flag asks the current splash to retire, but retirement includes
+	# a short painted grace period.  Do not mistake that retiring child for the
+	# replacement splash after a quickly closed setup/login screen.  Wait for
+	# this exact child, bounded so a broken splash cannot hold up sign-in.
+	_i=0
+	while [ "$_i" -lt 20 ] && kill -0 "$NB_SPLASH_PID" 2>/dev/null; do
+		sleep 0.1
+		_i=$((_i + 1))
+	done
+	if kill -0 "$NB_SPLASH_PID" 2>/dev/null; then
+		kill "$NB_SPLASH_PID" 2>/dev/null || true
+	fi
+	wait "$NB_SPLASH_PID" 2>/dev/null || true
 	_i=0
 	while [ "$_i" -lt 5 ] && kill -0 "$NB_KB_PID" 2>/dev/null; do
 		sleep 1
@@ -606,7 +623,11 @@ if [ "$NB_WANT_FIRSTRUN" = 1 ] || [ "$NB_WANT_LOGIN" = 1 ]; then
 		python3 /opt/notebook/de/login.py --needed && NB_WANT_LOGIN=1
 	fi
 	if [ "$NB_WANT_LOGIN" = 1 ]; then
-		python3 /opt/notebook/de/login.py
+		# A crash is not authentication. Keep the desktop behind the blocking
+		# login until it explicitly returns the verified-password status.
+		while ! python3 /opt/notebook/de/login.py; do
+			sleep 1
+		done
 	fi
 	# Put the configured layout back, unconditionally. Both screens above can
 	# load a different one -- the sign-in screen switches alphabets so a Latin
@@ -621,10 +642,8 @@ nbkeyboard.apply(nbkeyboard.ensure_latin(nbi18n.keyboard()))' 2>/dev/null &
 	# retired by now (the touch above), and its 30s failsafe would otherwise
 	# expire while somebody is still typing.
 	rm -f /tmp/nb-ready
-	if ! kill -0 "$NB_SPLASH_PID" 2>/dev/null; then
-		python3 /opt/notebook/de/splash.py &
-		NB_SPLASH_PID=$!
-	fi
+	python3 /opt/notebook/de/splash.py &
+	NB_SPLASH_PID=$!
 fi
 
 python3 /opt/notebook/de/finder.py &
@@ -649,6 +668,21 @@ python3 /opt/notebook/de/xclipd.py >/dev/null 2>&1 &
 # while folded, and stays quietly dormant on hardware that never produces the
 # switch — so this line is safe on every machine, convertible or not.
 python3 /opt/notebook/de/xtabletd.py >/dev/null 2>&1 &
+
+# Govorimo — the neighborhood LoRa mesh daemon (owns keys, radio, store; the app
+# is a pure UI over its unix socket at /run/govorimo.sock, where the app looks by
+# default). Runs whenever the binary is present — the OS build bundles the
+# current one via tools/sync-govorimo.sh. No radio is wired here, so a fresh
+# machine is a solitary node until a LoRa stick is plugged and the identity is
+# enrolled at a neighborhood ceremony; the app's Radio surface says exactly that.
+if [ -x /opt/notebook/bin/govorimo-daemon ]; then
+	mkdir -p "${NB_HOME:-/root}/.govorimo"
+	/opt/notebook/bin/govorimo-daemon \
+		--socket /run/govorimo.sock \
+		--store "${NB_HOME:-/root}/.govorimo" \
+		--handle "$(hostname 2>/dev/null || echo node)" \
+		>/dev/null 2>&1 &
+fi
 
 # the desktop shell (panel + session). It runs in the foreground; when it
 # exits, the session ends.

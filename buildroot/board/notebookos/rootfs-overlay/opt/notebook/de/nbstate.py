@@ -153,7 +153,7 @@ def choice(value, allowed, default=None):
     seq = list(allowed)
     if value in seq:
         return value
-    if default is not None:
+    if default in seq:
         return default
     return seq[0] if seq else None
 
@@ -183,12 +183,15 @@ def identity_index(items, ident, key=None, default=-1):
 
 def clamp_index(value, count, default=0):
     """A saved row/page index clamped into a list that may have changed size."""
+    if count <= 0:
+        return 0
     try:
         i = int(value)
     except (TypeError, ValueError):
-        return default if count > 0 else 0
-    if count <= 0:
-        return 0
+        try:
+            i = int(default)
+        except (TypeError, ValueError):
+            i = 0
     return max(0, min(i, count - 1))
 
 
@@ -201,7 +204,12 @@ def fraction(value, default=0.0):
     try:
         f = float(value)
     except (TypeError, ValueError):
-        return default
+        f = float("nan")
     if f != f or f in (float("inf"), float("-inf")):  # NaN / infinities
-        return default
+        try:
+            f = float(default)
+        except (TypeError, ValueError):
+            f = 0.0
+        if f != f or f in (float("inf"), float("-inf")):
+            f = 0.0
     return max(0.0, min(1.0, f))

@@ -30,6 +30,9 @@ import json
 import time
 import re as _re
 import math
+import datetime
+import unicodedata
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 import cairo
 
@@ -49,10 +52,44 @@ HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 TX_FILE = os.path.join(CFG_DIR, "accounting.json")
 DOCS_DIR = os.path.join(HOME, "Documents")
+MAX_LEDGER_BYTES = 32 * 1024 * 1024
+
+
+class LedgerTooLarge(ValueError):
+    pass
+
+
+def _read_ledger_text(path=None, limit=MAX_LEDGER_BYTES):
+    if path is None:
+        path = TX_FILE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise LedgerTooLarge("ledger is too large")
+    return data.decode("utf-8")
 
 # Sign convention (bank-statement view): credit = money in (amt > 0),
 # debit = money out (amt < 0). The running balance is opening + Σ amt.
 MINUS = "−"
+
+# The largest amount a person may type into this ledger, and the ceiling exists
+# for two separate reasons that happen to meet here.
+#
+#   * ARITHMETIC. Every amount is quantised to whole cents through Decimal and
+#     then STORED AS A FLOAT (see _cents), and a double holds about fifteen
+#     significant digits: typed "99999999999999.99" the ledger saved
+#     99999999999999.98 and the row read back "+$99,999,999,999,999.98" — the
+#     app quietly changing the cents somebody typed, with no message, on the
+#     one screen whose whole job is to be right about money.
+#   * LAYOUT. The money columns take their width from the figures in them, so a
+#     ten-digit amount pushed BALANCE and the Add button off a 1024px panel
+#     (measured: 8 digits 997px, 9 digits 1057px against the 1024 the smallest
+#     supported panel gives) — the Add button gone from the screen exactly when
+#     somebody is adding an entry.
+#
+# Refused with a message that names the limit rather than clamped: a ledger must
+# never silently record a figure other than the one that was typed.
+MAX_AMOUNT = 99999999.99
 
 INK = "#1A1916"
 MUTED = "#8A857A"
@@ -117,13 +154,62 @@ def _cents(v):
     makes every stored amount an exact number of cents, and the two totals then
     agree by construction at any ledger size."""
     try:
-        return round(float(v), 2)
-    except (TypeError, ValueError, OverflowError):
+        amount = v if isinstance(v, Decimal) else Decimal(str(v))
+        if not amount.is_finite():
+            return 0.0
+        return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, OverflowError, InvalidOperation):
         return 0.0
+
+
+def _csv_text(value):
+    """Export user text literally instead of as a spreadsheet formula."""
+    text = str(value or "")
+    if text[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + text
+    return text
+
+
+def _fold(text):
+    """`text` with its accents and its case taken off, for searching.
+
+    FIND compared lower-cased text only, so a ledger holding "Café crème"
+    answered "cafe" with "Nothing here matches" — and typing the accent is the
+    part that is hard, which is why this OS ships a press-and-hold accent
+    palette at all. Decomposing (NFKD) and dropping the combining marks makes
+    the unaccented spelling find the accented word; casefold rather than lower
+    so ß and İ fold the way their own languages read them. The raw
+    substring test is kept beside this one in _matches, so an accented query
+    still finds an accented word directly."""
+    try:
+        bare = "".join(c for c in unicodedata.normalize("NFKD", text)
+                       if not unicodedata.combining(c))
+        return bare.casefold()
+    except (TypeError, ValueError):
+        return text.lower()
 
 
 _MONTH_ABBR = ("jan", "feb", "mar", "apr", "may", "jun",
                "jul", "aug", "sep", "oct", "nov", "dec")
+
+
+def _set_user_text(label, text, fallback=""):
+    """Put words the USER typed on a label without the catalog rewriting them.
+
+    A ledger description is the user's own words, and people write ordinary
+    ones: "Groceries", "Phone", "Music", "Rent". nbi18n looks up every label,
+    so on a French install the row read "Téléphone" while accounting.json went
+    on saying "Phone" — the ledger on screen and the ledger in the file no
+    longer named the same thing."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)
+    except AttributeError:
+        label.set_label(empty)
 
 
 def _short_date_parts(text):
@@ -150,6 +236,40 @@ def _short_date_parts(text):
     if day is None or mon is None:
         return None
     return day, mon, year
+
+
+def _date_exists(day, mon, year=None):
+    """True when the calendar really has this day.
+
+    `_short_date_parts` bounds the day at 1..31 and the month at a name it
+    knows, which between them still spell "31 Feb" — and that went straight
+    into the machine-readable column as 2026-02-31, a date no spreadsheet can
+    read and no day that ever happened.
+
+    A YEAR THE USER DID NOT WRITE CANNOT RULE OUT 29 FEBRUARY, so an unstated
+    year is checked against a leap year and only a written one can refuse it.
+    (datetime, never the stdlib `calendar` module: de/ has a calendar.py of its
+    own and importing that name here imports the app.)"""
+    try:
+        datetime.date(2024 if year is None else int(year), int(mon), int(day))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _impossible_date(text):
+    """True when `text` names a day the calendar does not have ("31 Feb",
+    "31 Apr", "29 Feb 2027").
+
+    Text that is not a date at all ("sometime soon") is NOT impossible: the
+    editor deliberately lets a person keep their own words in the date column
+    and simply carries no sortable date for that row (see `_edited_iso`). This
+    answers the narrower question — the user did write a day and a month, and
+    that day and month do not exist."""
+    parts = _short_date_parts(text)
+    if parts is None:
+        return False
+    return not _date_exists(*parts)
 
 
 def _recovered_note(n):
@@ -234,6 +354,64 @@ def _salvage_tx(text):
     return [obj for _start, obj in out]
 
 
+def _salvage_wrapper_value(text, key, value_re):
+    """The raw text of a WRAPPER key's value in a DAMAGED ledger file, or None.
+
+    The scan `_salvage_opening` was written for, with the key and the shape of
+    its value passed in so the chart preference beside it can be read back the
+    same careful way. Everything the docstring below says about brace depth and
+    string-awareness is about this function.
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    at_zero = None
+    quoted = '"%s"' % key
+    pat = _re.compile('"%s"\\s*:\\s*(%s)' % (key, value_re))
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            if depth in (0, 1) and text.startswith(quoted, i):
+                m = pat.match(text[i:])
+                if m:
+                    if depth == 1:
+                        return m.group(1)
+                    if at_zero is None:
+                        at_zero = m.group(1)
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        i += 1
+    return at_zero
+
+
+def _salvage_chart(text):
+    """Whether the balance chart was showing, out of a DAMAGED ledger file, or
+    None when the file does not say.
+
+    The salvage put the entries and the opening balance back and left this at
+    its default, so a ledger recovered from a damaged file came back with the
+    chart the user had turned OFF showing again — and the next autosave wrote
+    that default down, so the preference was gone for good. It was there to be
+    read the whole time: `_autosave` writes `chart` in the wrapper HEAD, ahead
+    of the transaction array, which is the part a truncated file keeps."""
+    raw = _salvage_wrapper_value(text, "chart", "true|false")
+    return None if raw is None else (raw == "true")
+
+
 def _salvage_opening(text):
     """The opening balance out of a DAMAGED ledger file, or None.
 
@@ -260,42 +438,13 @@ def _salvage_opening(text):
     every balance on screen was short by it. A depth-0 key can only be wrapper
     text whose brace was lost, so it is believed — but only after the whole
     scan finds no depth-1 candidate, so an intact wrapper always wins."""
-    depth = 0
-    in_str = False
-    esc = False
-    at_zero = None
-    i = 0
-    n = len(text)
-    while i < n:
-        ch = text[i]
-        if in_str:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_str = False
-            i += 1
-            continue
-        if ch == '"':
-            if depth in (0, 1) and text.startswith('"opening"', i):
-                m = _re.match(r'"opening"\s*:\s*(-?\d+(?:\.\d+)?)', text[i:])
-                if m:
-                    try:
-                        val = float(m.group(1))
-                    except ValueError:
-                        val = None
-                    if depth == 1:
-                        return val
-                    if at_zero is None:
-                        at_zero = val
-            in_str = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-        i += 1
-    return at_zero
+    raw = _salvage_wrapper_value(text, "opening", r"-?\d+(?:\.\d+)?")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 class Accounting(nbapp.AppWindow):
@@ -384,19 +533,40 @@ class Accounting(nbapp.AppWindow):
         return {"tx": [dict(t) for t in self.tx], "opening": self.opening}
 
     def _undo_restore(self, state):
+        before = self._undo_snapshot()
+        before_shown = getattr(self, "_shown", self._PAGE)
+        self.tx = [dict(t) for t in (state.get("tx") or [])]
+        self.opening = state.get("opening", 0.0)
+        # Back to the first page: the entry the step concerns is far more likely
+        # to be near the top than wherever the reader had paged to.
+        self._shown = self._PAGE
+        if not self._autosave():
+            self.tx = [dict(t) for t in before["tx"]]
+            self.opening = before["opening"]
+            self._shown = before_shown
+            # Repair best-effort in case a writer failed after publishing; the
+            # status line already holds the original error and is not cleared
+            # by a successful retry.
+            self._autosave()
+            self._refresh()
+            return False
         overlays = (self._close_confirm, self._close_edit)
         for close in overlays:
             try:
                 close()
             except Exception:
                 pass
-        self.tx = [dict(t) for t in (state.get("tx") or [])]
-        self.opening = state.get("opening", 0.0)
-        # Back to the first page: the entry the step concerns is far more likely
-        # to be near the top than wherever the reader had paged to.
-        self._shown = self._PAGE
-        self._autosave()          # an undone deletion must survive the close too
+        # THE STATUS LINE WAS STILL DESCRIBING THE STEP THAT WAS JUST TAKEN
+        # BACK: "Entry deleted" over a ledger with the entry back in it,
+        # "Entry added" over a ledger without it, "Opening balance set" over an
+        # opening balance of $0.00. _flash holds its sentence until the next
+        # committed action overwrites it, and stepping backwards is not one, so
+        # the untrue sentence simply stayed — on the one screen whose job is to
+        # be right about somebody's money. Cleared rather than reworded: the
+        # ledger under it already shows what the step did.
+        self._flash("")
         self._refresh()
+        return True
 
     # ------------------------------------------------------------- persistence
     @staticmethod
@@ -504,8 +674,15 @@ class Accounting(nbapp.AppWindow):
         if not os.path.exists(TX_FILE):
             return st
         try:
-            with open(TX_FILE, encoding="utf-8") as fh:
-                text = fh.read()
+            text = _read_ledger_text()
+        except LedgerTooLarge:
+            # A valid giant JSON value would evade the shared parse-damage
+            # guard. Do not run salvage over it on the UI thread, and require
+            # the app-aware move before an empty fallback ledger may save.
+            st["damaged"] = True
+            st["quarantine"] = True
+            st["note"] = _unreadable_note()
+            return st
         except Exception:
             text = ""
         try:
@@ -523,6 +700,11 @@ class Accounting(nbapp.AppWindow):
             op = _salvage_opening(text)
             if op is not None:
                 st["opening"] = _cents(self._num(op, 0.0))
+            # The wrapper carries the view preference too, and recovery used to
+            # drop it: a chart the user had hidden came back showing.
+            chart = _salvage_chart(text)
+            if chart is not None:
+                st["chart"] = chart
             n = len(st["tx"])
             st["note"] = _recovered_note(n) if n else _unreadable_note()
             return st
@@ -590,7 +772,9 @@ class Accounting(nbapp.AppWindow):
             # disk, exactly when saves fail too) spent the only chance — and
             # the first save after the disk came back then wrote straight over
             # the original bytes with no aside. Measured: asides [], file gone.
-            if self._quarantine_pending and self._quarantine():
+            if self._quarantine_pending:
+                if not self._quarantine():
+                    raise OSError("could not preserve the unrecognized ledger")
                 self._quarantine_pending = False
             payload = dict(getattr(self, "_extra", None) or {})
             # `opening` and `chart` go BEFORE the tx array. json.dump writes
@@ -606,6 +790,7 @@ class Accounting(nbapp.AppWindow):
                             "tx": self.tx})
             nbapp.atomic_write_json(TX_FILE, payload)
             self._save_warned = False
+            return True
         except Exception as exc:
             # See academics._save_to_disk. A silently failed write is the worst
             # thing a ledger can do: the app carries on showing a balance that
@@ -617,6 +802,7 @@ class Accounting(nbapp.AppWindow):
                     self._flash(nbapp.save_failure_reason(exc, TX_FILE))
                 except Exception:
                     pass
+            return False
 
     def _on_destroy(self, *_):
         # Idempotent, and the gate is raised FIRST: "destroy" can reach this
@@ -666,13 +852,22 @@ class Accounting(nbapp.AppWindow):
     def _missing_msg(desc, amt_n, raw=""):
         """Precise, novice-friendly prompt naming exactly what an entry is
         missing — so a blocked commit says why instead of silently doing
-        nothing."""
+        nothing.
+
+        SOMEBODY WHO TYPED A NUMBER IS NEVER TOLD TO TYPE ONE. Every shape this
+        app refuses gets its own sentence: too small, too big, or written in a
+        way the ledger does not read ("4,75"). Only a field with no number in it
+        at all is answered with "Enter an amount"."""
         if not desc and amt_n is None:
             return _t("Enter a description and an amount")
         if not desc:
             return _t("Enter a description")
+        if Accounting._huge_amount(raw):
+            return _t("Enter an amount below $100,000,000.00")
         if Accounting._tiny_amount(raw):
             return _t("Enter an amount of at least $0.01")
+        if Accounting._odd_shape(raw):
+            return _t("Use digits and a period, like 4.75")
         return _t("Enter an amount")
 
     # ------------------------------------------------------------------ export
@@ -731,7 +926,8 @@ class Accounting(nbapp.AppWindow):
                     # Bare numbers, no "$" and no thousands separators: a
                     # spreadsheet reads these as numbers it can add up, where
                     # "$1,234.56" arrives as text and every sum comes to zero.
-                    w.writerow([t.get("iso", ""), t["date"], t["desc"],
+                    w.writerow([t.get("iso", ""), t["date"],
+                                _csv_text(t["desc"]),
                                 "%.2f" % -amt if amt < 0 else "",
                                 "%.2f" % amt if amt > 0 else "",
                                 "%.2f" % bal])
@@ -1292,13 +1488,13 @@ class Accounting(nbapp.AppWindow):
 
         seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         seg.get_style_context().add_class("segbox")
-        self.btn_debit = Gtk.Button(label=_t("Debit"))
+        self.btn_debit = Gtk.ToggleButton(label=_t("Debit"))
         self.btn_debit.set_relief(Gtk.ReliefStyle.NONE)
         self.btn_debit.get_style_context().add_class("seg")
         self.btn_debit.get_style_context().add_class("segon")
         self.btn_debit.set_tooltip_text(_t("Money out of the account"))
         self.btn_debit.connect("clicked", lambda *_: self._set_dir("debit"))
-        self.btn_credit = Gtk.Button(label=_t("Credit"))
+        self.btn_credit = Gtk.ToggleButton(label=_t("Credit"))
         self.btn_credit.set_relief(Gtk.ReliefStyle.NONE)
         self.btn_credit.get_style_context().add_class("seg")
         self.btn_credit.set_tooltip_text(_t("Money into the account"))
@@ -1405,28 +1601,35 @@ class Accounting(nbapp.AppWindow):
         except Exception:
             pass
 
+    @staticmethod
+    def _today_stamp():
+        """(short English date, iso date) for today — the SOURCE of what gets
+        stored. The label built from it is translated on screen, which is right
+        for a date and wrong for a store, so the store is never read off it."""
+        now = time.localtime()
+        months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        return ("%d %s" % (now.tm_mday, months[now.tm_mon - 1]),
+                "%04d-%02d-%02d" % (now.tm_year, now.tm_mon, now.tm_mday))
+
     def _stamp_today(self):
         """Refresh the form's date label to today so a long-open window never
         stamps a new entry with a stale day."""
         try:
-            now = time.localtime()
-            months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
-            self._form_date = "%d %s" % (now.tm_mday, months[now.tm_mon - 1])
-            self._form_iso = "%04d-%02d-%02d" % (now.tm_year, now.tm_mon,
-                                                   now.tm_mday)
+            self._form_date, self._form_iso = self._today_stamp()
             self.fdate.set_text(self._form_date)
         except Exception:
             pass
 
     def _set_dir(self, d):
         self.fdir = d
-        for b, name in ((self.btn_debit, "debit"), (self.btn_credit, "credit")):
-            ctx = b.get_style_context()
-            if name == d:
-                ctx.add_class("segon")
-            else:
-                ctx.remove_class("segon")
+        # Debit/Credit are toggle buttons (so the chosen direction is readable
+        # to assistive technology), and Gtk.ToggleButton.set_active emits
+        # "clicked": restating the pair from inside its own click handler
+        # re-entered _set_dir until the stack blew. choose_segment lights the
+        # row with every handler blocked — no second call at all.
+        nbapp.choose_segment((("debit", self.btn_debit),
+                              ("credit", self.btn_credit)), d, "segon")
 
     @staticmethod
     def _parse_amount(raw):
@@ -1445,33 +1648,69 @@ class Accounting(nbapp.AppWindow):
         refusal path can only answer with `_missing_msg`, whose own docstring
         records that saying "Enter an amount" to somebody who plainly typed one
         reads as a bug. Rounding is also what the persisted contract has always
-        been — "12.345" is 12.35 and "1e3" is 1000.00."""
+        been — "12.345" is 12.35 and "1e3" is 1000.00.
+
+        A BARE POINT IS STILL A NUMBER. The shape used to demand digits on both
+        sides of it, so ".5" and "5." — which are not ambiguous to anybody —
+        were refused, and the refusal said "Enter an amount" to somebody who
+        plainly had. They parse now; a decimal COMMA ("4,75") is still refused,
+        because in this ledger a comma groups thousands and guessing which one
+        somebody meant is not a thing to do with money, but `_missing_msg` now
+        says what to type instead of claiming nothing was typed.
+
+        Anything above MAX_AMOUNT is refused as well — see that constant for the
+        two reasons — and `_missing_msg` names the limit."""
         s = (raw or "").strip().replace(MINUS, "-")
-        if not _re.match(r'^[-+]?\$?(?:\d{1,3}(?:,\d{3})+|\d+)'
-                         r'(?:\.\d+)?(?:[eE][-+]?\d+)?$', s, _re.ASCII):
+        if not _re.match(r'^[-+]?\$?(?:\d{1,3}(?:,\d{3})+(?:\.\d*)?'
+                         r'|\d+(?:\.\d*)?|\.\d+)'
+                         r'(?:[eE][-+]?\d+)?$', s, _re.ASCII):
             return None
-        s = s.replace(",", "").replace("$", "")
-        try:
-            v = abs(float(s))
-        except (TypeError, ValueError):
-            return None
-        if not math.isfinite(v):
+        v = Accounting._as_decimal(s)
+        if v is None or not v.is_finite():
             return None
         v = _cents(v)
+        if v > MAX_AMOUNT:
+            return None
         return v if v else None
+
+    @staticmethod
+    def _as_decimal(raw):
+        """abs(Decimal) of a typed amount with the money furniture ($, thousands
+        commas, the typographic minus) taken off, or None when it is not a
+        number at all. Says nothing about the SHAPE — that is _parse_amount's
+        job — only whether there is a quantity in there to talk about."""
+        s = (raw or "").strip().replace(",", "").replace("$", "") \
+            .replace(MINUS, "-")
+        try:
+            return abs(Decimal(s))
+        except (TypeError, ValueError, InvalidOperation):
+            return None
 
     @staticmethod
     def _tiny_amount(raw):
         """True when `raw` IS a number, but one too small to record as money
         ("0", "0.00", "0.004"). Answering "Enter an amount" to someone who
         plainly did would read as a bug, so the two cases get different words."""
-        s = (raw or "").strip().replace(",", "").replace("$", "") \
-            .replace(MINUS, "-")
-        try:
-            v = abs(float(s))
-        except (TypeError, ValueError):
+        v = Accounting._as_decimal(raw)
+        return v is not None and v.is_finite() and _cents(v) == 0
+
+    @staticmethod
+    def _huge_amount(raw):
+        """True when `raw` IS a number, but a bigger one than this ledger
+        accepts — see MAX_AMOUNT."""
+        v = Accounting._as_decimal(raw)
+        return v is not None and v.is_finite() and v > Decimal(str(MAX_AMOUNT))
+
+    @staticmethod
+    def _odd_shape(raw):
+        """True when `raw` holds a quantity this app can read but not in the
+        shape it stores: a decimal comma ("4,75"), mis-grouped thousands
+        ("1,23,456"), digits outside ASCII ("٣"). Reached only after
+        `_parse_amount` has already refused it, so it is never asked about an
+        amount that was fine."""
+        if not (raw or "").strip():
             return False
-        return math.isfinite(v) and _cents(v) == 0
+        return Accounting._as_decimal(raw) is not None
 
     def _on_add(self, *_):
         raw = self.f_amt.get_text()
@@ -1498,13 +1737,28 @@ class Accounting(nbapp.AppWindow):
         # with no date at all, and the cache is only populated once the form has
         # been toggled open — so every other route to a committed entry
         # (a selftest, anything programmatic) produced exactly that.
-        shown = getattr(self, "_form_date", None) or self.fdate.get_text()
+        # NEVER self.fdate.get_text(): that label is translated in place
+        # (nbi18n rewrites month names inside a date-shaped string), so the
+        # fallback wrote "17 août" into tx[].date — and _iso_for() cannot
+        # parse a French month, so the same row reached the store, the CSV
+        # and the PDF with NO iso date at all. _stamp_today keeps the pair
+        # authoritative; _today_stamp() is the same computation for any route
+        # that commits an entry without opening the form.
+        shown = getattr(self, "_form_date", None) or self._today_stamp()[0]
         entry = {"date": shown,
-                 "iso": getattr(self, "_form_iso", "") or self._iso_for(shown),
+                 "iso": (getattr(self, "_form_iso", "")
+                         or self._today_stamp()[1]),
                  "desc": desc, "amt": amt}
         self.undo.checkpoint("Add Entry")
         self.tx.append(entry)
-        self._autosave()   # persist immediately — a committed entry must survive
+        if not self._autosave():
+            # Keep the form intact for retry and never show a balance/row that
+            # the next launch will lose. Commit sees the restored model and
+            # merely clears the pending structural label.
+            self.tx.pop()
+            self.undo.commit()
+            self.f_amt.grab_focus()
+            return
         self.f_desc.set_text("")
         self.f_amt.set_text("")
         # A committed entry must be VISIBLE. If a search is on that the new
@@ -1537,6 +1791,10 @@ class Accounting(nbapp.AppWindow):
         day, mon, year = parts
         if year is None:
             year = time.localtime().tm_year
+        if not _date_exists(day, mon, year):
+            # "31 Feb" is a typo, not a date: written into the machine-readable
+            # column it becomes 2026-02-31, which no spreadsheet can read.
+            return ""
         try:
             return "%04d-%02d-%02d" % (year, mon, day)
         except (TypeError, ValueError):
@@ -1713,6 +1971,7 @@ class Accounting(nbapp.AppWindow):
             display = [r for r in display if self._matches(r[1], self._terms)]
         self._sync_find(display)
 
+        self._more_button = None
         for child in self.rows.get_children():
             self.rows.remove(child)
         if not display:
@@ -1761,7 +2020,18 @@ class Accounting(nbapp.AppWindow):
         except (TypeError, ValueError):
             hay = "%s %s" % (t.get("desc", ""), t.get("date", ""))
         hay = hay.lower()
-        return all(term.replace(MINUS, "-") in hay for term in terms)
+        folded = None
+        for term in terms:
+            term = term.replace(MINUS, "-")
+            if term in hay:
+                continue
+            # Only then the accent-blind pass, so the common query costs
+            # nothing: "cafe" has to find "Café crème" (see _fold).
+            if folded is None:
+                folded = _fold(hay)
+            if _fold(term) not in folded:
+                return False
+        return True
 
     def _on_search(self, entry):
         """Track the query eagerly, but coalesce keystroke bursts: rebuilding
@@ -1834,15 +2104,25 @@ class Accounting(nbapp.AppWindow):
         box.pack_start(cnt, False, False, 0)
         btn.add(box)
         btn.connect("clicked", self._show_more)
+        self._more_button = btn
         return btn
 
-    def _show_more(self, *_):
+    def _show_more(self, button=None, *_):
         # No scroll-position juggling needed: _refresh removes and re-adds every
         # row inside one call, so the main loop never sees the empty box and the
         # scrollbar's upper bound never collapses. Measured both ways at 400
         # entries — the reader stays exactly where they were.
+        restore_focus = bool(button is not None and button.has_focus())
+        self._more_button = None
         self._shown += self._PAGE
         self._refresh()
+        if restore_focus:
+            target = getattr(self, "_more_button", None)
+            if target is None:
+                children = self.rows.get_children()
+                target = children[-1] if children else None
+            if target is not None:
+                target.grab_focus()
 
     def _tx_row(self, t, running, idx):
         # Each posted row is a relief-less button: clicking (or Enter/Space on a
@@ -1887,7 +2167,8 @@ class Accounting(nbapp.AppWindow):
         date.set_max_width_chars(1)
         box.pack_start(date, False, False, 0)
 
-        desc = Gtk.Label(label=t["desc"], xalign=0)
+        desc = Gtk.Label(xalign=0)
+        _set_user_text(desc, t["desc"])
         desc.get_style_context().add_class("txdesc")
         desc.set_ellipsize(3)
         box.pack_start(desc, True, True, 0)
@@ -2012,13 +2293,13 @@ class Accounting(nbapp.AppWindow):
         self._e_amt.connect("activate", lambda *_: self._save_edit())
         seg = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         seg.get_style_context().add_class("segbox")
-        self._e_btn_debit = Gtk.Button(label=_t("Debit"))
+        self._e_btn_debit = Gtk.ToggleButton(label=_t("Debit"))
         self._e_btn_debit.set_relief(Gtk.ReliefStyle.NONE)
         self._e_btn_debit.get_style_context().add_class("seg")
         self._e_btn_debit.set_tooltip_text(_t("Money out of the account"))
         self._e_btn_debit.connect("clicked",
                                   lambda *_: self._e_set_dir("debit"))
-        self._e_btn_credit = Gtk.Button(label=_t("Credit"))
+        self._e_btn_credit = Gtk.ToggleButton(label=_t("Credit"))
         self._e_btn_credit.set_relief(Gtk.ReliefStyle.NONE)
         self._e_btn_credit.get_style_context().add_class("seg")
         self._e_btn_credit.set_tooltip_text(_t("Money into the account"))
@@ -2092,13 +2373,9 @@ class Accounting(nbapp.AppWindow):
     def _e_set_dir(self, d):
         """Toggle the editor's Debit/Credit segmented control."""
         self._edir = d
-        for b, name in ((self._e_btn_debit, "debit"),
-                        (self._e_btn_credit, "credit")):
-            ctx = b.get_style_context()
-            if name == d:
-                ctx.add_class("segon")
-            else:
-                ctx.remove_class("segon")
+        # same trap as _set_dir: a toggle row restated from its own handler
+        nbapp.choose_segment((("debit", self._e_btn_debit),
+                              ("credit", self._e_btn_credit)), d, "segon")
 
     def _save_edit(self):
         """Write the editor fields back onto self.tx[idx], cent-accurate, then
@@ -2123,18 +2400,46 @@ class Accounting(nbapp.AppWindow):
             return
         amt = amt_n if self._edir == "credit" else -amt_n
         date = self._e_date.get_text().strip() or str(self.tx[idx]["date"])
+        if _impossible_date(date):
+            # A day the calendar does not have is refused the way an unusable
+            # amount is: said here, editor left open, nothing committed. It used
+            # to be taken — "31 Feb" saved with "Entry updated" and exported as
+            # 2026-02-31 in the column a spreadsheet sorts on. Free text the app
+            # cannot read as a date is still allowed through (see _edited_iso);
+            # this is only the case where the user wrote a real day and month
+            # and there is no such day.
+            try:
+                self._e_err.set_text(_t("Enter a date that exists"))
+                self._e_err.show()
+            except Exception:
+                pass
+            self._e_date.grab_focus()
+            return
         # REBUILT, so anything not named here is dropped. "iso" is carried over
         # explicitly: editing a description must not quietly cost the entry the
         # only machine-readable date it has, and the editor exposes the SHORT
         # date only — the user is retyping "6 Aug", not a year.
         self.undo.checkpoint("Edit Entry")
-        entry = dict(self.tx[idx])
+        old_entry = self.tx[idx]
+        entry = dict(old_entry)
         entry.update({"date": date, "desc": desc, "amt": amt})
         iso = self._edited_iso(self.tx[idx], date)
         if iso:
             entry["iso"] = iso
+        else:
+            # The edited display text no longer identifies a sortable date.
+            # `entry` began as a copy of the old row, so doing nothing here
+            # retained its old ISO value and made CSV export claim that free
+            # text such as "sometime soon" meant the row's previous date.
+            entry.pop("iso", None)
         self.tx[idx] = entry
-        self._autosave()         # a committed edit must survive
+        if not self._autosave():
+            # Keep the attempted values in the still-open widgets, but never
+            # let the row/balance claim an edit that is absent from disk.
+            self.tx[idx] = old_entry
+            self.undo.commit()   # equal restored state: clear pending label
+            self._e_desc.grab_focus()
+            return
         self._close_edit()
         self._refresh()
         self.undo.commit()
@@ -2176,6 +2481,9 @@ class Accounting(nbapp.AppWindow):
                                                fix.
           * the text is not a date at all   -> nothing to derive; it stays in
                                                `date` as the user's own words.
+          * the day does not exist          -> none. "31 Feb" used to be built
+                                               into 2026-02-31 and exported as
+                                               the row's sortable date.
         """
         iso = old.get("iso")
         if str(new_date) == str(old.get("date", "")):
@@ -2191,6 +2499,8 @@ class Accounting(nbapp.AppWindow):
                 year = int(str(iso).split("-")[0])
             except ValueError:
                 return None
+        if not _date_exists(day, mon, year):
+            return None
         return "%04d-%02d-%02d" % (year, mon, day)
 
     def _confirm_delete(self, idx):
@@ -2301,8 +2611,13 @@ class Accounting(nbapp.AppWindow):
         if not (0 <= idx < len(self.tx)):
             return
         self.undo.checkpoint("Delete Entry")
-        del self.tx[idx]
-        self._autosave()         # a deletion must survive too
+        deleted = self.tx.pop(idx)
+        if not self._autosave():
+            # The ledger on disk still contains this row. Keep the visible
+            # model aligned with it, leave the editor open for retry, and do
+            # not create an undo step or claim that deletion succeeded.
+            self.tx.insert(idx, deleted)
+            return
         self._close_confirm()
         self._close_edit()
         self._refresh()
@@ -2366,21 +2681,29 @@ class Accounting(nbapp.AppWindow):
         # An account can be overdrawn, so the opening balance has a direction
         # exactly as an entry does — and for the same reason the entry form has
         # one: _parse_amount deliberately strips the sign.
+        # THE CHOSEN DIRECTION HAS TO BE VISIBLE. This pair used to be plain
+        # buttons carrying a ".dirbtn"/".on" class that NO STYLESHEET DEFINED —
+        # not this app's, not the theme's — so picking one painted nothing:
+        # measured, "In credit" and "Overdrawn" render the identical background
+        # (248,247,242) and ink (26,25,22) whichever is selected, and the only
+        # way to find out which way the balance was going was to save and look
+        # at the figure. ".segbox"/".seg"/".segon" are the rules the
+        # Debit/Credit pair on the entry form is already lit with, and a
+        # ToggleButton states which one is on to assistive technology as well.
         self._odir = "credit" if self.opening >= 0 else "debit"
         dirs = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        dirs.get_style_context().add_class("dirseg")
+        dirs.get_style_context().add_class("segbox")
         self._o_btns = {}
         for key, label in (("credit", _t("In credit")),
                            ("debit", _t("Overdrawn"))):
-            b = Gtk.Button(label=label)
+            b = Gtk.ToggleButton(label=label)
             b.set_relief(Gtk.ReliefStyle.NONE)
-            b.get_style_context().add_class("dirbtn")
-            if key == self._odir:
-                b.get_style_context().add_class("on")
+            b.get_style_context().add_class("seg")
             b.connect("clicked", lambda _b, k=key: self._set_odir(k))
             self._o_btns[key] = b
             dirs.pack_start(b, True, True, 0)
         card.pack_start(dirs, False, False, 0)
+        self._set_odir(self._odir)
 
         self._o_err = Gtk.Label(xalign=0)
         self._o_err.get_style_context().add_class("formerr")
@@ -2429,10 +2752,17 @@ class Accounting(nbapp.AppWindow):
             pass
 
     def _set_odir(self, key):
+        """Light the chosen opening-balance direction across its pair.
+
+        Through choose_segment for the reason _set_dir goes through it: these
+        are toggles, and Gtk.ToggleButton.set_active emits "clicked", so
+        restating the row from inside its own click handler would re-enter this
+        method — the trap that bit four apps in this OS."""
         self._odir = key
-        for k, b in getattr(self, "_o_btns", {}).items():
-            ctx = b.get_style_context()
-            (ctx.add_class if k == key else ctx.remove_class)("on")
+        btns = getattr(self, "_o_btns", {})
+        nbapp.choose_segment(
+            tuple((k, btns[k]) for k in ("credit", "debit") if k in btns),
+            key, "segon")
 
     def _save_opening(self):
         """Commit the opening balance. Empty means zero — the way to clear it."""
@@ -2450,8 +2780,13 @@ class Accounting(nbapp.AppWindow):
         else:
             n = 0.0
         self.undo.checkpoint("Opening Balance")
+        old_opening = self.opening
         self.opening = _cents(n if self._odir == "credit" else -n)
-        self._autosave()
+        if not self._autosave():
+            self.opening = old_opening
+            self.undo.commit()
+            self._o_amt.grab_focus()
+            return
         self._close_edit()
         self._refresh()
         self.undo.commit()
@@ -2808,13 +3143,13 @@ class Accounting(nbapp.AppWindow):
         .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .sidebar *, .ledger * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .sidehead { padding: 24px 24px 18px; border-bottom: 1px solid #D7D2C5; }
-        .caption { font-size: 11px; letter-spacing: 2px; color: #9A9484;
+        .caption { font-size: 11px; letter-spacing: 2px; color: #6E695E;
                    font-weight: 600; margin-bottom: 6px; }
         .balance { font-size: 34px; font-weight: 700; color: #1A1916; }
 
         .statlist { padding: 16px 24px 8px; }
         .statrow { padding: 9px 0; border-bottom: 1px solid #D7D2C5; }
-        .statcap { font-size: 11px; letter-spacing: 1.5px; color: #9A9484;
+        .statcap { font-size: 11px; letter-spacing: 1.5px; color: #6E695E;
                    font-weight: 600; }
         .statval { font-size: 15px; color: #1A1916; font-weight: 500; }
         .statval.credit { color: #4F6B45; }
@@ -2842,7 +3177,7 @@ class Accounting(nbapp.AppWindow):
         .addrow { margin: 10px 48px 10px; padding: 13px 18px;
                   border: 1px dashed #C9C4B6; border-radius: 8px;
                   background: transparent; box-shadow: none; }
-        .addrow label { font-size: 14px; color: #8A857A; }
+        .addrow label { font-size: 14px; color: #6E695E; }
         .addrow:hover { border-color: #B3AD9E; background: #FCFBF8; }
         .entryform { margin: 0 48px 12px; padding: 8px 14px; min-height: 52px;
                      border: 1px solid #C9C4B6; border-radius: 8px;
@@ -2851,7 +3186,7 @@ class Accounting(nbapp.AppWindow):
            sitting in the form's own gutter so it lines up with the fields */
         .formerr { color: #C8341E; font-size: 12px; font-weight: 600;
                    margin: 0 48px 10px; }
-        .fdate { font-size: 13px; color: #8A857A; }
+        .fdate { font-size: 13px; color: #6E695E; }
         .finput { min-height: 36px; border: 1px solid #C9C4B6; border-radius: 8px;
                   background: #FCFBF8; padding: 0 10px; font-size: 14px;
                   color: #1A1916; }
@@ -2862,7 +3197,7 @@ class Accounting(nbapp.AppWindow):
                box-shadow: none; }
         /* selected direction: darker-beige chrome with the signage-red active
            marker (never a black fill) - matches the OS selected-state idiom */
-        .segon { background: #EAE3D2; color: #C8341E; font-weight: 700; }
+        .segon { background: #EAE3D2; color: #B12D19; font-weight: 700; }
         .segon:hover { background: #EAE3D2; }
         /* primary commit button: a solid darker-beige paper button (signage-red
            is reserved for the active marker and the destructive Delete) */
@@ -2871,7 +3206,7 @@ class Accounting(nbapp.AppWindow):
                   font-size: 13px; font-weight: 600; box-shadow: none; }
         .addbtn:hover { background: #EAE3D2; border-color: #B3AD9E; }
 
-        .colhead label { font-size: 11px; letter-spacing: 1px; color: #8A857A;
+        .colhead label { font-size: 11px; letter-spacing: 1px; color: #6E695E;
                          font-weight: 600; }
         /* Ledger column header: a hairline underline, not the heavy ink rule it
            used to be. A solid #1A1916 line read as a black slab across the full
@@ -2889,19 +3224,19 @@ class Accounting(nbapp.AppWindow):
                  border-radius: 0; background: transparent; box-shadow: none; }
         .txrow:hover { background: #F4F2EC; }
         .txrow:focus { background: #F1EEE6; }
-        .txdate { font-size: 14px; color: #8A857A; }
+        .txdate { font-size: 14px; color: #6E695E; }
         .txdesc { font-size: 15px; color: #1A1916; }
         .txdebit { font-size: 15px; font-weight: 600; color: #A23B2B; }
         .txcredit { font-size: 15px; font-weight: 600; color: #4F6B45; }
         .txbal { font-size: 15px; color: #3A362E; }
-        .emptystate { padding: 60px 0; font-size: 14px; color: #9A9484; }
+        .emptystate { padding: 60px 0; font-size: 14px; color: #6E695E; }
         /* paged-ledger footer: reads as the next ledger line, not as a button
            bolted onto the bottom of the table */
         .morerow { min-height: 62px; padding: 0; margin: 0; border: none;
                    border-radius: 0; background: transparent; box-shadow: none; }
         .morerow:hover { background: #F4F2EC; }
         .morelab { font-size: 14px; font-weight: 600; color: #3A362E; }
-        .morecount { font-size: 12px; color: #9A9484; }
+        .morecount { font-size: 12px; color: #6E695E; }
 
         /* The veil behind every overlay card. This app built four scrims (the
            row editor, the delete confirm, the opening balance and the report)
@@ -2926,7 +3261,7 @@ class Accounting(nbapp.AppWindow):
                      font-size: 20px; font-weight: 600; color: #1A1916;
                      margin-bottom: 2px; }
         .editcard .caption { font-size: 10px; letter-spacing: 1.5px;
-                             color: #9A9484; font-weight: 600;
+                             color: #6E695E; font-weight: 600;
                              margin-bottom: 0; }
         /* inline validation line in the editor: signage-red as an alert */
         .editerr { color: #C8341E; font-size: 12px; font-weight: 600; }
@@ -2935,7 +3270,7 @@ class Accounting(nbapp.AppWindow):
                    font-size: 13px; font-weight: 600; box-shadow: none; }
         .savebtn:hover { background: #EAE3D2; border-color: #B3AD9E; }
         .cancelbtn { min-height: 36px; padding: 0 14px; background: transparent;
-                     color: #8A857A; border: none; box-shadow: none;
+                     color: #6E695E; border: none; box-shadow: none;
                      font-size: 13px; font-weight: 600; }
         .cancelbtn:hover { color: #1A1916; }
         /* Delete is destructive - signage-red as an alert. An outline in the
@@ -2968,7 +3303,7 @@ class Accounting(nbapp.AppWindow):
                     font-size: 20px; font-weight: 600; color: #1A1916;
                     margin-bottom: 10px; }
         .sumrow { padding: 8px 0; border-bottom: 1px solid #EFEBE0; }
-        .sumkey { font-size: 11px; letter-spacing: 1.5px; color: #9A9484;
+        .sumkey { font-size: 11px; letter-spacing: 1.5px; color: #6E695E;
                   font-weight: 600; }
         .sumval { font-size: 16px; color: #1A1916; font-weight: 500; }
         .sumval.credit { color: #4F6B45; }

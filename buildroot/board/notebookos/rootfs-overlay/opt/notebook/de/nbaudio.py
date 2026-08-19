@@ -37,6 +37,7 @@ and be told so, not crash on the way.
 import os
 import re
 import subprocess
+import tempfile
 import time
 
 PROC = "/proc/asound"
@@ -74,6 +75,7 @@ CHOICE = os.path.join(HOME, ".config", "notebook", "audio-output")
 ANALOG_CTLS = ("Master", "Speaker", "Headphone", "PCM", "Front",
                "Front Speaker", "Line-Out")
 DIGITAL_CTLS = tuple(["IEC958"] + ["IEC958,%d" % i for i in range(1, 8)])
+PLAYBACK_CTLS = ("Master", "Speaker", "PCM", "Front")
 
 
 def _run(cmd, timeout=4):
@@ -90,6 +92,20 @@ def _read(path):
             return fh.read()
     except OSError:
         return ""
+
+
+def playback_control(card=None, require_switch=False, runner=None):
+    """First usable analog level control, in the same order as media keys."""
+    runner = runner or _run
+    base = ["amixer", "-M"] + (["-c", str(card)] if card is not None else [])
+    for control in PLAYBACK_CTLS:
+        rc, out = runner(base + ["get", control])
+        if rc != 0 or re.search(r"\[(\d+)%\]", out) is None:
+            continue
+        if require_switch and "[on]" not in out and "[off]" not in out:
+            continue
+        return control
+    return None
 
 
 # ------------------------------------------------------------------ discovery
@@ -192,11 +208,11 @@ def capture_card(proc=PROC):
     return cap[0] if cap is not None else None
 
 
-_JACK_CACHE = {}          # card -> (when, {device: present})
+_JACK_CACHE = {}          # (card index, stable card id) -> (when, jack map)
 _JACK_TTL = 2.0           # seconds
 
 
-def _jack_map(card):
+def _jack_map(card, card_id=""):
     """{pcm device: is something plugged in} straight from the kernel.
 
     The HDA driver publishes one control per HDMI/DisplayPort pin NAMED WITH ITS
@@ -213,12 +229,20 @@ def _jack_map(card):
     is held, and a subprocess per repeat is not something a keyboard should cost.
     A cable is not plugged in twice in two seconds.
     """
-    hit = _JACK_CACHE.get(card)
-    if hit is not None and (time.monotonic() - hit[0]) < _JACK_TTL:
+    now = time.monotonic()
+    # The media-key process lives for the whole session. Card identities can
+    # churn as USB audio is attached; expired entries must be removed, not just
+    # ignored, or that daemon retains one map per device ever seen.
+    for old_key, (when, _value) in list(_JACK_CACHE.items()):
+        if now - when >= _JACK_TTL:
+            _JACK_CACHE.pop(old_key, None)
+    cache_key = (card, card_id)
+    hit = _JACK_CACHE.get(cache_key)
+    if hit is not None and (now - hit[0]) < _JACK_TTL:
         return hit[1]
     rc, out = _run(["amixer", "-c", str(card), "contents"], timeout=2)
     if rc != 0:
-        _JACK_CACHE[card] = (time.monotonic(), {})
+        _JACK_CACHE[cache_key] = (time.monotonic(), {})
         return {}
     res, pending = {}, None
     for ln in out.splitlines():
@@ -232,7 +256,7 @@ def _jack_map(card):
         if m:
             res[pending] = (m.group(1) == "on")
             pending = None
-    _JACK_CACHE[card] = (time.monotonic(), res)
+    _JACK_CACHE[cache_key] = (time.monotonic(), res)
     return res
 
 
@@ -307,7 +331,7 @@ def outputs(proc=PROC):
             n = hdmi_seen.get(card, 0)
             hdmi_seen[card] = n + 1
             if card not in jacks:
-                jacks[card] = _jack_map(card)
+                jacks[card] = _jack_map(card, cid)
             # The kernel's own pin-to-device statement first; the ELD ordering
             # heuristic only when it has none for this device.
             live = jacks[card].get(dev)
@@ -374,13 +398,14 @@ def _token(key, proc=PROC):
 
 def _untoken(tok, proc=PROC):
     """"PCH:3" -> "hw:1,3" against the cards present NOW, or None if that card
-    is not in this machine any more. Also accepts the old index form so an
-    upgrade does not lose the setting."""
+    is not in this machine any more. Legacy numeric tokens deliberately fail
+    closed: card indexes are probe-order values and may name different hardware
+    on the next boot, so guessing would be worse than returning to auto route."""
     tok = (tok or "").strip()
     if not tok:
         return None
     if re.match(r"hw:\d+,\d+$", tok):
-        return tok
+        return None
     cid, _, dev = tok.rpartition(":")
     if not cid or not dev.isdigit():
         return None
@@ -491,23 +516,53 @@ def unmute(card=None):
         _run(base + ["sset", ctl, level, "unmute"])
 
 
+def enable_route(card=None):
+    """Enable only hardware switches required for digital routing.
+
+    Choosing an output is not a volume or mute action. Analog mixer state is
+    owned by Settings and media keys, so route changes must never force it to
+    85/90% or defeat Silence all sound. HDMI/IEC958 does need its transport
+    switch enabled before any stream can reach the television.
+    """
+    base = ["amixer", "-q", "-M"] + (["-c", str(card)] if card is not None else [])
+    for ctl in DIGITAL_CTLS:
+        _run(base + ["sset", ctl, "unmute"])
+
+
 def _write(path, text):
     """Replace `path` with `text` atomically. False on any filesystem refusal --
     a read-only /etc must not be fatal."""
+    tmp = None
     try:
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, exist_ok=True)
-        tmp = path + ".new"
-        with open(tmp, "w") as fh:
+        fd, tmp = tempfile.mkstemp(prefix=".%s." % os.path.basename(path),
+                                   dir=d or ".", text=True)
+        with os.fdopen(fd, "w") as fh:
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        tmp = None
+        # fsyncing the draft persists its bytes, not the directory entry that
+        # makes the rename survive a sudden power loss. Audio choice is a user
+        # preference, so give the containing directory the same durability as
+        # the locale and document writers.
+        if d:
+            try:
+                dir_fd = os.open(d, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
         return True
     except OSError:
         try:
-            os.unlink(path + ".new")
+            if tmp is not None:
+                os.unlink(tmp)
         except OSError:
             pass
         return False
@@ -524,6 +579,11 @@ def apply(key, proc=PROC):
         key = auto_pick(proc)
     if not key:
         return None
+    # Revalidate immediately before publishing the route.  Output rows and
+    # stable card tokens are snapshots; USB/HDMI hardware can disappear after
+    # either was resolved.  Never install an ALSA default for a vanished PCM.
+    if key not in {item["key"] for item in outputs(proc)}:
+        return None
     m = re.match(r"hw:(\d+),(\d+)$", key)
     if not m:
         return None
@@ -538,11 +598,12 @@ def apply(key, proc=PROC):
         except OSError:
             pass
     elif not _write(LEGACY_ASOUNDRC, text):
-        # Nowhere to put it (read-only root AND no home): un-mute anyway, since
+        # Nowhere to put it (read-only root AND no home): enable digital
+        # transport anyway, since
         # that half needs no file, but say the route was not applied.
-        unmute(card)
+        enable_route(card)
         return None
-    unmute(card)
+    enable_route(card)
     return key
 
 
@@ -552,9 +613,23 @@ def choose(key, proc=PROC):
     Stored by card ID rather than card index -- see _token: the index can mean
     different hardware after a reboot, and a setting that quietly re-points at
     another card is worse than one that is forgotten."""
-    tok = "" if key is None else (_token(key, proc) or "")
-    _write(CHOICE, tok)
-    return apply(key, proc)
+    if key is None:
+        tok = ""
+    else:
+        if key not in {item["key"] for item in outputs(proc)}:
+            # Settings rows describe a live hardware snapshot. A USB/HDMI
+            # output can vanish between drawing the row and handling its click.
+            return None
+        tok = _token(key, proc)
+        if tok is None:
+            # It can also disappear between the output inventory and the
+            # second /proc read that resolves its stable card ID. Never turn
+            # that narrower race into an empty saved preference.
+            return None
+    applied = apply(key, proc)
+    if applied is None:
+        return None
+    return applied if _write(CHOICE, tok) else None
 
 
 def has_volume(key=None, proc=PROC):

@@ -81,8 +81,9 @@ unset _card _drv _d
 
 # Explicit override for testing either path: nb.accel=1 / nb.accel=0.
 if [ -r "$NB_CMDLINE" ]; then
-	grep -qw nb.accel=1 "$NB_CMDLINE" 2>/dev/null && NB_ACCEL=1
-	grep -qw nb.accel=0 "$NB_CMDLINE" 2>/dev/null && NB_ACCEL=0
+	_cmdline=$(cat "$NB_CMDLINE" 2>/dev/null)
+	case " $_cmdline " in *" nb.accel=1 "*) NB_ACCEL=1 ;; esac
+	case " $_cmdline " in *" nb.accel=0 "*) NB_ACCEL=0 ;; esac
 fi
 
 printf '%s\n' "$NB_ACCEL"

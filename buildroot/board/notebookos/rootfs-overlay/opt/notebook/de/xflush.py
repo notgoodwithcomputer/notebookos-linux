@@ -21,13 +21,59 @@ import time
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gdk  # noqa: E402
 
-d = Gdk.Display.get_default()
-if d is not None:
-    ptr = d.get_default_seat().get_pointer()
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 6
+
+DEFAULT_NUDGES = 6
+MAX_NUDGES = 30
+
+
+def nudge_count(value=None):
+    """A safe retry count for the short-lived redraw helper.
+
+    A bad launcher/config value must not crash before the first nudge, and an
+    absurd value must not leave hundreds of sleeping helpers behind. Explicit
+    zero remains useful when diagnosing the software-rendering workaround.
+    """
+    if value is None:
+        return DEFAULT_NUDGES
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_NUDGES
+    return max(0, min(count, MAX_NUDGES))
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    d = Gdk.Display.get_default()
+    if d is None:
+        return 0
+    # During X startup (and briefly while an input device is hotplugged) GDK
+    # may have opened the display before it has a default seat/pointer.  This
+    # is a best-effort paint wakeup, so that transient state must be a no-op,
+    # not an AttributeError from a helper launched for every new window.
+    seat = d.get_default_seat()
+    if seat is None:
+        return 0
+    ptr = seat.get_pointer()
+    if ptr is None:
+        return 0
+    n = nudge_count(argv[0] if argv else None)
     for _ in range(n):
-        screen, x, y = ptr.get_position()
-        ptr.warp(screen, x, y)
-        d.flush()
-        d.sync()
+        try:
+            screen, x, y = ptr.get_position()
+            if screen is None:
+                break
+            ptr.warp(screen, x, y)
+            d.flush()
+            d.sync()
+        except Exception:                                        # noqa: BLE001
+            # The pointer and display are live objects, not snapshots. Input
+            # hot-unplug or an X restart can invalidate either between retry
+            # ticks; the helper has no recovery work beyond stopping cleanly.
+            break
         time.sleep(0.2)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

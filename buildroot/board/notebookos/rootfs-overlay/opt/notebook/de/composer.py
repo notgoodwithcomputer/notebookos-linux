@@ -27,6 +27,7 @@ import cairo
 
 import nbapp
 import nbpicker
+import nbi18n
 from nbi18n import _t
 
 try:
@@ -53,6 +54,20 @@ INSTRUMENTS = (
     ("Saw Wave", 81, "saw"), ("Synth Pad", 88, "triangle"),
     ("FX", 98, "sine"), ("Noise / Drums", 0, "noise"),
 )
+
+
+def _combo_append_user(combo, text):
+    """Add a track the user NAMED to a ComboBoxText verbatim.
+
+    append_text() is one of the setters nbi18n patches, so a track renamed
+    "Bass" was offered as "Basse" while composer.json and the exported MIDI
+    went on saying "Bass". append(id, text) is not patched and fills the same
+    column, so get_active()/get_active_text() read back what was added."""
+    value = str(text or "")
+    try:
+        combo.append(None, value)
+    except Exception:
+        combo.append_text(value)
 
 
 def _show_text(cr, x, y, text, size, bold=False):
@@ -102,14 +117,21 @@ def normalize_song(value):
             sig[1] not in (1, 2, 4, 8, 16, 32) or
             not isinstance(tracks, list) or not tracks):
         raise ValueError("invalid Composer song")
-    out = {"version": 1, "ppq": PPQ, "tempo": int(tempo),
-           "time_signature": [int(sig[0]), int(sig[1])], "tracks": []}
+    # Normalize fields Composer owns while carrying extension fields through.
+    # Session state is saved on close even when the user changed nothing, so a
+    # fixed-schema rebuild here used to erase newer/foreign metadata merely by
+    # opening a valid song in this version.
+    out = copy.deepcopy(value)
+    out.update({"version": 1, "ppq": PPQ, "tempo": int(tempo),
+                "time_signature": [int(sig[0]), int(sig[1])], "tracks": []})
     for ti, tr in enumerate(tracks):
         if not isinstance(tr, dict) or not isinstance(tr.get("notes"), list):
             raise ValueError("invalid track")
-        nt = new_track(tr.get("name", "Track %d" % (ti + 1)),
-                       tr.get("instrument", "Piano"), tr.get("program", 0),
-                       tr.get("percussion", False))
+        nt = copy.deepcopy(tr)
+        nt.update(new_track(tr.get("name", "Track %d" % (ti + 1)),
+                            tr.get("instrument", "Piano"),
+                            tr.get("program", 0),
+                            tr.get("percussion", False)))
         nt["mute"] = bool(tr.get("mute", False))
         for note in tr["notes"]:
             if not isinstance(note, dict):
@@ -120,8 +142,10 @@ def normalize_song(value):
             start, duration, pitch, velocity = vals
             if start < 0 or duration < 1 or not 0 <= pitch <= 127 or not 1 <= velocity <= 127:
                 raise ValueError("invalid note")
-            nt["notes"].append({"start": start, "duration": duration,
-                                "pitch": pitch, "velocity": velocity})
+            normalized_note = copy.deepcopy(note)
+            normalized_note.update({"start": start, "duration": duration,
+                                    "pitch": pitch, "velocity": velocity})
+            nt["notes"].append(normalized_note)
         nt["notes"].sort(key=lambda n: (n["start"], n["pitch"], n["duration"], n["velocity"]))
         out["tracks"].append(nt)
     return out
@@ -711,20 +735,27 @@ class Composer(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__(); self.set_default_size(980, 680)
-        self._path = None; self._read_only = False; self._player = None; self._play_started = 0
+        self._path = None; self._read_only = False; self._session_warning = ""; self._player = None; self._play_started = 0
+        self._play_timer = 0; self._play_generation = 0
         self.song = self._load_session(); self.editor = SongEditor(self.song)
         self.undo = nbapp.UndoHistory(self.editor.snapshot, self._restore)
         self.editor.history = self.undo; self.undo.reset(); self.snap = PPQ // 4
         self.note_duration = PPQ; self.sharp = False; self.dotted = False
         self.connect("destroy", self._destroy); self.connect("key-press-event", self._key)
         self._build(); self._refresh_tracks()
+        if self._session_warning:
+            self.status.set_text(self._session_warning)
 
     def _load_session(self):
         if not os.path.exists(STATE_FILE): return new_song()
         try:
             with open(STATE_FILE, encoding="utf-8") as fh: return normalize_song(json.load(fh))
         except Exception:
-            nbapp.quarantine_unrecognized(STATE_FILE); self._read_only = True; return new_song()
+            nbapp.quarantine_unrecognized(STATE_FILE)
+            self._read_only = os.path.exists(STATE_FILE)
+            if self._read_only:
+                self._session_warning = _t("This could not be saved.")
+            return new_song()
 
     def _save_session(self):
         if self._read_only: return False
@@ -777,10 +808,13 @@ class Composer(nbapp.AppWindow):
         if name == "Track": return [(_t("Add Track"), self._add_track), (_t("Remove Track"), self._remove_track), (_t("Rename Track…"), self._rename_track), (_t("Mute Track"), self._toggle_mute)]
         return [(_t("Play    Space"), self._play), (_t("Stop"), self._stop)]
 
-    def changed(self): self.staff.queue_draw(); self._save_session()
+    def changed(self):
+        self.staff.queue_draw()
+        if not self._save_session():
+            self.status.set_text(_t("This could not be saved."))
     def _refresh_tracks(self):
         self.track_combo.remove_all()
-        for tr in self.editor.song["tracks"]: self.track_combo.append_text(tr["name"])
+        for tr in self.editor.song["tracks"]: _combo_append_user(self.track_combo, tr["name"])
         self.track_combo.set_active(self.editor.track); tr = self.editor.song["tracks"][self.editor.track]; self.mute.set_active(tr["mute"])
         names = [x[0] for x in INSTRUMENTS]; self.instrument.set_active(names.index(tr["instrument"]) if tr["instrument"] in names else 0)
     def _track_changed(self, w):
@@ -847,26 +881,75 @@ class Composer(nbapp.AppWindow):
     def _save(self, *_): return self._write(self._path) if self._path else self._save_as()
     def _save_as(self, *_):
         path = self._choose(True); return self._write(path) if path else False
-    def _export(self, *_): return self._save_as()
+    def _export(self, *_):
+        # Export writes a copy; it must not silently turn that copy into the
+        # song's bound document.  Otherwise the next Ctrl+S overwrites the
+        # export target instead of the file the user opened.
+        path = self._choose(True)
+        if not path:
+            return False
+        bound = self._path
+        try:
+            return self._write(path)
+        finally:
+            self._path = bound
     def _play(self, *_):
         if self._player: return self._stop()
         try:
             fd, path = tempfile.mkstemp(prefix="composer-preview-", suffix=".wav"); os.close(fd); duration = render_preview(self.editor.song, path)
+            self._preview_path = path
             if GST_OK:
-                Gst.init(None); self._player = Gst.ElementFactory.make("playbin", None); self._player.set_property("uri", "file://" + path); self._player.set_state(Gst.State.PLAYING)
+                Gst.init(None); self._player = Gst.ElementFactory.make("playbin", None)
+                if self._player is None:
+                    raise RuntimeError("no playback backend")
+                self._player.set_property("uri", "file://" + path)
+                if self._player.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+                    raise RuntimeError("playback backend refused the preview")
             else:
                 self._player = subprocess.Popen(["aplay", "-q", path])
-            self._preview_path = path; self._play_started = time.monotonic(); self._play_duration = duration; self.play.set_label(_t("Stop")); GLib.timeout_add(40, self._play_tick)
-        except Exception: self._player = None; self.status.set_text(_t("Audio preview is not available."))
-    def _play_tick(self):
+            self._play_started = time.monotonic(); self._play_duration = duration; self.play.set_label(_t("Stop"))
+            self._play_generation += 1
+            generation = self._play_generation
+            self._play_timer = GLib.timeout_add(
+                40, lambda: self._play_tick(generation))
+        except Exception:
+            self._play_failed()
+    def _play_tick(self, generation=None):
+        if generation is not None and generation != self._play_generation:
+            return False
         if not self._player: return False
+        if not GST_OK and hasattr(self._player, "poll") \
+                and self._player.poll() is not None:
+            self._play_failed()
+            return False
+        if GST_OK:
+            try:
+                bus = self._player.get_bus()
+                msg = bus.pop_filtered(Gst.MessageType.ERROR | Gst.MessageType.EOS)
+            except Exception:
+                msg = None
+            if msg is not None:
+                if msg.type == Gst.MessageType.ERROR:
+                    self._play_failed()
+                else:
+                    self._stop()
+                return False
         elapsed = time.monotonic() - self._play_started
         self.staff.playhead_tick = int(elapsed * self.editor.song["tempo"] / 60 * PPQ)
         self.staff.queue_draw()
         self.status.set_text(_t("Playing at beat %d") % int(elapsed * self.editor.song["tempo"] / 60 + 1))
         if elapsed >= self._play_duration: self._stop(); return False
         return True
+    def _play_failed(self):
+        self._stop()
+        self.status.set_text(_t("Audio preview is not available."))
     def _stop(self, *_):
+        self._play_generation = getattr(self, "_play_generation", 0) + 1
+        timer = getattr(self, "_play_timer", 0)
+        if timer:
+            try: GLib.source_remove(timer)
+            except Exception: pass
+            self._play_timer = 0
         if GST_OK and self._player: self._player.set_state(Gst.State.NULL)
         elif self._player:
             try: self._player.terminate()

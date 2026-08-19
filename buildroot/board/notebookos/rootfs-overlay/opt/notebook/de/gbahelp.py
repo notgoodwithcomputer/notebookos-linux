@@ -2421,6 +2421,7 @@ class HelpPane(Gtk.Box):
 
     # -- navigation ----------------------------------------------------------
     def _fill_list(self, topics):
+        self._topic_rows = {}
         for ch in self._list.get_children():
             self._list.remove(ch)
         section = None
@@ -2436,6 +2437,7 @@ class HelpPane(Gtk.Box):
                 self._list.add(row)
             row = Gtk.ListBoxRow()
             row.tid = t.tid
+            self._topic_rows[t.tid] = row
             lab = Gtk.Label(label=t.title, xalign=0.0)
             lab.get_style_context().add_class("helprow")
             lab.set_ellipsize(Pango.EllipsizeMode.END)
@@ -2447,14 +2449,27 @@ class HelpPane(Gtk.Box):
         q = entry.get_text().strip().lower()
         if not q:
             self._fill_list(self.topics)
+            # Clearing a no-result query must restore readable content rather
+            # than leave the body stranded on "No topic contains…" beside a
+            # full navigation list.
+            if self._current in self._by_id:
+                self.show_topic(self._current)
+            elif self.topics:
+                self.show_topic(self.topics[0].tid)
             return
         hits = [t for t in self.topics if q in t.text().lower()]
         self._fill_list(hits or [])
-        if not hits:
+        if hits:
+            # A previous zero-result search replaced the body with its empty
+            # message. Repopulating only the sidebar left that stale message
+            # visible until a row was clicked, making live search look broken.
+            self.show_topic(hits[0].tid)
+        else:
             self._render_empty(q)
 
     def _on_row(self, _list, row):
-        if row is not None and getattr(row, "tid", None):
+        if (not getattr(self, "_syncing_selection", False)
+                and row is not None and getattr(row, "tid", None)):
             self.show_topic(row.tid)
 
     def show_topic(self, tid):
@@ -2462,6 +2477,14 @@ class HelpPane(Gtk.Box):
         if t is None:
             return
         self._current = tid
+        row = getattr(self, "_topic_rows", {}).get(tid)
+        selected = self._list.get_selected_row()
+        if row is not None and selected is not row:
+            self._syncing_selection = True
+            try:
+                self._list.select_row(row)
+            finally:
+                self._syncing_selection = False
         self._render(t)
         adj = self._bsc.get_vadjustment()
         if adj:

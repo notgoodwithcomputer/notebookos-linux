@@ -62,7 +62,10 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Gdk, GLib, GdkPixbuf, Pango  # noqa: E402
 
 import cairo
+import base64
+import hashlib
 import io
+import json
 import math
 import os
 import time
@@ -75,18 +78,44 @@ from nbi18n import _t  # noqa: E402
 
 # The document starts as a small sprite canvas, which is what the zoom is for.
 DEFAULT_CW, DEFAULT_CH = 64, 64
-# 1024 is the largest canvas allowed, and the reason is the flood fill: it is a
-# Python scanline fill, so filling a whole canvas costs a couple of operations
-# per pixel. At 1024x1024 (1M pixels) that is about a second; at 2048x2048 it
-# was four and a half, which is a frozen window. Nothing this app is for — a
-# sprite, a tile, an icon — comes close to the cap.
 # The canvas size Image > Canvas Size will accept. MAX_DIM was 1024 while the
 # module docstring above promised 2048 and the dialog offered no limit at all,
 # so asking for anything larger silently produced a 1024 canvas with nothing on
 # screen to say why — which is indistinguishable from resizing being broken.
 # 2048 is the documented figure and what the entry now accepts; a layer at that
 # size is 16MB of ARGB32, which is why it is a limit at all rather than free.
+# The cap was 1024 for a second reason as well: the flood fill was a per-pixel
+# Python scanline costing about a second per megapixel, so one click of the
+# fill tool on a 2048 canvas froze the window for four and a half seconds.
+# Raising the cap left that behind — the fill now finds its runs with C-level
+# buffer compares (see _run_end), and filling a whole 2048x2048 canvas takes
+# well under a tenth of a second, so every size this dialog offers is a size
+# the tools can actually serve.
 MIN_DIM, MAX_DIM = 1, 2048
+# How many layers a drawing keeps. This is the READER's figure: the saved
+# layer document beside the PNG is only restored up to this many layers (see
+# _read_layer_sidecar, which will not hand an unbounded list of full-canvas
+# surfaces to the app). The writer must never be able to exceed it — a drawing
+# that saved with "Saved" on the chip and came back flattened to one layer,
+# silently, is the layer work gone. So _add_layer stops here too, and says so.
+MAX_LAYERS = 64
+MAX_OPEN_PNG_BYTES = 128 * 1024 * 1024
+MAX_OPEN_PNG_PIXELS = 32 * 1024 * 1024
+
+
+def validate_png_input(path, max_bytes=MAX_OPEN_PNG_BYTES,
+                       max_pixels=MAX_OPEN_PNG_PIXELS):
+    """Reject oversized selected PNGs before Cairo allocates their surface."""
+    if os.path.getsize(path) > max_bytes:
+        return False
+    with open(path, "rb") as source:
+        header = source.read(24)
+    if (len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n"
+            or header[12:16] != b"IHDR"):
+        return False
+    width = int.from_bytes(header[16:20], "big")
+    height = int.from_bytes(header[20:24], "big")
+    return width > 0 and height > 0 and width * height <= max_pixels
 # The two side columns. The dock grew (it absorbed the ribbon) and the Layers
 # panel shrank: at 272 it was the widest column in the window while holding one
 # row of text, and the canvas is what both of them are there to serve.
@@ -142,14 +171,41 @@ ZOOM_STEPS = (1 / 8, 1 / 6, 1 / 4, 1 / 3, 1 / 2,
 GRID_FROM = 8
 
 
-def view_pixel(x, y, zoom, width, height, clamp=False):
+def view_pixel(x, y, zoom, width, height, clamp=False, size=1):
     """Map display coordinates to one document pixel.
 
     `clamp` is for a gesture begun on the surrounding field: its anchor is the
     nearest edge pixel, while ordinary canvas motion remains unclamped so a
-    brush may travel naturally out of bounds and return."""
-    px = int(math.floor(float(x) / float(zoom)))
-    py = int(math.floor(float(y) / float(zoom)))
+    brush may travel naturally out of bounds and return.
+
+    `size` is the width of the footprint that will be stamped here, and it is
+    load-bearing for EVEN sizes. THE BLOB WAS OFFSET FROM THE CROSSHAIR:
+
+    A footprint of an odd width has a middle pixel, so it centres on the pixel
+    the pointer is inside and floor() is exactly right. A footprint of an even
+    width has no middle pixel -- it straddles a pixel BOUNDARY -- and
+    brush_runs necessarily emits it as -n/2 .. +n/2-1, i.e. one row and one
+    column heavier on the top-left. Anchoring that on floor() then adds the
+    pointer's own sub-pixel remainder on the same side, so a size-8 brush
+    painted up and to the left of where the crosshair pointed, by up to a pixel
+    and a half, and it got worse the bigger the brush. Measured: sizes 2, 4, 6,
+    8 and 12 all span -n/2..+n/2-1; sizes 1 and 3 are symmetric and were always
+    correct, which is why a 1px pencil never showed it.
+
+    Rounding instead of flooring for an even footprint anchors it on the
+    NEAREST boundary rather than the one below, so the error is symmetric about
+    the pointer (-0.5..+0.5 px) instead of biased (-1..0 px). The stamp and the
+    outline both come through here, so they still cannot disagree.
+
+    Left at 1 by default: fill and the eyedropper act on the single pixel under
+    the crosshair, and that is floor(), not round()."""
+    u, v = float(x) / float(zoom), float(y) / float(zoom)
+    if int(size) % 2 == 0:
+        px = int(math.floor(u + 0.5))
+        py = int(math.floor(v + 0.5))
+    else:
+        px = int(math.floor(u))
+        py = int(math.floor(v))
     if clamp:
         px = max(0, min(int(width) - 1, px))
         py = max(0, min(int(height) - 1, py))
@@ -165,11 +221,23 @@ def fit_zoom(width, height, available_width, available_height):
 
 
 def paint_field(cr, width, height):
-    """Paint every pixel behind the document with the canvas-field colour."""
+    """Paint every pixel behind the document with the canvas-field colour.
+
+    Saved and restored around, because the context handed to a draw handler is
+    the SAME one its children and its siblings are about to paint on. GTK
+    wraps its own C draw handlers in a cairo_save/cairo_restore; a PyGObject
+    handler carries its own marshaller and is not wrapped, so an operator set
+    here survived into the canvas's draw below. Everything the canvas paints
+    then REPLACED what was under it instead of compositing over it: a new
+    transparent layer wiped the artwork off the screen, an erased pixel and a
+    grown strip came out as a hole rather than the transparency checker, and a
+    layer at 25% dimmed the layers beneath it."""
+    cr.save()
     cr.set_operator(cairo.OPERATOR_SOURCE)
     cr.set_source_rgb(*_rgb("#DED4C2"))
     cr.rectangle(0, 0, width, height)
     cr.fill()
+    cr.restore()
 
 # Bound the Undo/Redo history. A frame stores only the RECTANGLE an edit
 # actually touched (see _begin_edit / _commit_edit), so an ordinary brush stroke
@@ -358,6 +426,50 @@ def px4(hex_):
 
 
 CLEAR4 = b"\x00\x00\x00\x00"
+
+
+def _run_end(buf, row, x, limit, target):
+    """The last x2 in x..limit whose pixels all equal `target`, given that the
+    pixel at x already does. `row` is the byte offset of the row's first pixel.
+
+    The test is a whole-slice compare — `buf[a:b] == target * n`, one memcmp —
+    doubled until it fails and then halved down to the exact end, so a run of
+    any length costs a handful of C-level compares instead of one Python step
+    per pixel. That difference is the whole reason a fill on the largest
+    canvas the app offers takes a moment rather than seconds."""
+    lo = 1                          # pixels known to match, counting from x
+    hi = limit - x + 2              # one past the most that could match
+    n = 2
+    while n < hi and buf[row + x * 4:row + (x + n) * 4] == target * n:
+        lo = n
+        n *= 2
+    hi = min(n, hi)
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if buf[row + x * 4:row + (x + mid) * 4] == target * mid:
+            lo = mid
+        else:
+            hi = mid
+    return x + lo - 1
+
+
+def _run_start(buf, row, x, target):
+    """The first x1 in 0..x whose pixels all equal `target` — _run_end, but
+    walking left from x."""
+    lo = 1
+    hi = x + 2
+    n = 2
+    while n < hi and buf[row + (x - n + 1) * 4:row + (x + 1) * 4] == target * n:
+        lo = n
+        n *= 2
+    hi = min(n, hi)
+    while lo + 1 < hi:
+        mid = (lo + hi) // 2
+        if buf[row + (x - mid + 1) * 4:row + (x + 1) * 4] == target * mid:
+            lo = mid
+        else:
+            hi = mid
+    return x - lo + 1
 
 
 def palette_name(index):
@@ -645,7 +757,12 @@ class Illustrator(nbapp.AppWindow):
         self.history = StackHistory(self)
         self._pending = None      # pixels held while an edit is in progress
         self._stroke_track = None  # union of everything the live gesture touched
+        # The layer whose opacity the CURRENT run of slider ticks belongs to,
+        # so a drag across the whole slider banks one history frame instead of
+        # a hundred. Cleared by any other edit (see _push) and by Undo/Redo.
+        self._op_run = None
         self._saveprompt_layer = None
+        self._saveprompt_card = None   # the card inside it, for _recentre_prompt
         self._recent = self._load_recent()   # colours reached for before
         self._chip_state = "empty"   # save chip: empty | saved | unsaved
         self._saved_time = ""
@@ -1251,6 +1368,14 @@ class Illustrator(nbapp.AppWindow):
         return True
 
     # ---------------- layers panel ----------------
+    @staticmethod
+    def _button_message(btn, text):
+        """Keep hover text and the spoken icon-button action in lockstep."""
+        btn.set_tooltip_text(text)
+        acc = btn.get_accessible()
+        if acc is not None:
+            acc.set_name(text)
+
     def _layers_panel(self):
         panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         panel.get_style_context().add_class("lpanel")
@@ -1282,7 +1407,8 @@ class Illustrator(nbapp.AppWindow):
         self.down_btn.connect("clicked", lambda *_: self._move_layer(-1))
         head.pack_start(self.down_btn, False, False, 0)
 
-        add = Gtk.Button()
+        self.add_btn = Gtk.Button()
+        add = self.add_btn
         add.set_relief(Gtk.ReliefStyle.NONE)
         add.get_style_context().add_class("liconbtn")
         add.set_tooltip_text(_t("New layer"))
@@ -1322,6 +1448,8 @@ class Illustrator(nbapp.AppWindow):
         self.op_scale.set_draw_value(False)
         self.op_scale.set_value(100)
         self.op_scale.get_style_context().add_class("opacity")
+        opcap.set_mnemonic_widget(self.op_scale)
+        self.op_scale.get_accessible().set_name(_t("Opacity"))
         self._op_handler = self.op_scale.connect("value-changed", self._on_opacity)
         foot.pack_start(self.op_scale, False, False, 0)
         panel.pack_start(foot, False, False, 0)
@@ -1342,6 +1470,7 @@ class Illustrator(nbapp.AppWindow):
         # idx -> that row's opacity label, so a live opacity drag can update the
         # number in place without rebuilding this whole widget tree per tick
         self._op_labels = {}
+        self._eye_buttons = {}
         opening = []
         closing = []
         display = [(ly, idx, idx, True)
@@ -1382,6 +1511,7 @@ class Illustrator(nbapp.AppWindow):
                 eye.add(Gtk.Image())
             if interactive:
                 eye.connect("clicked", self._toggle_visible, idx)
+                self._eye_buttons[idx] = eye
             else:
                 eye.set_sensitive(False)
             inner.pack_start(eye, False, False, 0)
@@ -1436,6 +1566,7 @@ class Illustrator(nbapp.AppWindow):
         # deleted or sent further back; the top one has nowhere forward to go
         for btn, on in ((self.del_btn, self.active != 0),
                         (self.down_btn, self.active > 0),
+                        (self.add_btn, len(self.layers) < MAX_LAYERS),
                         (self.up_btn, self.active < len(self.layers) - 1)):
             btn.set_sensitive(on)
             sc = btn.get_style_context()
@@ -1443,15 +1574,19 @@ class Illustrator(nbapp.AppWindow):
                 sc.remove_class("disabled")
             else:
                 sc.add_class("disabled")
-        self.del_btn.set_tooltip_text(
-            _t("Delete layer") if self.active != 0 else
+        self._button_message(
+            self.del_btn, _t("Delete layer") if self.active != 0 else
             _t("The Background layer cannot be deleted."))
-        self.down_btn.set_tooltip_text(
-            _t("Send layer back") if self.active > 0 else
+        self._button_message(
+            self.down_btn, _t("Send layer back") if self.active > 0 else
             _t("This layer is already at the back."))
-        self.up_btn.set_tooltip_text(
+        self._button_message(
+            self.up_btn,
             _t("Bring layer forward") if self.active < len(self.layers) - 1 else
             _t("This layer is already at the front."))
+        self._button_message(
+            self.add_btn, _t("New layer") if len(self.layers) < MAX_LAYERS else
+            _t("This drawing holds as many layers as it can."))
 
         ly = self.layers[self.active]
         # Block the value-changed handler while syncing the slider to the active
@@ -1633,6 +1768,17 @@ class Illustrator(nbapp.AppWindow):
     def _on_draw(self, area, cr):
         # Repaint only the exposed region; cairo clips every op below to the
         # damaged rect, so a motion event never repaints the whole canvas.
+        #
+        # The context belongs to the whole window, not to this widget: it
+        # arrives carrying whatever an ancestor's draw handler left on it, and
+        # whatever is set here would travel on to everything drawn after. So
+        # say what this canvas needs and give the context back as it came.
+        # OVER is not a detail — it is what stacking layers MEANS, and drawing
+        # the canvas with SOURCE (leaked from the field behind it) replaced the
+        # screen with the top layer's own pixels: adding an empty layer blanked
+        # the artwork, an erased pixel became a hole instead of the checker.
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_OVER)
         z = self.zoom
         cr.set_antialias(cairo.ANTIALIAS_NONE)
         cr.set_source(self._bg_pattern)
@@ -1658,8 +1804,46 @@ class Illustrator(nbapp.AppWindow):
         cr.restore()
         if self.grid and z >= GRID_FROM:
             self._draw_grid(cr, z)
-        self._draw_brush_cursor(cr, z)
+        # THE FOOTPRINT OVERLAY IS NOT DRAWN. It was a wash-and-hairline box
+        # around the pixels the next click would change, and it was reported
+        # twice as sitting off to one side of the crosshair. Measured, rendered
+        # and compared at 1x and 8x for sizes 1, 2 and 8: the outline's top-left
+        # is the stamp's top-left to the pixel, and it extends past it only by
+        # the half-pixel a 1px hairline straddles. So the two things the app
+        # controls already agree, and what is left over is the distance between
+        # the X server's crosshair image and the footprint -- a cursor hotspot,
+        # which this app does not own and cannot correct.
+        #
+        # Given a choice between an overlay that keeps looking wrong and no
+        # overlay, the overlay goes: the crosshair says where the pointer is,
+        # and the status bar already reads out the exact pixel under it
+        # (st_pos, "x, y"), which is the precise answer the box was gesturing
+        # at. _draw_brush_cursor, _brush_outline and _cursor_rect all stay --
+        # _cursor_rect is what the damage bookkeeping and the stylus-pressure
+        # tests measure, and it remains exactly the painted footprint.
+        cr.restore()
         return False
+
+    def _cursor_size(self):
+        """The brush width the NEXT mark would actually have.
+
+        A stylus scales its tip by pressure (see pen_size), so mid-stroke the
+        chosen size is not what is being painted — and because a footprint is
+        anchored at -(n//2), a nominal 24 against a pressed 4 does not merely
+        draw the wrong SIZE. It draws the outline TEN IMAGE PIXELS up and left
+        of the marks the pen is leaving, which is the cursor and the pixels
+        visibly coming apart.
+
+        Only while a freehand stroke is live: hovering, the honest answer is
+        the brush as it is set, because a pen out of contact reports pressure
+        0.0 and an outline that collapsed to a hairline on approach would say
+        nothing about the brush. A mouse has no pressure at all, so _pen
+        returns None and this is self.size exactly as before."""
+        if self._drawing and self.tool in ("pencil", "brush", "eraser"):
+            sz = (self._pen_last or (None, None))[0]
+            if sz:
+                return sz
+        return self.size
 
     def _cursor_rect(self):
         """The image-pixel box the pointer is currently over, brush included,
@@ -1672,7 +1856,7 @@ class Illustrator(nbapp.AppWindow):
         cx, cy = self._cursor
         if self.tool not in SIZE_TOOLS:
             return (cx, cy, 1, 1)      # fill and eyedropper act on one pixel
-        runs = brush_runs(self.size, self._brush_shape())
+        runs = brush_runs(self._cursor_size(), self._brush_shape())
         dy0 = min(r[0] for r in runs)
         dy1 = max(r[0] for r in runs)
         dx0 = min(r[1] for r in runs)
@@ -1685,15 +1869,17 @@ class Illustrator(nbapp.AppWindow):
         A crosshair says where the pointer is; it does not say how much of the
         artwork a 12 px brush is about to cover, and at 100% zoom a size-8 tip
         landed nowhere near where it looked like it would. The footprint is
-        drawn from the SAME brush_runs the stamp uses, so the outline and the
-        paint can never disagree.
+        drawn from the SAME brush_runs the stamp uses, at the SAME width the
+        stamp is using (_cursor_size — pressure included), so the outline and
+        the paint cannot disagree. Taking the width from self.size instead was
+        exactly how they came apart under a stylus.
 
         Suppressed while a shape is being dragged: the shape preview already
         shows what will commit, and a second box around the pointer competes
         with it."""
         if self._cursor is None or self._preview is not None:
             return
-        runs = (brush_runs(self.size, self._brush_shape())
+        runs = (brush_runs(self._cursor_size(), self._brush_shape())
                 if self.tool in SIZE_TOOLS else ((0, 0, 0),))
         cx, cy = self._cursor
         cr.save()
@@ -2114,7 +2300,13 @@ class Illustrator(nbapp.AppWindow):
                 x, y = widget.translate_coordinates(self.canvas, x, y)
             except (TypeError, AttributeError):
                 pass
-        return view_pixel(x, y, self.zoom, self.cw, self.ch, clamp)
+        # The CHOSEN brush width decides the anchor, not the pressure-modulated
+        # one: a stylus varies the drawn width continuously, and letting that
+        # flip the anchor's parity between samples would make the stroke jitter
+        # half a pixel sideways as the hand eased off. Pressure varies the
+        # width AROUND the anchor, which is what a real brush does.
+        size = self.size if self.tool in SIZE_TOOLS else 1
+        return view_pixel(x, y, self.zoom, self.cw, self.ch, clamp, size)
 
     def _pen(self, ev):
         """(effective brush size, erase-override) for one event.
@@ -2207,23 +2399,40 @@ class Illustrator(nbapp.AppWindow):
     def _on_motion(self, _w, ev):
         p = self._pos(ev, _w, clamp=(self._drawing and _w is not self.canvas))
         was = self._cursor_rect()
+        # Read the pen BEFORE the outline bookkeeping below. _cursor_rect now
+        # answers at the pressure width, so taking `was` with the previous
+        # sample and drawing with the new one would clear a rect the size of
+        # the OLD tip and paint one the size of the NEW tip — leaving crumbs of
+        # the wider outline behind wherever the pressure eased off.
+        if self._drawing and self.tool in ("pencil", "brush", "eraser"):
+            self._pen_last = self._pen(ev)
         self._cursor = p if self._inside(p) else None
-        self._refresh_status()
         # Erase the outline from where it was and paint it where it is. Both
         # rects are brush-sized, so this is a couple of hundred pixels per
         # motion event even at a high zoom — nothing like a full repaint.
-        if self._cursor_rect() != was:
+        now = self._cursor_rect()
+        if now != was:
+            # Clear the OLD footprint as well as the new one: a pressure change
+            # alone can shrink the box without moving the cursor.
             self._dmg_cursor(was)
         if not self._drawing:
+            self._refresh_status()
             return False
         self._shift = bool(ev.state & Gdk.ModifierType.SHIFT_MASK)
         ly = self.layers[self.active]
         if self.tool in ("pencil", "brush", "eraser"):
-            self._pen_last = size, erase = self._pen(ev)
+            size, erase = self._pen_last
             self._stroke_seg(ly, self._last, p, size, erase)
             self._last = p
         elif self.tool in ("line", "rect", "ellipse"):
             self._render_preview(self._start, self._constrain(self._start, p))
+        # AFTER the preview exists, not before it. While a shape is dragged the
+        # readout is that shape's SIZE, and _refresh_status reads self._preview
+        # to know it — so asking first printed the size of the PREVIOUS motion
+        # event. A rectangle dragged to 16 x 16 said 11 x 11, and the first
+        # motion of every drag printed the pointer's coordinates instead of a
+        # size at all.
+        self._refresh_status()
         return True
 
     def _constrain(self, a, b):
@@ -2339,6 +2548,10 @@ class Illustrator(nbapp.AppWindow):
         track, self._stroke_track = self._stroke_track, None
         self._commit_edit(track if track is not None else region)
         self._remember(self.color)
+        # The preview is gone, so the middle readout goes back to being the
+        # pointer's position rather than holding the last shape's size until
+        # the hand happens to move again.
+        self._refresh_status()
         self._mark_unsaved()
 
     # ---------------- undo / redo ----------------
@@ -2394,6 +2607,8 @@ class Illustrator(nbapp.AppWindow):
         """Every pixel surface a history frame keeps alive."""
         if frame[0] == "st":
             return [ly.surface for ly in frame[1]]
+        if frame[0] in ("vis", "op"):
+            return []
         return [frame[4]]
 
     def _history_bytes(self):
@@ -2423,6 +2638,9 @@ class Illustrator(nbapp.AppWindow):
 
         `name` is the menu wording of the action this frame takes back, shown
         in the Edit menu; None for an edit that needs no name (a stroke)."""
+        # Any frame at all ends the current run of opacity ticks: the next one
+        # is a separate thing to take back, not more of the last one.
+        self._op_run = None
         self._undo_stack.append(frame)
         self._undo_names.append(name)
         # dropped first: the redo trail is unreachable after any fresh edit, and
@@ -2449,6 +2667,12 @@ class Illustrator(nbapp.AppWindow):
 
     def _struct_frame(self):
         return ("st", list(self.layers), self.active, self.cw, self.ch)
+
+    def _visibility_frame(self):
+        return ("vis", [(ly, ly.visible) for ly in self.layers])
+
+    def _opacity_frame(self):
+        return ("op", [(ly, ly.opacity) for ly in self.layers])
 
     def _begin_edit(self):
         """Hold the active layer's current pixels while an edit is in progress.
@@ -2494,6 +2718,18 @@ class Illustrator(nbapp.AppWindow):
                 self.cw, self.ch = cw, ch
                 self._sync_canvas_size()
             return inverse
+        if frame[0] == "vis":
+            inverse = self._visibility_frame()
+            for ly, visible in frame[1]:
+                if ly in self.layers:
+                    ly.visible = visible
+            return inverse
+        if frame[0] == "op":
+            inverse = self._opacity_frame()
+            for ly, opacity in frame[1]:
+                if ly in self.layers:
+                    ly.opacity = opacity
+            return inverse
         _kind, ly, x, y, snap = frame
         if ly not in self.layers:
             return None
@@ -2510,6 +2746,9 @@ class Illustrator(nbapp.AppWindow):
         Redo — they are the same operation with the stacks swapped. The action
         names ride along in lockstep so the Edit menu keeps naming the right
         step after any number of undos."""
+        # A step through the history ends the current opacity run: a slider
+        # moved after an Undo starts a frame of its own.
+        self._op_run = None
         while take:
             name = take_names.pop() if take_names else None
             inverse = self._apply_frame(take.pop())
@@ -2562,37 +2801,46 @@ class Illustrator(nbapp.AppWindow):
         if target == newpx:
             return False   # nothing to do — don't dirty the doc or push a frame
         self._begin_edit()
-
-        def _match(i):
-            return data[i:i + 4] == target
-
+        # Every step below happens in C on a private bytearray of the layer:
+        # find() needs a buffer that has it, and the fill reads back what it
+        # has already written to know where it has been. The rest of this used
+        # to run once per PIXEL, which at the 2048 canvas the size dialog
+        # offers meant one click of the fill tool locked the window for four
+        # and a half seconds — a frozen window, not a slow one.
+        buf = bytearray(data)
         cw, ch = self.cw, self.ch
         stack = [(px, py)]
         while stack:
             x, y = stack.pop()
             row = y * stride
-            if not _match(row + x * 4):
+            i = row + x * 4
+            if buf[i:i + 4] != target:
                 continue
-            x1 = x
-            while x1 > 0 and _match(row + (x1 - 1) * 4):
-                x1 -= 1
-            x2 = x
-            while x2 < cw - 1 and _match(row + (x2 + 1) * 4):
-                x2 += 1
+            x1 = _run_start(buf, row, x, target)
+            x2 = _run_end(buf, row, x, cw - 1, target)
             i0 = row + x1 * 4
-            data[i0:i0 + (x2 - x1 + 1) * 4] = newpx * (x2 - x1 + 1)
+            buf[i0:i0 + (x2 - x1 + 1) * 4] = newpx * (x2 - x1 + 1)
             for ny in (y - 1, y + 1):
                 if ny < 0 or ny >= ch:
                     continue
                 nrow = ny * stride
+                stop = nrow + (x2 + 1) * 4
                 xx = x1
                 while xx <= x2:
-                    if _match(nrow + xx * 4):
-                        while xx <= x2 and _match(nrow + xx * 4):
-                            xx += 1
-                        stack.append((xx - 1, ny))
-                    else:
-                        xx += 1
+                    at = buf.find(target, nrow + xx * 4, stop)
+                    # find() knows nothing about pixel boundaries: a colour
+                    # whose four bytes repeat can be "found" straddling two
+                    # pixels, which is not a pixel of that colour. Step past
+                    # any such hit — there are at most three before the next
+                    # real pixel boundary.
+                    while at >= 0 and (at - nrow) % 4:
+                        at = buf.find(target, at + 1, stop)
+                    if at < 0:
+                        break
+                    rx = (at - nrow) // 4
+                    xx = _run_end(buf, nrow, rx, x2, target) + 1
+                    stack.append((xx - 1, ny))   # seed the run's far end
+        data[:] = buf
         surf.mark_dirty()
         return True
 
@@ -2665,9 +2913,35 @@ class Illustrator(nbapp.AppWindow):
         except AttributeError:
             pass                        # called before the dock exists
         try:
-            nbapp.atomic_write_json(CFG_FILE, {"recent": self._recent})
-        except Exception:
-            pass          # a colour history is never worth an error on screen
+            # This preferences object may gain fields in newer versions (or be
+            # shared with extensions). Update only the colour history we own;
+            # replacing the whole object erased every unrelated setting on the
+            # first colour choice.
+            try:
+                import json
+                with open(CFG_FILE, encoding="utf-8") as fh:
+                    prefs = json.load(fh)
+                if not isinstance(prefs, dict):
+                    # Valid JSON is outside atomic_write_json's parse-damage
+                    # guard, but a list/scalar is still not an Illustrator
+                    # preferences store. Preserve those foreign bytes before
+                    # replacing them with the current shape.
+                    nbapp.quarantine_unrecognized(CFG_FILE)
+                    if os.path.exists(CFG_FILE):
+                        raise OSError(
+                            "could not preserve unrecognized Illustrator settings")
+                    prefs = {}
+            except (OSError, ValueError):
+                if os.path.exists(CFG_FILE):
+                    raise
+                prefs = {}
+            prefs["recent"] = self._recent
+            # Remove the legacy alias after migrating it so there is one
+            # authoritative history field, while preserving all other keys.
+            prefs.pop("mixes", None)
+            nbapp.atomic_write_json(CFG_FILE, prefs)
+        except Exception as exc:
+            nbapp.note_save_failure(self, exc, CFG_FILE)
 
     def _on_chip_press(self, _w, _ev):
         # A click on the active-colour well opens the mixer, which is what a
@@ -2765,6 +3039,8 @@ class Illustrator(nbapp.AppWindow):
             sc.set_value(mix["rgb"][idx])
             sc.set_size_request(200, -1)
             sc.get_style_context().add_class("opacity")   # the app's one slider
+            lbl.set_mnemonic_widget(sc)
+            sc.get_accessible().set_name(_t(name))
 
             def _moved(scale, i=idx):
                 mix["rgb"][i] = int(round(scale.get_value()))
@@ -2806,12 +3082,34 @@ class Illustrator(nbapp.AppWindow):
         self._refresh_status()
 
     def _toggle_visible(self, btn, idx):
+        if not (0 <= idx < len(self.layers)):
+            return
+        try:
+            restore_focus = btn.has_focus()
+        except AttributeError:
+            restore_focus = False
+        self._push(self._visibility_frame(), "Layer Visibility")
         self.layers[idx].visible = not self.layers[idx].visible
         self._rebuild_layers()
+        # Drawing on a hidden layer is the most confusing state this app has,
+        # and the status bar is where it is said. Say it the moment the layer
+        # goes, not on the next pointer motion: a person who hides a layer and
+        # draws never moved the pointer in between.
+        self._refresh_status()
+        if restore_focus:
+            eye = getattr(self, "_eye_buttons", {}).get(idx)
+            if eye is not None:
+                eye.grab_focus()
         self.canvas.queue_draw()
         self._mark_unsaved()  # visibility changes the saved PNG -> re-arm Unsaved
 
     def _add_layer(self):
+        if len(self.layers) >= MAX_LAYERS:
+            # The + and the menu item are already disabled here; a keyboard or
+            # a script can still arrive, and a layer that cannot be saved and
+            # reopened must not be made.
+            self._flash_save(_t("This drawing holds as many layers as it can."))
+            return
         self._push(self._struct_frame(), "New Layer")
         ly = Layer(_t("Layer %d") % self.next_id, self.cw, self.ch)
         self.next_id += 1
@@ -2861,6 +3159,33 @@ class Illustrator(nbapp.AppWindow):
         self._flash_save(_t('Deleted "%s" — press Ctrl+Z to bring it back')
                          % name)
 
+    def _bank_opacity(self, ly):
+        """Bank ONE history frame for a run of opacity changes on one layer.
+
+        Opacity is a document edit — it changes the PNG this app writes, and
+        _on_opacity has always said so by re-arming the Unsaved chip. It was
+        the only such edit with nothing in the history behind it: pressing
+        Ctrl+Z after moving the slider did not put the opacity back, it took
+        back the BRUSH STROKE before it, which is the one thing the person was
+        not asking to lose. Its twin, layer visibility, banks a frame.
+
+        A live drag fires value-changed many times a second, so a frame per
+        tick would bury the rest of the history under one gesture. The rule is
+        the one a text editor uses for typing: while this is still the same run
+        — the same layer, and nothing else pushed in between — the frame
+        already on top holds the value the run started from and is left alone.
+        The redo trail still goes, because a fresh edit of any kind makes the
+        redone future unreachable."""
+        top = self._undo_stack[-1] if self._undo_stack else None
+        if self._op_run is ly and top is not None and top[0] == "op":
+            self._redo_stack = []
+            self._redo_names = []
+            return
+        # _push clears _op_run (every other edit ends the run), so claim the
+        # run AFTER it.
+        self._push(self._opacity_frame(), "Layer Opacity")
+        self._op_run = ly
+
     def _on_opacity(self, scale):
         v = int(scale.get_value())
         ly = self.layers[self.active]
@@ -2868,6 +3193,7 @@ class Illustrator(nbapp.AppWindow):
         # same integer (or the blocked set_value on layer select) is a no-op.
         if v == ly.opacity:
             return
+        self._bank_opacity(ly)
         ly.opacity = v
         self.op_val.set_text("%d%%" % v)
         # Live opacity drags fire value-changed many times a second. Update just
@@ -2880,9 +3206,13 @@ class Illustrator(nbapp.AppWindow):
         self._mark_unsaved()  # opacity change alters the saved PNG
 
     def _show_all_layers(self):
+        if not any(not ly.visible for ly in self.layers):
+            return
+        self._push(self._visibility_frame(), "Show All Layers")
         for ly in self.layers:
             ly.visible = True
         self._rebuild_layers()
+        self._refresh_status()   # the hidden-layer warning is over — drop it
         self.canvas.queue_draw()
         self._mark_unsaved()
 
@@ -3045,6 +3375,16 @@ class Illustrator(nbapp.AppWindow):
             row.pack_start(e, False, False, 0)
             fields[key] = e
             body.pack_start(row, False, False, 0)
+
+        # Where a rejected number is reported: under the fields it is about,
+        # on the card the person is reading. Hidden until there is something
+        # to say, and no_show_all so the card's show_all cannot reveal it.
+        err = Gtk.Label(label="", xalign=0)
+        err.get_style_context().add_class("ilprompterror")
+        err.set_line_wrap(True)
+        err.set_max_width_chars(34)
+        err.set_no_show_all(True)
+        body.pack_start(err, False, False, 0)
         _mark()
 
         def _apply():
@@ -3052,24 +3392,49 @@ class Illustrator(nbapp.AppWindow):
             # It used to be quietly replaced — typing 2048 gave a 1024 canvas
             # and typing "big" gave the size it already had, both without a
             # word, so the dialog looked like it had ignored the request.
+            #
+            # Reporting it used to close the card and flash the reason in the
+            # status bar's far corner for a moment, which threw away both
+            # typed numbers to say something the person was not looking at.
+            # This is a checking button (see _prompt_button): returning True
+            # keeps the card, its numbers and the correction one keystroke
+            # away.
             raw = {k: str(state[k]).strip() for k in ("w", "h")}
-            vals, bad = {}, []
+            vals, bad, bad_keys = {}, [], []
             for k, cap in (("w", "Width"), ("h", "Height")):
                 try:
                     n = int(raw[k])
                 except ValueError:
                     bad.append(_t(cap))
+                    bad_keys.append(k)
                     continue
                 if not (MIN_DIM <= n <= MAX_DIM):
                     bad.append(_t(cap))
+                    bad_keys.append(k)
                     continue
                 vals[k] = n
             if bad:
-                self._flash_save(
+                err.set_text(
                     _t("%s must be a number from %d to %d")
                     % (" / ".join(bad), MIN_DIM, MAX_DIM))
-                return
+                err.show()
+                self._recentre_prompt()
+                first = fields.get(bad_keys[0])
+                if first is not None:
+                    first.grab_focus()
+                return True
             self._resize_canvas(vals["w"], vals["h"])
+            return False
+
+        for ent in fields.values():
+            # Return in a field does what pressing Resize does — the same
+            # checking path, so a rejected number keeps the card and its
+            # numbers exactly as the button leaves them. Without this a size
+            # typed in and confirmed from the keyboard did NOTHING: the card
+            # sat there unchanged until the pointer found the button, which
+            # reads as a dialog that has stopped responding.
+            ent.connect("activate",
+                        lambda _e: self._prompt_button(_apply, True))
 
         self._overlay_prompt(
             _t("Canvas size"),
@@ -3077,7 +3442,7 @@ class Illustrator(nbapp.AppWindow):
                "Width and height can be %d to %d pixels.")
             % (MIN_DIM, MAX_DIM),
             [("Cancel", "ilpromptcancel", None),
-             (_t("Resize"), "ilpromptok", _apply)],
+             (_t("Resize"), "ilpromptok", _apply, True)],
             content=body)
 
     # ---------------- file: New / Open / Save / Save As (PNG) ----------------
@@ -3093,6 +3458,109 @@ class Illustrator(nbapp.AppWindow):
                 cr.paint_with_alpha(ly.opacity / 100.0)
         flat.flush()
         return flat
+
+    @staticmethod
+    def _layer_sidecar(path, digest):
+        directory, name = os.path.split(path)
+        return os.path.join(directory or ".", ".%s.%s.illustrator.json"
+                            % (name, digest))
+
+    @staticmethod
+    def _file_digest(path):
+        digest = hashlib.sha256()
+        with open(path, "rb") as source:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _write_layer_sidecar(self, path, png_digest):
+        records = []
+        for layer in self.layers:
+            raw = io.BytesIO()
+            layer.surface.write_to_png(raw)
+            records.append({
+                "name": str(layer.name),
+                "visible": bool(layer.visible),
+                "opacity": int(max(0, min(100, layer.opacity))),
+                "png": base64.b64encode(raw.getvalue()).decode("ascii"),
+            })
+        payload = {
+            "version": 1,
+            "png_sha256": png_digest,
+            "width": self.cw,
+            "height": self.ch,
+            "active": self.active,
+            "next_id": self.next_id,
+            "layers": records,
+        }
+        nbapp.atomic_write_json(self._layer_sidecar(path, png_digest), payload)
+
+    def _prune_layer_sidecars(self, path, keep_digest):
+        directory, name = os.path.split(path)
+        directory = directory or "."
+        prefix = ".%s." % name
+        keep = os.path.basename(self._layer_sidecar(path, keep_digest))
+        try:
+            entries = os.listdir(directory)
+        except OSError:
+            return
+        for entry in entries:
+            if (entry != keep and entry.startswith(prefix)
+                    and entry.endswith(".illustrator.json")):
+                try:
+                    os.unlink(os.path.join(directory, entry))
+                except OSError:
+                    pass
+
+    def _read_layer_sidecar(self, path, width, height):
+        """Return restored layers/indices, or None for absent/stale/damaged data."""
+        digest = self._file_digest(path)
+        sidecar = self._layer_sidecar(path, digest)
+        if not os.path.isfile(sidecar):
+            return None
+        try:
+            with open(sidecar, encoding="utf-8") as source:
+                data = json.load(source)
+            if not isinstance(data, dict) or data.get("version") != 1:
+                return None
+            if (data.get("png_sha256") != digest
+                    or data.get("width") != width or data.get("height") != height):
+                return None
+            rows = data.get("layers")
+            if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_LAYERS:
+                return None
+            restored = []
+            decoded_total = 0
+            for row in rows:
+                if not isinstance(row, dict):
+                    return None
+                encoded = row.get("png")
+                if not isinstance(encoded, str):
+                    return None
+                blob = base64.b64decode(encoded, validate=True)
+                decoded_total += len(blob)
+                if decoded_total > 256 * 1024 * 1024:
+                    return None
+                surface = cairo.ImageSurface.create_from_png(io.BytesIO(blob))
+                if surface.get_width() != width or surface.get_height() != height:
+                    return None
+                layer = Layer(str(row.get("name") or _t("Layer")), width, height)
+                layer.surface = surface
+                layer.visible = bool(row.get("visible", True))
+                opacity = row.get("opacity", 100)
+                if isinstance(opacity, bool) or not isinstance(opacity, (int, float)):
+                    return None
+                layer.opacity = int(max(0, min(100, opacity)))
+                restored.append(layer)
+            active = data.get("active", 0)
+            next_id = data.get("next_id", len(restored) + 1)
+            if not isinstance(active, int) or not 0 <= active < len(restored):
+                active = 0
+            if not isinstance(next_id, int) or next_id < 1:
+                next_id = len(restored) + 1
+            return restored, active, next_id
+        except Exception:
+            return None
 
     def _write_png(self, path):
         """Flatten the visible layers and write the PNG to `path`. Returns True
@@ -3111,9 +3579,20 @@ class Illustrator(nbapp.AppWindow):
         shared writer drafts under a unique temp name instead, so the only
         file at risk is the one being saved."""
         try:
-            nbapp.atomic_write_via(
-                path,
-                lambda draft: self._flatten_surface().write_to_png(draft))
+            encoded = io.BytesIO()
+            self._flatten_surface().write_to_png(encoded)
+            png_bytes = encoded.getvalue()
+            digest = hashlib.sha256(png_bytes).hexdigest()
+            # Publish the content-addressed editable companion first. If power
+            # fails before the PNG rename, the old PNG still finds its old
+            # matching companion; if it fails after, the new PNG already has
+            # its matching layer document. An orphan companion is harmless.
+            self._write_layer_sidecar(path, digest)
+            def publish(draft):
+                with open(draft, "wb") as output:
+                    output.write(png_bytes)
+            nbapp.atomic_write_via(path, publish)
+            self._prune_layer_sidecars(path, digest)
             return True
         except Exception:
             return False
@@ -3127,6 +3606,11 @@ class Illustrator(nbapp.AppWindow):
     def _do_file_new(self):
         self.layers = [Layer(_t("Background"), self.cw, self.ch,
                              fill_white=True)]
+        # An untitled document, as Writer and Novel start one. Keeping the old
+        # filename here meant the next Ctrl+S wrote this blank canvas straight
+        # over the drawing that was open before — no Save As, no name asked
+        # for, and the previous drawing's layers pruned with it.
+        self._path = None
         self._reset_document()
         self._mark_empty()
 
@@ -3141,7 +3625,19 @@ class Illustrator(nbapp.AppWindow):
         self._stroke_track = None
         self._preview = None
         self._drawing = False
+        self._op_run = None
+        # The slider is a VIEW of the active layer's opacity, never a source of
+        # it. Setting it unblocked fires _on_opacity, which writes whatever it
+        # was set to straight into layers[0] — so opening a drawing whose
+        # Background had been saved at 55% brought it back at 100%, silently,
+        # with "Saved" still on the chip and the layer document on disk now
+        # disagreeing with what was on screen. The next Ctrl+S then wrote the
+        # wrong opacity over the right one. _rebuild_layers below syncs the
+        # slider FROM the active layer, which is the only direction this
+        # coupling may ever run.
+        self.op_scale.handler_block(self._op_handler)
         self.op_scale.set_value(100)
+        self.op_scale.handler_unblock(self._op_handler)
         self._new_scratch()
         self.canvas.set_size_request(int(math.ceil(self.cw * self.zoom)),
                                      int(math.ceil(self.ch * self.zoom)))
@@ -3159,6 +3655,8 @@ class Illustrator(nbapp.AppWindow):
         MAX_DIM is the one case that has to shrink, and it shrinks with
         FILTER_NEAREST — never a smoothing filter."""
         try:
+            if not validate_png_input(path):
+                raise ValueError("image is too large or not a PNG")
             img = cairo.ImageSurface.create_from_png(path)
         except Exception:
             self._flash_save(_t("Could not open image"))
@@ -3170,6 +3668,8 @@ class Illustrator(nbapp.AppWindow):
         scale = min(MAX_DIM / float(iw), MAX_DIM / float(ih), 1.0)
         self.cw = max(MIN_DIM, int(iw * scale))
         self.ch = max(MIN_DIM, int(ih * scale))
+        restored = (self._read_layer_sidecar(path, iw, ih)
+                    if scale == 1.0 else None)
         base = Layer(_t("Background"), self.cw, self.ch)
         cr = cairo.Context(base.surface)
         cr.set_operator(cairo.OPERATOR_SOURCE)
@@ -3179,11 +3679,21 @@ class Illustrator(nbapp.AppWindow):
         cr.get_source().set_filter(cairo.FILTER_NEAREST)
         cr.paint()
         base.surface.flush()
-        self.layers = [base]
+        if restored is None:
+            self.layers = [base]
+            restored_active, restored_next = 0, 2
+        else:
+            self.layers, restored_active, restored_next = restored
         self._path = path
         self._reset_document()
+        self.active = restored_active
+        self.next_id = restored_next
+        self._rebuild_layers()
         self._zoom_fit()
-        self._mark_saved()
+        try:
+            self._mark_saved(os.path.getmtime(path))
+        except OSError:
+            self._mark_saved()
         return True
 
     def _file_open(self):
@@ -3310,11 +3820,19 @@ class Illustrator(nbapp.AppWindow):
         self._flash_token += 1
         self._cancel_source("_chip_restore_src")
 
-    def _mark_saved(self):
-        """Green 'Saved HH:MM' chip — shown only once the PNG is on disk."""
+    def _mark_saved(self, when=None):
+        """Green 'Saved HH:MM' chip — shown only once the PNG is on disk.
+
+        `when` is a POSIX timestamp for a file that was saved earlier and is
+        only now being opened: the point of the time is to say when the bytes
+        on disk were written, and stamping the moment of the OPEN told a
+        person who saved at nine and opened at two that they had saved at
+        two."""
         self._dirty = False
         self._chip_state = "saved"
-        self._saved_time = time.strftime("%H:%M")
+        # localtime(None) is the current time, which is what a save that has
+        # just happened wants.
+        self._saved_time = time.strftime("%H:%M", time.localtime(when))
         self._supersede_flash()    # cancel any pending flash auto-restore
         self._render_chip()
 
@@ -3402,7 +3920,12 @@ class Illustrator(nbapp.AppWindow):
                 nbapp.SEP,
                 ("Hide Active Layer" if vis else "Show Active Layer",
                  lambda: self._toggle_visible(None, self.active)),
-                ("Show All Layers", self._show_all_layers),
+                # Dead when every layer is already showing: the method returns
+                # at once in that case, so an enabled item was promising an
+                # action that could not happen.
+                ("Show All Layers",
+                 self._show_all_layers
+                 if any(not ly.visible for ly in self.layers) else None),
             ]
         if name == "Image":
             # Shape fill is a TOOL setting and now lives in the dock beside
@@ -3427,7 +3950,8 @@ class Illustrator(nbapp.AppWindow):
             ]
         if name == "Layer":
             return [
-                ("New Layer", self._add_layer),
+                ("New Layer",
+                 self._add_layer if len(self.layers) < MAX_LAYERS else None),
                 ("Delete Layer",
                  self._delete_layer if self.active != 0 else None),
                 nbapp.SEP,
@@ -3558,7 +4082,10 @@ class Illustrator(nbapp.AppWindow):
         title, a body line, and right-aligned buttons. `buttons` is a list of
         (label, style_class, callback) in display order; the callback runs after
         the prompt is dismissed, and a None callback (e.g. Cancel) just closes
-        it. `content` is an optional widget shown under the body line. Only one
+        it. A fourth element, (label, style_class, callback, True), marks a
+        button that CHECKS what the card holds: it runs while the card is
+        still up and keeps it up by returning True — see _prompt_button.
+        `content` is an optional widget shown under the body line. Only one
         prompt shows at a time; Esc or a scrim click dismisses it."""
         # Who gets the keyboard back when this card goes. Captured before
         # the button below takes focus, and before the old card is torn
@@ -3600,13 +4127,15 @@ class Illustrator(nbapp.AppWindow):
         btnrow = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         btnrow.set_halign(Gtk.Align.END)
         focus_btn = None
-        for label, style, cb in buttons:
+        for entry in buttons:
+            label, style, cb = entry[0], entry[1], entry[2]
+            checks = len(entry) > 3 and bool(entry[3])
             btn = Gtk.Button(label=label)
             btn.set_relief(Gtk.ReliefStyle.NONE)
             btn.get_style_context().add_class(style)
             btn.connect(
                 "clicked",
-                lambda _w, fn=cb: (self._close_saveprompt(), fn and fn())[1])
+                lambda _w, fn=cb, ck=checks: self._prompt_button(fn, ck))
             btnrow.pack_start(btn, False, False, 0)
             # Rest keyboard focus on the safe (Cancel) button so a stray
             # Space/Enter can never fire a destructive action by default.
@@ -3625,8 +4154,49 @@ class Illustrator(nbapp.AppWindow):
         ch = nat.height if nat.height > 1 else 200
         layer.move(card_win, max((W - cw) // 2, 0), max((H - ch) // 2, 0))
         self._saveprompt_layer = layer
+        self._saveprompt_card = card_win
         if focus_btn is not None:
             focus_btn.grab_focus()
+
+    def _prompt_button(self, fn, checks):
+        """What pressing a prompt button does.
+
+        An ordinary button dismisses the card and THEN runs its callback, so a
+        callback that opens another prompt or closes the window is never
+        tearing down the card it is standing on. (It is also why a card with
+        fields keeps what was typed in a dict of its own: the entries are gone
+        by the time the callback reads them — see _canvas_size_prompt.)
+
+        A CHECKING button runs its callback first, with the card still up. A
+        callback that returns True has not accepted the values and has put the
+        reason inside the card, so the card stays exactly as it was typed.
+        Dismissing it instead threw the typing away and left the reason
+        flashing in the far corner of the status bar, which is neither where
+        the person is looking nor long enough to read twice."""
+        if checks:
+            if fn is not None and fn():
+                return
+            self._close_saveprompt()
+            return
+        self._close_saveprompt()
+        if fn is not None:
+            fn()
+
+    def _recentre_prompt(self):
+        """Put the open card back in the middle after its content changed
+        size, so a card that grows a line does not sit low on the scrim."""
+        layer = self._saveprompt_layer
+        card = getattr(self, "_saveprompt_card", None)
+        if layer is None or card is None:
+            return
+        alloc = self.get_allocation()
+        _sw, _sh = nbapp.screen_size()
+        W = alloc.width if alloc.width > 1 else _sw
+        H = alloc.height if alloc.height > 1 else _sh
+        _min, nat = card.get_preferred_size()
+        cw = nat.width if nat.width > 1 else 420
+        ch = nat.height if nat.height > 1 else 200
+        layer.move(card, max((W - cw) // 2, 0), max((H - ch) // 2, 0))
 
     def _confirm_discard(self, consequence, on_confirm):
         """Run `on_confirm` immediately when there is nothing to lose; otherwise
@@ -3664,6 +4234,7 @@ class Illustrator(nbapp.AppWindow):
             except Exception:
                 pass
             self._saveprompt_layer = None
+            self._saveprompt_card = None
             self._prompt_return_focus = None
             # The card deliberately parks focus on its safe button, and removing
             # the layer takes that button with it — leaving GTK no focus owner
@@ -3774,11 +4345,11 @@ class Illustrator(nbapp.AppWindow):
         .lrow.active { background: #FCFBF8; box-shadow: inset 3px 0 0 #C8341E; }
         /* one line under a one-row list, so the panel reads as a document with
            one layer rather than as a panel that failed to fill */
-        .lempty { font-size: 12px; color: #9A9484; padding: 10px 10px 0 10px; }
+        .lempty { font-size: 12px; color: #6E695E; padding: 10px 10px 0 10px; }
         .lname { font-size: 14px; color: #1A1916; }
-        .lname.hidden { color: #9A9484; }
+        .lname.hidden { color: #6E695E; }
         .lrow.active .lname { font-weight: 600; }
-        .lopacity { font-size: 11px; color: #9A9484; }
+        .lopacity { font-size: 11px; color: #6E695E; }
         .eyebtn { min-width: 26px; min-height: 26px; padding: 0;
                   background: transparent; border: none; box-shadow: none; }
         .lfoot { padding: 16px 16px; border-top: 1px solid #D7D2C5; }
@@ -3815,6 +4386,7 @@ class Illustrator(nbapp.AppWindow):
         .presetbtn.sel { background: #EAE3D2; border-color: #B3AD9E;
                          font-weight: 600; }
         .sizeentry { min-height: 28px; font-size: 13px; }
+        .ilprompterror { font-size: 13px; color: #C8341E; }
         .ilpromptok { min-height: 34px; padding: 0 18px; border: 1px solid #1A1916;
                       border-radius: 8px; background: #1A1916; color: #FCFBF8;
                       box-shadow: none; font-size: 14px; font-weight: 600; }

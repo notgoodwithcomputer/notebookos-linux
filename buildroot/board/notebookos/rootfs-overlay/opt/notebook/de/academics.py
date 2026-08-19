@@ -38,6 +38,7 @@ import nbapp
 import nbicons
 import nbprint
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 CLASS_COLORS = ["#9A7B4F", "#4A5E73", "#6E7B57", "#8A6D5B", "#566E86"]
@@ -117,6 +118,25 @@ def _hhmm(mins):
 def _today_key():
     t = time.localtime()
     return "%04d-%02d-%02d" % (t.tm_year, t.tm_mon, t.tm_mday)
+
+
+def _lecture_meta(lecture):
+    """Localized rendering of structured and legacy lecture timestamps."""
+    raw = str(lecture.get("meta", "") or "")
+    date = lecture.get("meta_date")
+    kind = lecture.get("meta_kind")
+    suffix = lecture.get("meta_suffix")
+    if isinstance(date, str) and isinstance(suffix, str):
+        if kind == "added":
+            return _t(date) + " · " + _t("Added") + " " + suffix
+        if kind == "meeting":
+            return _t(date) + " " + suffix
+    # Older stores used this exact delimiter. Preserve their bytes on disk,
+    # but localize the two visible components whenever they are recognizable.
+    if " · added " in raw:
+        date, _sep, clock = raw.partition(" · added ")
+        return _t(date) + " · " + _t("Added") + " " + clock
+    return _t(raw)
 
 
 def _date_key(ordinal):
@@ -286,6 +306,57 @@ DEFAULT_DAY_END = 18 * 60
 DOCS_DIR = os.path.join(HOME, "Documents")
 
 
+def _set_user_text(label, text, fallback=""):
+    """Put a name the STUDENT typed on a label, exactly as they typed it.
+
+    Class names, lecture titles and assignment names are the user's own words,
+    and students write ordinary ones: a class called "Music", an assignment
+    called "Reading", a note called "Notes". nbi18n looks up every label, so on
+    a French install the sidebar read "Musique" and "Lecture" while
+    academics.json went on holding "Music" and "Reading" — the class on screen
+    was not the class in the file. Only an empty-state fallback is ours."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)
+    except AttributeError:
+        label.set_label(empty)
+
+
+def _set_user_tooltip(widget, text):
+    """A tooltip carrying the user's own words.
+
+    set_tooltip_text is one of the setters nbi18n patches. set_tooltip_markup
+    is not, and once the text is escaped it renders identically — so it is the
+    verbatim route for hover text."""
+    value = str(text or "")
+    widget.set_tooltip_markup(GLib.markup_escape_text(value))
+    # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE NAME,
+    # and the markup form is not that setter — so the name is filled in here.
+    try:
+        acc = widget.get_accessible()
+        if acc is not None and not (acc.get_name() or "").strip():
+            acc.set_name(value)
+    except Exception:                                             # noqa: BLE001
+        pass
+
+
+def _combo_append_user(combo, text):
+    """Add a row the user NAMED to a ComboBoxText verbatim.
+
+    append_text() is patched by nbi18n; append(id, text) is not, and it fills
+    the same column, so get_active_text() and get_active() both read back
+    exactly what was added."""
+    value = str(text or "")
+    try:
+        combo.append(None, value)
+    except Exception:
+        combo.append_text(value)
+
+
 class Academics(nbapp.AppWindow):
     app_name = "Academics"
     menus = ("File", "Edit", "Format", "Insert", "View")
@@ -315,9 +386,14 @@ class Academics(nbapp.AppWindow):
         # instead of triggering a full sidebar rebuild.
         self._active_title_label = None
         self._save_timer = None
+        # A message on a view header stands for a few seconds, then the header
+        # goes back to its own subtitle (see _flash).
+        self._status_timer = None
         # Debounce for the per-keystroke note sync + live word count, so typing
         # a long note doesn't re-serialize the whole buffer twice per keypress.
         self._notes_timer = None
+        self._closed = False
+        self._shown_day = _today_key()
 
         # Load any saved notebook BEFORE building the UI from the model, so the
         # sidebar / canvas render the restored classes and lectures. On a fresh
@@ -355,6 +431,8 @@ class Academics(nbapp.AppWindow):
         self.undo.reset()
 
         # Flush the final edit when the window closes so nothing is lost.
+        self._day_rollover_id = GLib.timeout_add_seconds(
+            30, self._check_day_rollover)
         self.connect("destroy", self._on_destroy)
 
     # ---------------- schedule + homework editing ----------------
@@ -369,7 +447,7 @@ class Academics(nbapp.AppWindow):
         if allow_none:
             combo.append_text(_t("No class"))
         for c in self.classes:
-            combo.append_text(c.get("label", ""))
+            _combo_append_user(combo, c.get("label", ""))
         offset = 1 if allow_none else 0
         combo.set_active(max(0, (selected + offset) if selected >= 0 else 0))
         return combo
@@ -566,28 +644,46 @@ class Academics(nbapp.AppWindow):
         who.get_style_context().add_class("acdlgentry")
         box.pack_start(_field(_t("Instructor"), who), False, False, 0)
 
+        warn = Gtk.Label(xalign=0)
+        warn.set_line_wrap(True)
+        warn.set_max_width_chars(34)
+        warn.get_style_context().add_class("ac-warn")
+        box.pack_start(warn, False, False, 0)
+
         self._dialog_buttons(dlg, ok_label, destructive=False,
                              remove_label="Delete" if ci is not None else None)
         dlg.show_all()
+        warn.hide()
         name.grab_focus()
         name.select_region(0, -1)
-        resp = dlg.run()
-        out = None
-        if resp == Gtk.ResponseType.REJECT:
-            out = self._REMOVE
-        elif resp == Gtk.ResponseType.OK:
+        # SAY WHAT IS MISSING AND KEEP THE CARD, the shape _homework_dialog has
+        # had all along. A blank name used to leave `out` at None and destroy
+        # the dialog on the way past: Save closed the card, said nothing, and
+        # threw away the room and the instructor typed in beside the name.
+        while True:
+            resp = dlg.run()
+            if resp == Gtk.ResponseType.REJECT:
+                dlg.destroy()
+                return self._REMOVE
+            if resp != Gtk.ResponseType.OK:
+                dlg.destroy()
+                return None
             label = name.get_text().strip()
-            if label:
-                col = chosen
-                for rb, c in picks.items():
-                    if rb.get_active():
-                        col = c
-                        break
-                out = {"label": label[:60], "color": col,
-                       "room": room.get_text().strip()[:40],
-                       "instructor": who.get_text().strip()[:60]}
-        dlg.destroy()
-        return out
+            if not label:
+                warn.set_text(_t("Enter a name"))
+                warn.show()
+                name.grab_focus()
+                continue
+            col = chosen
+            for rb, c in picks.items():
+                if rb.get_active():
+                    col = c
+                    break
+            out = {"label": label[:60], "color": col,
+                   "room": room.get_text().strip()[:40],
+                   "instructor": who.get_text().strip()[:60]}
+            dlg.destroy()
+            return out
 
     def _new_class_only(self):
         """Add a class WITHOUT inventing a lecture for it.
@@ -599,11 +695,16 @@ class Academics(nbapp.AppWindow):
         got = self._class_dialog("Add a class", ok_label="Add")
         if not got or got is self._REMOVE:
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Add a Class")
         got["meets"] = []
         self.classes.append(got)
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         self._refresh_schedule()
         self._refresh_homework()
         self._refresh_sidebar()
@@ -619,13 +720,18 @@ class Academics(nbapp.AppWindow):
         if got is self._REMOVE:
             self._delete_class_at(ci)
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Edit Class")
         self.classes[ci].update(got)
         # The note canvas prints the class name in its header, so an open
         # lecture has to be re-rendered or it keeps the old one.
         self._capture_active()
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         self._refresh_schedule()
         self._refresh_homework()
         self._refresh_sidebar()
@@ -638,18 +744,24 @@ class Academics(nbapp.AppWindow):
         cl = self.classes[ci]
         n_lec = sum(1 for l in self.lectures if l.get("cls") == ci)
         n_hw = sum(1 for h in self.homework if h.get("cls") == ci)
-        bits = []
+        # WHAT DELETE ACTUALLY DOES, in the words of the code below it. The
+        # assignments were counted into the "will be removed" sentence and then
+        # deliberately KEPT (see the loop further down: an assignment outlives
+        # its class), so the one sentence somebody reads before saying yes
+        # promised to destroy work the app was about to hand straight back.
         if n_lec:
-            bits.append(_t("%d lecture%s") % (n_lec, "" if n_lec == 1 else "s"))
-        if n_hw:
-            bits.append(_t("%d assignment%s")
-                        % (n_hw, "" if n_hw == 1 else "s"))
-        if bits:
             detail = _t("“%s”, its class times and %s will be removed.") % (
-                cl.get("label", ""), _t(" and ").join(bits))
+                cl.get("label", ""),
+                _t("%d lecture%s") % (n_lec, "" if n_lec == 1 else "s"))
         else:
             detail = _t("“%s” and its class times will be removed.") % cl.get(
                 "label", "")
+        if n_hw:
+            detail = "%s %s" % (detail, (
+                _t("Its assignment is kept, no longer tied to a class.")
+                if n_hw == 1 else
+                _t("Its %d assignments are kept, no longer tied to a class.")
+                % n_hw))
         if not self._confirm("Delete this class?", detail):
             return
         # Flush the open lecture's live buffer into ITS OWN record before the
@@ -659,6 +771,7 @@ class Academics(nbapp.AppWindow):
         # work -- and the capture only lands in the right place while `active`
         # still points at the lecture the buffer belongs to.
         self._capture_active()
+        before = self._undo_snapshot()
         self._may_empty = True
         self.undo.checkpoint("Delete Class")
         del self.classes[ci]
@@ -686,8 +799,12 @@ class Academics(nbapp.AppWindow):
         self._refresh_homework()
         self._refresh_sidebar()
         self._refresh_canvas()
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
 
     def _edit_meeting(self, ci, meeting):
         got = self._meeting_dialog(_t("Edit class time"), ci=ci,
@@ -701,6 +818,7 @@ class Academics(nbapp.AppWindow):
             self._remove_meeting(ci, meeting)
             return
         new_ci, day, start, end, room = got
+        before = self._undo_snapshot()
         self.undo.checkpoint("Edit Class Time")
         try:
             self.classes[ci]["meets"].remove(meeting)
@@ -710,8 +828,12 @@ class Academics(nbapp.AppWindow):
             {"day": day, "start": start, "end": end, "room": room})
         for c in self.classes:
             c["meets"] = self._clean_meets(c.get("meets"))
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         self._refresh_schedule()
 
     def _remove_meeting(self, ci, meeting):
@@ -725,14 +847,19 @@ class Academics(nbapp.AppWindow):
                    _t(DAY_NAMES[meeting["day"] % 7]), meeting["start"]),
                 ok_label="Remove"):
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Remove Class Time")
         try:
             self.classes[ci]["meets"].remove(meeting)
         except (KeyError, ValueError, IndexError):
             pass
         self._sel_block = -1
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         self._refresh_schedule()
         self._refresh_sidebar()
 
@@ -867,14 +994,19 @@ class Academics(nbapp.AppWindow):
                                     cls=nxt[0] if nxt else -1)
         if got is None or got is self._REMOVE:
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Add an Assignment")
         self.homework.append({"title": got["title"], "cls": got["cls"],
                               "due": got["due"], "done": False,
                               "kind": got.get("kind", "work"),
                               "note": got.get("note", "")})
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
-        self._refresh_homework(focus=len(self.homework) - 1)
+        if not saved:
+            return
+        self._homework_changed(focus=len(self.homework) - 1)
 
     def _edit_homework(self, index):
         try:
@@ -891,11 +1023,16 @@ class Academics(nbapp.AppWindow):
         if got is self._REMOVE:
             self._remove_homework(index)
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Edit Assignment")
         h.update(got)
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
-        self._refresh_homework(focus=index)
+        if not saved:
+            return
+        self._homework_changed(focus=index)
 
     def _remove_homework(self, index):
         """Take one assignment off the list. Until now the only way to lose a
@@ -909,11 +1046,16 @@ class Academics(nbapp.AppWindow):
                 "Remove this assignment?",
                 _t("“%s” will be removed.") % h["title"], ok_label="Remove"):
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Remove Assignment")
         del self.homework[index]
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
-        self._refresh_homework()
+        if not saved:
+            return
+        self._homework_changed()
 
     def _delete_homework(self):
         """Clear out what is already finished — the only bulk delete here, and
@@ -929,17 +1071,48 @@ class Academics(nbapp.AppWindow):
                              ok_label="Remove"):
             return
         self._may_empty = True
+        before = self._undo_snapshot()
         self.undo.checkpoint("Clear Finished Homework")
         self.homework = [h for h in self.homework if not h["done"]]
-        self._save_to_disk()
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
-        self._refresh_homework()
+        if not saved:
+            return
+        self._homework_changed()
+
+    def _homework_changed(self, focus=None):
+        """Redraw everything an assignment edit changes.
+
+        The list AND the sidebar: its class rows carry that class's own "3 to
+        do" count and the "2 not tied to a class" line under them, and those
+        were computed only when the sidebar happened to be REBUILT -- which a
+        homework edit never did. So ticking a box, adding, editing or removing
+        an assignment moved the header count and left every class row quoting a
+        number that was no longer true, until the view was switched away and
+        back. _add_meeting and _remove_meeting already refresh both; this is the
+        same rule for the other half of the sidebar's counts."""
+        self._refresh_sidebar()
+        # Second, so the row the keyboard is being handed back is the last
+        # thing built and keeps the focus.
+        self._refresh_homework(focus=focus)
 
     # ---------------- views ----------------
 
     def _on_view_toggled(self, btn, key):
         if btn.get_active():
             self._set_view(key)
+
+    def _show_notes(self):
+        """Bring the Notes view forward for an action that acts on a lecture.
+
+        The File menu offers New Lecture in every view, and it used to make one
+        wherever you were: the lecture appeared in a view that does not show
+        lectures, the caret landed in a title field that was not on screen, and
+        the next thing typed went into a lecture nobody could see."""
+        if getattr(self, "view", "notes") != "notes":
+            self._set_view("notes")
 
     def _set_view(self, key):
         """Show one of the three views and refresh what it shows.
@@ -984,8 +1157,18 @@ class Academics(nbapp.AppWindow):
         # directly under a heading reading "No classes" and directly above an
         # empty state reading "No classes": the same three words three times on
         # one screen, which is the first screen of a fresh install.
+        running = self._meeting_running()
         if not meets:
             self.sched_sub.set_text("")
+        elif running is not None:
+            # THE CLASS YOU ARE SITTING IN is the answer to "what now?", and
+            # this line walked straight past it: _next_meeting skips a meeting
+            # that has already started, so at 12:06 in a 12:00-13:30 Biology
+            # block the header read "Next: Biology, next Monday at 12:00" -- a
+            # week away, about the class going on in the room.
+            ci, m = running
+            self.sched_sub.set_text(
+                _t("Now: %s, until %s") % (self._class_label(ci), m["end"]))
         elif nxt is None:
             self.sched_sub.set_text(_t("No more classes this week"))
         else:
@@ -1091,6 +1274,17 @@ class Academics(nbapp.AppWindow):
         wrap.pack_start(scroll, True, True, 0)
         return wrap
 
+    def _check_day_rollover(self):
+        """Rebucket deadlines and move the schedule's day marker at midnight."""
+        if self._closed:
+            return False
+        day = _today_key()
+        if day != self._shown_day:
+            self._shown_day = day
+            self._refresh_schedule()
+            self._refresh_homework()
+        return True
+
     def _refresh_homework(self, focus=None):
         """Rebuild the homework list. `focus` is the model index of the row the
         keyboard should land back on: ticking a box moves its row to another
@@ -1167,15 +1361,20 @@ class Academics(nbapp.AppWindow):
         # the state it is in — "Mark as done" over an already-done box is a
         # small lie the reader has to work around.
         if h["done"]:
-            tick.set_tooltip_text(_t("Mark as not done"))
+            action = _t("Mark as not done")
         else:
-            tick.set_tooltip_text(_t("Mark as done"))
+            action = _t("Mark as done")
+        tick.set_tooltip_text(action)
+        # The title is authored data, so keep it verbatim while making every
+        # checkbox distinguishable to assistive technology.
+        tick.get_accessible().set_name("%s: %s" % (action, h["title"]))
         tick.connect("toggled", self._on_hw_toggle, index)
         row.pack_start(tick, False, False, 0)
         self._hw_ticks[index] = tick
 
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        title = Gtk.Label(label=h["title"], xalign=0)
+        title = Gtk.Label(xalign=0)
+        _set_user_text(title, h["title"])
         tctx = title.get_style_context()
         tctx.add_class("ac-hwtitle")
         if h["done"]:
@@ -1185,7 +1384,7 @@ class Academics(nbapp.AppWindow):
         # A long assignment is trimmed to keep the column its measure, so the
         # full wording has to stay readable somewhere.
         if len(h["title"]) > 40:
-            title.set_tooltip_text(h["title"])
+            _set_user_tooltip(title, h["title"])
         text.pack_start(title, False, False, 0)
 
         # The meta line, built as a list of parts joined by dots rather than as
@@ -1219,7 +1418,11 @@ class Academics(nbapp.AppWindow):
                     dot = Gtk.Label(label="  ·  ", xalign=0)
                     dot.get_style_context().add_class("ac-hwmeta")
                     meta.pack_start(dot, False, False, 0)
-                lb = Gtk.Label(label=txt, xalign=0)
+                # Each part is its own label, so the class name stands ALONE
+                # on one of them: the joined-with-dots line never protected it.
+                # The EXAM marker and the due date arrive already translated.
+                lb = Gtk.Label(xalign=0)
+                _set_user_text(lb, txt)
                 ctx = lb.get_style_context()
                 for n in names:
                     ctx.add_class(n)
@@ -1235,7 +1438,8 @@ class Academics(nbapp.AppWindow):
         # be read without a mouse or seen while scanning the page.
         note = (h.get("note") or "").strip()
         if note:
-            nl = Gtk.Label(label=note, xalign=0)
+            nl = Gtk.Label(xalign=0)
+            _set_user_text(nl, note)
             nctx = nl.get_style_context()
             nctx.add_class("ac-hwnote")
             if h["done"]:
@@ -1243,7 +1447,7 @@ class Academics(nbapp.AppWindow):
             nl.set_ellipsize(Pango.EllipsizeMode.END)
             nl.set_max_width_chars(46)
             if len(note) > 46:
-                nl.set_tooltip_text(note)
+                _set_user_tooltip(nl, note)
             text.pack_start(nl, False, False, 0)
         row.pack_start(text, True, True, 0)
 
@@ -1282,13 +1486,19 @@ class Academics(nbapp.AppWindow):
 
     def _on_hw_toggle(self, btn, index):
         try:
-            self.homework[index]["done"] = bool(btn.get_active())
+            self.homework[index]
         except IndexError:
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Tick Off")
-        self._save_to_disk()
+        self.homework[index]["done"] = bool(btn.get_active())
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
-        self._refresh_homework(focus=index)
+        if not saved:
+            return
+        self._homework_changed(focus=index)
 
     # ---------------- schedule view ----------------
 
@@ -1338,6 +1548,14 @@ class Academics(nbapp.AppWindow):
         self.grid_area.set_tooltip_text(
             _t("Click a class time to change or remove it. "
                "Double-click an empty slot to add one."))
+        try:
+            acc = self.grid_area.get_accessible()
+            acc.set_name(_t("Timetable"))
+            acc.set_description(_t(
+                "Click a class time to change or remove it. "
+                "Double-click an empty slot to add one."))
+        except Exception:
+            pass
         self.grid_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.grid_area.connect("button-press-event", self._on_timetable_press)
         self.grid_area.connect("key-press-event", self._on_timetable_key)
@@ -1592,6 +1810,7 @@ class Academics(nbapp.AppWindow):
         for i, (x, y, w, h, ci, m) in enumerate(getattr(self, "_blocks", [])):
             if x <= ev.x <= x + w and y <= ev.y <= y + h:
                 self._sel_block = i
+                self._announce_timetable_selection()
                 self.grid_area.queue_draw()
                 self._edit_meeting(ci, m)
                 return True
@@ -1668,8 +1887,37 @@ class Academics(nbapp.AppWindow):
             return False
         else:
             return False
+        self._announce_timetable_selection()
         self.grid_area.queue_draw()
         return True
+
+    def _announce_timetable_selection(self):
+        """Expose the selected Cairo-drawn block through the one grid focus.
+
+        The blocks are not GTK children, so changing the painted focus ring
+        alone is invisible to assistive technology.  Keep the grid's name in
+        sync with the exact meeting that Enter/Delete will act on.
+        """
+        blocks = getattr(self, "_blocks", [])
+        if not (0 <= self._sel_block < len(blocks)):
+            return
+        _x, _y, _w, _h, ci, meeting = blocks[self._sel_block]
+        label = self._class_label(ci) or _t("Class")
+        day = _t(DAY_NAMES[int(meeting.get("day", 0)) % 7])
+        detail = "%s · %s · %s–%s" % (
+            label, day, meeting.get("start", ""), meeting.get("end", ""))
+        room = meeting.get("room", "")
+        if not room and 0 <= ci < len(self.classes):
+            room = self.classes[ci].get("room", "")
+        if room:
+            detail += " · " + str(room)
+        try:
+            acc = self.grid_area.get_accessible()
+            acc.set_name("%s: %s" % (_t("Timetable"), detail))
+            acc.set_description(detail)
+            acc.notify_visible_data_changed()
+        except Exception:
+            pass
 
     # ---------------- schedule + homework model ----------------
 
@@ -1760,7 +2008,13 @@ class Academics(nbapp.AppWindow):
             # from record COUNTS to the contents of a field.
             rec.update({"title": title, "cls": cls,
                         "due": due,
-                        "done": bool(h.get("done")),
+                        # Completion is destructive state: completed work is
+                        # moved out of the active buckets and can be cleared in
+                        # bulk. Accept only JSON true. Python truthiness made
+                        # malformed-but-readable values such as the string
+                        # "false" count as completed, then autosaved them as
+                        # true and hid unfinished work from the main list.
+                        "done": h.get("done") is True,
                         # Anything that is not the word "exam" is ordinary work,
                         # so a store written before this field existed — and a
                         # store with nonsense in it — both read as work.
@@ -1845,6 +2099,24 @@ class Academics(nbapp.AppWindow):
                 return ci, m, ahead
         return None
 
+    def _meeting_running(self):
+        """(class index, meeting) for a class in session RIGHT NOW, else None.
+
+        _meeting_now answers a different question -- it also says yes for the
+        hour before a class starts, which is right for prefilling a new lecture
+        and wrong for a header claiming the class is running."""
+        now = time.localtime()
+        mins = now.tm_hour * 60 + now.tm_min
+        for ci, m in self._all_meets():
+            if m["day"] != now.tm_wday:
+                continue
+            start, end = _minutes(m["start"]), _minutes(m["end"])
+            if start is None or end is None:
+                continue
+            if start <= mins <= end:
+                return ci, m
+        return None
+
     def _grid_bounds(self):
         """(first minute, last minute) the timetable has to cover — the normal
         working day, stretched if a class falls outside it."""
@@ -1889,7 +2161,13 @@ class Academics(nbapp.AppWindow):
                 groups[0][2].append(i)
             elif o == today:
                 groups[1][2].append(i)
-            elif o - today <= 7:
+            # STRICTLY inside the week. The assignment dialog's own quick
+            # button called "Next week" sets a date exactly seven days out, and
+            # <= 7 filed it under the heading THIS WEEK -- the button and the
+            # group it landed in saying opposite things about the same date.
+            # Six days is also where _pretty_due stops naming a weekday and
+            # starts naming a date, so the row's own words agree with its group.
+            elif o - today < 7:
                 groups[2][2].append(i)
             else:
                 groups[3][2].append(i)
@@ -1965,7 +2243,14 @@ class Academics(nbapp.AppWindow):
         # This line is set at 21px bold, so "12 classes · 140 lectures" was
         # setting the sidebar's minimum width — and with it the window's, on a
         # panel that already has only a few pixels to spare.
-        self.side_summary.set_ellipsize(Pango.EllipsizeMode.END)
+        # ...so it WRAPS instead of being cut off: at 1024, the smallest panel
+        # the OS supports, an ordinary two-class term read "2 classes · 2 lec…"
+        # on the first screen of the app. A wrapping label's minimum width is
+        # its longest WORD, which is the width this cap is really protecting;
+        # the counts go on a line each (see _refresh_sidebar) so no line has to
+        # be broken at all in the ordinary case.
+        self.side_summary.set_line_wrap(True)
+        self.side_summary.set_line_wrap_mode(Pango.WrapMode.WORD)
         self.side_summary.set_max_width_chars(16)
         head.pack_start(self.side_summary, False, False, 0)
 
@@ -2059,7 +2344,8 @@ class Academics(nbapp.AppWindow):
                                                      CLASS_COLORS[0]))
         row.pack_start(sw, False, False, 0)
         txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        lbl = Gtk.Label(label=cl.get("label", ""), xalign=0)
+        lbl = Gtk.Label(xalign=0)
+        _set_user_text(lbl, cl.get("label", ""))
         lbl.get_style_context().add_class("cls-rowname")
         lbl.set_ellipsize(Pango.EllipsizeMode.END)
         lbl.set_max_width_chars(24)
@@ -2099,7 +2385,9 @@ class Academics(nbapp.AppWindow):
         elif not nl:
             summary = _t("%d class%s") % (nc, "" if nc == 1 else "es")
         else:
-            summary = "%s · %s" % (
+            # One count per line. Joined with " · " this ran to 22 characters
+            # at 21px bold, which no sidebar width this app allows can show.
+            summary = "%s\n%s" % (
                 _t("%d class%s") % (nc, "" if nc == 1 else "es"),
                 _t("%d lecture%s") % (nl, "" if nl == 1 else "s"))
         self.side_summary.set_text(summary)
@@ -2195,7 +2483,8 @@ class Academics(nbapp.AppWindow):
             sw.set_valign(Gtk.Align.CENTER)
             sw.connect("draw", self._swatch_draw, cl["color"])
             hdr.pack_start(sw, False, False, 0)
-            lbl = Gtk.Label(label=cl["label"].upper(), xalign=0)
+            lbl = Gtk.Label(xalign=0)
+            _set_user_text(lbl, cl["label"].upper())
             lbl.get_style_context().add_class("cls-label")
             # A long class name is trimmed rather than allowed to stretch the
             # sidebar (which would push the whole window past the screen edge).
@@ -2289,7 +2578,8 @@ class Academics(nbapp.AppWindow):
         box.pack_start(num, False, False, 0)
 
         txt = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        title = Gtk.Label(label=lec["title"] or "Untitled Lecture", xalign=0)
+        title = Gtk.Label(xalign=0)
+        _set_user_text(title, lec["title"], "Untitled Lecture")
         title.get_style_context().add_class("lec-title")
         title.set_ellipsize(Pango.EllipsizeMode.END)
         if index == self.active:
@@ -2452,11 +2742,39 @@ class Academics(nbapp.AppWindow):
         self.savedot.set_valign(Gtk.Align.CENTER)
         self._saved = True
         self.savedot.connect("draw", self._draw_savedot)
+        # WHAT THE STORE SAYS, not what the clock says. A fresh install opened
+        # reading "Saved 09:14" with a green dot beside it, over a file that did
+        # not exist, with nothing written and nothing yet to write. The dot and
+        # the line appear once there is a save to report, and the time is the
+        # store's own rather than the moment the window happened to open.
+        self.savedot.set_no_show_all(True)
         box.pack_start(self.savedot, False, False, 0)
-        self.savelbl = Gtk.Label(label=_t("Saved %s") % time.strftime("%H:%M"))
+        self.savelbl = Gtk.Label(label=self._store_saved_text())
         self.savelbl.get_style_context().add_class("savestate")
         box.pack_start(self.savelbl, False, False, 0)
+        if self.savelbl.get_text():
+            self.savedot.show()
         return box
+
+    @staticmethod
+    def _store_saved_text():
+        """"Saved HH:MM" from the store's own timestamp, or "" when nothing has
+        been written yet."""
+        try:
+            when = os.path.getmtime(ACADEMICS_FILE)
+        except OSError:
+            return ""
+        return _t("Saved %s") % time.strftime("%H:%M", time.localtime(when))
+
+    def _mark_store_saved(self):
+        """Report a save that has just landed on the indicator."""
+        self._saved = True
+        try:
+            self.savelbl.set_text(_t("Saved %s") % time.strftime("%H:%M"))
+            self.savedot.show()
+            self.savedot.queue_draw()
+        except Exception:                                         # noqa: BLE001
+            pass
 
     def _draw_savedot(self, area, cr):
         # No compositor: paint the whole widget with the opaque formatbar
@@ -2575,7 +2893,7 @@ class Academics(nbapp.AppWindow):
         self.column.pack_start(self.title, False, False, 0)
         self._show_title_label()
 
-        meta = Gtk.Label(label=lec["meta"], xalign=0)
+        meta = Gtk.Label(label=_lecture_meta(lec), xalign=0)
         meta.get_style_context().add_class("canvas-meta")
         self.column.pack_start(meta, False, False, 0)
 
@@ -2710,18 +3028,25 @@ class Academics(nbapp.AppWindow):
         in by hand every time is the work the schedule exists to remove. When
         a meeting is running now (or starts within the hour) its room and time
         go into the subtitle too."""
-        meta = self._long_date() + " · added " + time.strftime("%H:%M")
+        meta_date = self._long_date()
+        meta_kind = "added"
+        meta_suffix = time.strftime("%H:%M")
+        meta = meta_date + " · added " + meta_suffix
         here = self._meeting_now(cls)
         if here is not None:
             where = here.get("room") or self.classes[cls].get("room") or ""
-            meta = "%s %s-%s%s" % (self._long_date(), here["start"],
+            meta_kind = "meeting"
+            meta_suffix = "%s-%s%s" % (here["start"], here["end"],
+                                        " · " + where if where else "")
+            meta = "%s %s-%s%s" % (meta_date, here["start"],
                                    here["end"],
                                    " · " + where if where else "")
         return {
             "cls": cls, "num": num,
             "title": "%s %s" % (_t("Lecture"), num),
             "date": self._short_date(),
-            "meta": meta,
+            "meta": meta, "meta_date": meta_date,
+            "meta_kind": meta_kind, "meta_suffix": meta_suffix,
             "notes": "", "ranges": {}}
 
     def _meeting_now(self, cls):
@@ -2757,9 +3082,16 @@ class Academics(nbapp.AppWindow):
         return None
 
     def _new_lecture(self):
+        # NO CLASS YET? Then New Lecture MAKES the class its lecture hangs on:
+        # _new_class appends both, shows Notes and lands the caret in the new
+        # note's title -- the whole of what this item promises. Delegating is
+        # the ACTION, so the result is carried back rather than dropped on a
+        # bare return, which is what a refusal looks like.
         if not self.classes:
-            self._new_class()
-            return
+            return self._new_class()
+        # Show the lecture being made (and the title field about to take the
+        # caret) before making it.
+        self._show_notes()
         self.undo.checkpoint("New Lecture")
         # The class that is meeting right now wins over whatever was last open:
         # if you open the app in a lecture, that is the lecture you are taking.
@@ -2771,25 +3103,45 @@ class Academics(nbapp.AppWindow):
         # A blank lecture matches no search, so drop the filter first or the row
         # about to be created would not be in the list at all.
         self._clear_search()
+        before = self._undo_snapshot()
         self.lectures.append(self._blank_lecture(cls, self._next_num(cls)))
         self.active = len(self.lectures) - 1
         self._refresh_sidebar()
         self._refresh_canvas()
+        # A new lecture is a STRUCTURAL edit and is persisted like every other
+        # one. It used to wait for the first keystroke, or for the window to
+        # close: a lecture made and then left alone existed only on screen, and
+        # on a fresh install the store stayed absent while the indicator said
+        # Saved. Canvas first, then save -- _save_to_disk captures the live
+        # buffer, and until the rebuild it still belongs to the outgoing note.
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         # Land the cursor in the title so she can name the new lecture at once.
         self._focus_title()
 
     def _new_class(self):
+        # This makes a lecture as well as a class, so it lands in Notes too.
+        self._show_notes()
         # Flush the outgoing lecture's note text + formatting before we switch.
         self._capture_active()
         self.undo.checkpoint("New Class")
         self._clear_search()
         ci = self._append_class()
+        before = self._undo_snapshot()
         self.lectures.append(self._blank_lecture(ci, "01"))
         self.active = len(self.lectures) - 1
         self._refresh_sidebar()
         self._refresh_canvas()
+        saved = self._save_to_disk()        # see _new_lecture
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
         self._focus_title()
 
     def _rename_class(self):
@@ -2892,14 +3244,31 @@ class Academics(nbapp.AppWindow):
         entry.set_size_request(280, -1)
         entry.get_style_context().add_class("acdlgentry")
         dlg._box.pack_start(entry, False, False, 0)
+        warn = Gtk.Label(xalign=0)
+        warn.set_line_wrap(True)
+        warn.set_max_width_chars(34)
+        warn.get_style_context().add_class("ac-warn")
+        dlg._box.pack_start(warn, False, False, 0)
         self._dialog_buttons(dlg, ok_label, destructive=False)
         dlg.show_all()
+        warn.hide()
         entry.grab_focus()
         entry.select_region(0, -1)
-        name = entry.get_text().strip() \
-            if dlg.run() == Gtk.ResponseType.OK else ""
-        dlg.destroy()
-        return name or None
+        # Same rule as _class_dialog and _homework_dialog: a blank name is
+        # answered, not silently obeyed. Confirming with an empty field used to
+        # close the card and do nothing -- Rename Class in particular looked
+        # exactly like a rename that had worked.
+        while True:
+            if dlg.run() != Gtk.ResponseType.OK:
+                dlg.destroy()
+                return None
+            name = entry.get_text().strip()
+            if name:
+                dlg.destroy()
+                return name
+            warn.set_text(_t("Enter a name"))
+            warn.show()
+            entry.grab_focus()
 
     def _confirm(self, heading, detail, ok_label="Delete"):
         """Modal warning confirm; returns True only if the user chose the
@@ -2951,6 +3320,7 @@ class Academics(nbapp.AppWindow):
                          lec.get("num", ""), cl.get("label", "")))
         if not self._confirm("Delete this lecture?", detail):
             return
+        before = self._undo_snapshot()
         self._may_empty = True
         self.undo.checkpoint("Delete Lecture")
         # The outgoing lecture is being discarded, so just drop any pending
@@ -2967,11 +3337,12 @@ class Academics(nbapp.AppWindow):
         self.active = min(self.active, len(self.lectures) - 1)
         self._refresh_sidebar()
         self._refresh_canvas()
-        try:
-            self._save_to_disk()
-        except Exception:
-            pass
+        saved = self._save_to_disk()
+        if not saved:
+            self._rollback_failed_save(before)
         self.undo.commit()
+        if not saved:
+            return
 
     def _prune_empty_classes(self):
         """Renumber `cls` indices after a class is removed. Nothing is pruned.
@@ -3075,11 +3446,41 @@ class Academics(nbapp.AppWindow):
         self._refresh_sidebar()
         self._refresh_canvas()
 
+    def _choose_class(self, ok_label, destructive=False):
+        """ASK which class a menu action means when the open view cannot say.
+        Returns a model index, or -1 if it was cancelled.
+
+        What this replaced was the message "Select a class in the sidebar.",
+        flashed into the note editor's save indicator: not on screen at all in
+        the two views whose sidebar lists classes, and not followable in the
+        Notes view either, where the class headers are labels and not buttons.
+        An action offered in a menu asks its own question instead."""
+        if not self.classes:
+            return -1
+        if len(self.classes) == 1:
+            return 0
+        dlg = self._dialog_shell("Which class?")
+        combo = self._class_combo(0)
+        dlg._box.pack_start(_field(_t("Class"), combo), False, False, 0)
+        self._dialog_buttons(dlg, ok_label, destructive=destructive)
+        dlg.show_all()
+        resp = dlg.run()
+        ci = self._combo_class_index(combo)
+        dlg.destroy()
+        if resp != Gtk.ResponseType.OK or not 0 <= ci < len(self.classes):
+            return -1
+        return ci
+
     def _edit_current_class(self):
         ci = self._current_class()
         if ci < 0:
-            self._flash("Select a class in the sidebar.")
-            return
+            # Nothing on screen says which class is meant, so the item asks.
+            # Saying no to your own question is not the app refusing -- and
+            # the cancel is kept BESIDE the question that raised it, so what
+            # the return follows is on the same screen as the return.
+            ci = self._choose_class("Edit")
+            if ci < 0:
+                return
         self._edit_class(ci)
 
     def _delete_class(self):
@@ -3092,8 +3493,11 @@ class Academics(nbapp.AppWindow):
         class slid into the freed slot."""
         ci = self._current_class()
         if ci < 0:
-            self._flash("Select a class in the sidebar.")
-            return
+            # Asks which class, exactly as Edit Class does; a cancel is the
+            # person's own answer and stays beside the question.
+            ci = self._choose_class("Delete", destructive=True)
+            if ci < 0:
+                return
         self._delete_class_at(ci)
 
     def _set_active_row(self, index):
@@ -3154,7 +3558,8 @@ class Academics(nbapp.AppWindow):
                 if self._active_title_label is not None:
                     # Mirror the sidebar's empty-title fallback so clearing the
                     # title shows "Untitled Lecture" there, not a blank row.
-                    self._active_title_label.set_text(new or "Untitled Lecture")
+                    _set_user_text(self._active_title_label, new,
+                                   "Untitled Lecture")
             self._mark_editing()
 
     def _on_notes_changed(self, buf):
@@ -3318,6 +3723,7 @@ class Academics(nbapp.AppWindow):
         self.undo.touch()
         self._saved = False
         self.savelbl.set_text("Saving…")
+        self.savedot.show()
         self.savedot.queue_draw()
         if self._save_timer:
             GLib.source_remove(self._save_timer)
@@ -3334,6 +3740,7 @@ class Academics(nbapp.AppWindow):
             # is honest, but never crash the app over a disk error.
             self._saved = False
             self.savelbl.set_text("Saving…")
+        self.savedot.show()
         self.savedot.queue_draw()
         self._save_timer = None
         return False
@@ -3556,6 +3963,14 @@ class Academics(nbapp.AppWindow):
         try:
             nbapp.atomic_write_json(ACADEMICS_FILE, data)
             self._save_warned = False
+            # The indicator follows the STORE. Every structural edit saves
+            # through here, so this is the one place that can honestly say a
+            # save has happened -- and the only way a fresh install's blank
+            # indicator lights up at the moment it becomes true.
+            try:
+                self._mark_store_saved()
+            except Exception:                                     # noqa: BLE001
+                pass
             return True
         except Exception as exc:
             # NEVER fail silently. Every caller here ignores the return value,
@@ -3588,6 +4003,16 @@ class Academics(nbapp.AppWindow):
                 "homework": [dict(h) for h in self.homework],
                 "active": self.active,
                 "_caret": self._caret_offset()}
+
+    def _rollback_failed_save(self, state):
+        """Restore a requested mutation whose authoritative write failed."""
+        self.classes = self._copy_classes(state["classes"])
+        self.lectures = self._copy_lectures(state["lectures"])
+        self.homework = [dict(h) for h in state.get("homework") or []]
+        self.active = state["active"]
+        self._sel_block = -1
+        self._refresh_sidebar(); self._refresh_canvas()
+        self._refresh_schedule(); self._refresh_homework()
 
     @staticmethod
     def _copy_classes(classes):
@@ -3623,6 +4048,7 @@ class Academics(nbapp.AppWindow):
             return 0
 
     def _undo_restore(self, state):
+        before = self._undo_snapshot()
         self.classes = self._copy_classes(state["classes"])
         self.lectures = self._copy_lectures(state["lectures"])
         self.homework = [dict(h) for h in state.get("homework") or []]
@@ -3642,12 +4068,29 @@ class Academics(nbapp.AppWindow):
             self.body.grab_focus()
         except Exception:
             pass
-        self._save_to_disk()
+        if not self._save_to_disk():
+            self._rollback_failed_save(before)
+            try:
+                buf = self.body.get_buffer()
+                caret = min(max(0, before.get("_caret", 0)),
+                            buf.get_char_count())
+                buf.place_cursor(buf.get_iter_at_offset(caret))
+                self.body.grab_focus()
+            except Exception:
+                pass
+            # The failed write may have published nothing, but repairing the
+            # authoritative snapshot is cheap and protects alternative writer
+            # implementations that fail after replacing the destination.
+            self._save_to_disk()
+            return False
+        return True
 
     def _on_destroy(self, *_a):
         """Flush a final save on window close so the last edit isn't lost."""
+        self._closed = True
         self.undo.cancel()
-        for attr in ("_save_timer", "_notes_timer", "_filter_timer"):
+        for attr in ("_save_timer", "_notes_timer", "_filter_timer",
+                     "_status_timer", "_day_rollover_id"):
             tid = getattr(self, attr, None)
             if tid:
                 try:
@@ -3771,8 +4214,10 @@ class Academics(nbapp.AppWindow):
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
             # Same renderer the Print dialog uses, so the exported and printed
-            # PDFs are identical byte-for-byte in layout.
-            render(os.path.join(DOCS_DIR, name))
+            # PDFs are identical byte-for-byte in layout. Render to a sibling
+            # draft: Cairo writes incrementally, so publishing directly could
+            # truncate the confirmed previous PDF if rendering or storage fails.
+            nbapp.atomic_write_via(os.path.join(DOCS_DIR, name), render)
         except Exception:
             self._flash("Export failed")
             return
@@ -3783,11 +4228,10 @@ class Academics(nbapp.AppWindow):
             GLib.source_remove(self._save_timer)
             self._save_timer = None
         self._saved = self._save_to_disk()
-        try:
-            self.savedot.queue_draw()
-            self.savelbl.set_text("Exported to Documents")
-        except Exception:
-            pass
+        # Say it where the exported view can show it: from the Schedule or the
+        # Homework screen the save indicator is not on screen at all, so a
+        # successful export used to report itself to nobody.
+        self._flash("Exported to Documents", saved=self._saved)
 
     @staticmethod
     def _line_style_at(a, b, ranges):
@@ -3912,7 +4356,7 @@ class Academics(nbapp.AppWindow):
                   9.5, False, "#6E695E", gap_after=6)
         page.emit(lec.get("title", "") or "Untitled Lecture", 26, True,
                   "#1A1916", gap_after=3)
-        meta = lec.get("meta", "")
+        meta = _lecture_meta(lec)
         if meta:
             page.emit(meta, 10, False, "#9A9484", gap_after=6)
         page.rule("#D7D2C5")
@@ -3937,15 +4381,67 @@ class Academics(nbapp.AppWindow):
 
         surf.finish()
 
-    def _flash(self, text):
-        """Surface a transient status/error line in the save indicator
-        (crash-safe; the next edit or successful save resets it)."""
+    def _view_status(self):
+        """The status line the OPEN VIEW has on screen, or None for the Notes
+        view -- whose status line is the save indicator in the format bar."""
+        view = getattr(self, "view", "notes")
+        if view == "schedule":
+            return getattr(self, "sched_sub", None)
+        if view == "homework":
+            return getattr(self, "hw_sub", None)
+        return None
+
+    # How long a message stands on a view header before the header goes back
+    # to saying what it normally says.
+    _STATUS_SECONDS = 8
+
+    def _arm_status_restore(self):
+        if getattr(self, "_status_timer", None):
+            try:
+                GLib.source_remove(self._status_timer)
+            except Exception:                                     # noqa: BLE001
+                pass
+        self._status_timer = GLib.timeout_add_seconds(
+            self._STATUS_SECONDS, self._restore_status)
+
+    def _restore_status(self):
+        self._status_timer = None
+        if self._closed:
+            return False
+        self._refresh_schedule()
+        self._refresh_homework()
+        return False
+
+    def _flash(self, text, saved=False):
+        """Surface a transient status/error line WHERE THE OPEN VIEW SHOWS IT
+        (crash-safe; the next edit, save or refresh resets it).
+
+        This wrote only to the save indicator, which lives in the note editor's
+        format bar -- so every message a Schedule or Homework action produced
+        ("Exported to Documents", "Export failed", "No assignments to export")
+        went to a label that is not on that screen, and the action looked like
+        it had done nothing whatsoever. Those two views carry their own status
+        line under the heading; the message goes there as well.
+
+        `saved` is the save state the message leaves behind: an export that
+        worked must not turn the save dot red.
+        """
+        text = _t(text)
         try:
-            self._saved = False
+            self._saved = saved
             self.savelbl.set_text(text)
+            self.savedot.show()
             self.savedot.queue_draw()
         except Exception:
             pass
+        lbl = self._view_status()
+        if lbl is None:
+            return
+        try:
+            lbl.set_text(text)
+        except Exception:                                         # noqa: BLE001
+            return
+        self._arm_status_restore()
 
     # ---------------- menu bar ----------------
     def menu_items(self, name):
@@ -4042,7 +4538,12 @@ class Academics(nbapp.AppWindow):
                     ("Homework", (lambda: self._set_view("homework"))
                      if self.view != "homework" else None),
                     nbapp.SEP,
-                    ("Clear Finished Homework",
+                    # _delete_homework asks first -- "Remove %d finished
+                    # assignment(s)? Unfinished assignments are kept." with
+                    # Cancel beside it -- so the label carries the ellipsis
+                    # that promise needs (MENU-CONVENTIONS §1), exactly as
+                    # Delete Lecture… and Delete Class… do in this same app.
+                    ("Clear Finished Homework…",
                      self._delete_homework if finished else None),
                     nbapp.SEP,
                     ("Search Notes    Ctrl+F",
@@ -4161,7 +4662,7 @@ class Academics(nbapp.AppWindow):
         if getattr(self, "title", None) is None:
             return
         text = self.title.get_text().strip()
-        self.title_lbl.set_text(text or _t("Lecture title"))
+        _set_user_text(self.title_lbl, text, "Lecture title")
         ctx = self.title_lbl.get_style_context()
         (ctx.add_class if not text else ctx.remove_class)("ghost")
         self.title.hide()
@@ -4173,17 +4674,23 @@ class Academics(nbapp.AppWindow):
         for b in getattr(self, "_fmt_btns", []):
             b.set_sensitive(have)
             if b is getattr(self, "_style_btn", None):
-                b.set_tooltip_text(_t("Paragraph style: Body, Heading, Subheading")
-                                   if have else _t("Open a lecture to choose a paragraph style."))
+                message = (_t("Paragraph style: Body, Heading, Subheading")
+                           if have else _t("Open a lecture to choose a paragraph style."))
             elif b is getattr(self, "_highlight_btn", None):
-                b.set_tooltip_text(_t("Highlight") if have else
-                                   _t("Open a lecture to highlight text."))
+                message = (_t("Highlight") if have else
+                           _t("Open a lecture to highlight text."))
             elif b is getattr(self, "_bullet_btn", None):
-                b.set_tooltip_text(_t("Bullet list") if have else
-                                   _t("Open a lecture to add a bullet list."))
+                message = (_t("Bullet list") if have else
+                           _t("Open a lecture to add a bullet list."))
             elif b is getattr(self, "_number_btn", None):
-                b.set_tooltip_text(_t("Numbered list") if have else
-                                   _t("Open a lecture to add a numbered list."))
+                message = (_t("Numbered list") if have else
+                           _t("Open a lecture to add a numbered list."))
+            else:
+                continue
+            b.set_tooltip_text(message)
+            acc = b.get_accessible()
+            if acc is not None:
+                acc.set_name(message)
 
     # ---------------- helpers ----------------
     def _sep(self):
@@ -4246,18 +4753,18 @@ class Academics(nbapp.AppWindow):
         .ac-sub { font-size: 13px; color: #6E695E; }
         .ac-rule { background: #D7D2C5; }
         .ac-eyebrow { font-size: 11px; letter-spacing: 0.14em;
-                      font-weight: 700; color: #9A9484; }
+                      font-weight: 700; color: #6E695E; }
         /* Accent means exactly ONE thing on these screens: this is late. */
         .ac-eyebrow.late { color: #C8341E; }
         .ac-hwrow { padding: 9px 0; }
         .ac-hwtitle { font-size: 15px; color: #1A1916; }
-        .ac-hwtitle.done { color: #9A9484; }
+        .ac-hwtitle.done { color: #6E695E; }
         .ac-hwmeta { font-size: 12px; color: #6E695E; }
         .ac-hwmeta.late { color: #C8341E; font-weight: 700; }
         .ac-hwkind { font-size: 11px; color: #4A4638; font-weight: 700;
                      letter-spacing: 0.09em; }
-        .ac-hwnote { font-size: 12px; color: #857F71; }
-        .ac-hwnote.done { color: #A9A395; }
+        .ac-hwnote { font-size: 12px; color: #6E695E; }
+        .ac-hwnote.done { color: #6E695E; }
         .ac-cta { background: #F8F7F2; border: 1px solid #C9C4B6;
                   border-radius: 8px; padding: 7px 16px; font-size: 14px;
                   color: #1A1916; box-shadow: none; }
@@ -4269,7 +4776,7 @@ class Academics(nbapp.AppWindow):
         .ac-empty-title { font-size: 17px; color: #1A1916; }
         .ac-empty-body { font-size: 14px; color: #6E695E; }
         .ac-fieldlabel { font-size: 11px; letter-spacing: 0.1em;
-                         font-weight: 700; color: #9A9484; }
+                         font-weight: 700; color: #6E695E; }
         .ac-warn { font-size: 12px; color: #C8341E; }
 
         .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
@@ -4280,17 +4787,17 @@ class Academics(nbapp.AppWindow):
         .canvaswrap viewport, .canvas { background: #FCFBF8; }
         .sidebar *, .editor * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .side-head { padding: 24px 26px 20px; border-bottom: 1px solid #D7D2C5; }
-        .side-eyebrow { font-size: 11px; letter-spacing: 0.16em; color: #9A9484;
+        .side-eyebrow { font-size: 11px; letter-spacing: 0.16em; color: #6E695E;
                         font-weight: 600; margin-bottom: 8px; }
         .side-term { font-size: 20px; font-weight: 700; color: #1A1916; }
         .acsearch { margin-top: 16px; font-size: 13px; color: #1A1916;
                     background: #FCFBF8; border: 1px solid #C9C4B6;
                     border-radius: 8px; box-shadow: none; min-height: 30px; }
         .acsearch:focus { border: 1px solid #8A857A; }
-        .side-count { font-size: 11px; letter-spacing: 0.1em; color: #9A9484;
+        .side-count { font-size: 11px; letter-spacing: 0.1em; color: #6E695E;
                       font-weight: 700; padding: 0 10px; margin: 2px 0 10px; }
         .side-list { padding: 16px 14px; }
-        .side-empty { padding: 30px 12px; font-size: 13px; color: #9A9484; }
+        .side-empty { padding: 30px 12px; font-size: 13px; color: #6E695E; }
         .cls-head { padding: 0 10px; margin: 10px 0 9px; }
         /* A class in the Schedule / Homework sidebar. It is a button, so it
            must not look like the OS's raised buttons -- it is a row. */
@@ -4314,12 +4821,12 @@ class Academics(nbapp.AppWindow):
         .lec-row:hover { background: #F0EADC; }
         .lec-row.active { background: #EAE3D2; box-shadow: inset 3px 0 0 #C8341E; }
         .lec-num { min-width: 30px; min-height: 24px; padding: 0 6px;
-                   font-size: 12px; border-radius: 4px; color: #9A9484;
+                   font-size: 12px; border-radius: 4px; color: #6E695E;
                    border: 1px solid #D7D2C5; }
         .lec-num.active { background: #1A1916; color: #FCFBF8; font-weight: 600;
                           border: 1px solid #1A1916; }
         .lec-title { font-size: 14px; color: #1A1916; font-weight: 500; }
-        .lec-date { font-size: 12px; color: #9A9484; margin-top: 2px; }
+        .lec-date { font-size: 12px; color: #6E695E; margin-top: 2px; }
         .side-foot { border-top: 1px solid #D7D2C5; padding: 14px 18px; }
         .newlecture { min-height: 40px; border: 1px solid #C9C4B6;
                       border-radius: 8px; background: #FCFBF8; color: #1A1916;
@@ -4333,7 +4840,7 @@ class Academics(nbapp.AppWindow):
                     border-radius: 8px; background: #FCFBF8; color: #1A1916;
                     font-size: 14px; font-weight: 500; box-shadow: none; }
         .stylebtn:hover { background: #F1EEE6; }
-        .stylebtn .caret { font-size: 11px; color: #9A9484; }
+        .stylebtn .caret { font-size: 11px; color: #8A857A; }
         .fmtbtn { min-width: 34px; min-height: 34px; padding: 0;
                   background: transparent; border: none; box-shadow: none;
                   border-radius: 8px; color: #1A1916; font-size: 17px; }
@@ -4351,7 +4858,7 @@ class Academics(nbapp.AppWindow):
         .fmtbtn.bold { font-weight: 700; }
         .fmtbtn.ital { font-style: italic; }
         .fsep { color: #D7D2C5; min-width: 1px; }
-        .wordcount, .savestate { font-size: 13px; color: #9A9484; }
+        .wordcount, .savestate { font-size: 13px; color: #6E695E; }
         .canvaswrap { background: #FCFBF8; }
         .canvas { padding: 56px 24px 160px; }
         .canvas-eyebrow-row { margin-bottom: 18px; }
@@ -4361,7 +4868,7 @@ class Academics(nbapp.AppWindow):
                     font-weight: 700; font-size: 40px; color: #1A1916;
                     background: transparent; border: none; padding: 0;
                     margin-bottom: 8px; }
-        .doctitle.ghost { color: #B3AD9E; }
+        .doctitle.ghost { color: #8A857A; }
         /* The two rename hit areas on the page (class eyebrow, lecture title)
            are real Gtk.Buttons so they are focusable and operable from the
            keyboard -- but they must go on looking like the plain rows they
@@ -4385,7 +4892,7 @@ class Academics(nbapp.AppWindow):
         .doctitlebtn:active, .doctitlebtn:checked {
                        background: #EAE3D2; background-image: none;
                        border: none; box-shadow: none; }
-        .canvas-meta { font-size: 13px; color: #9A9484; margin-bottom: 34px;
+        .canvas-meta { font-size: 13px; color: #6E695E; margin-bottom: 34px;
                        padding-bottom: 24px; border-bottom: 1px solid #D7D2C5; }
         .docbody { font-family: "Newsreader","Liberation Serif",serif;
                    font-size: 17px; color: #1A1916; background: #FCFBF8;
@@ -4395,7 +4902,7 @@ class Academics(nbapp.AppWindow):
         .empty-wrap { padding: 60px 0 0; }
         .empty-title { font-family: "Newsreader","Liberation Serif",serif;
                        font-size: 20px; color: #1A1916; margin-bottom: 6px; }
-        .empty-sub { font-size: 13px; color: #9A9484; margin-bottom: 16px; }
+        .empty-sub { font-size: 13px; color: #6E695E; margin-bottom: 16px; }
         .emptybtn { min-height: 36px; padding: 0 18px; font-size: 14px;
                     background: #FCFBF8; border: 1px solid #C9C4B6;
                     border-radius: 8px; box-shadow: none; color: #1A1916; }

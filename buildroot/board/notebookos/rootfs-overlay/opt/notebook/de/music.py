@@ -58,6 +58,7 @@ if GST_OK:
 import nbapp
 import nbstate
 import nbicons
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -66,8 +67,79 @@ DE_DIR = os.path.dirname(os.path.abspath(__file__))
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 CFG_FILE = os.path.join(CFG_DIR, "music.json")
+MAX_STORE_BYTES = 32 * 1024 * 1024
+
+
+def _set_user_text(label, text):
+    """A playlist, song, album or artist name — the user's, not the catalog's.
+
+    Playlists are named by the person ("Work", "Home", "Solo"); a song's title
+    is its ID3 tag or, absent tags, the FILENAME they chose, and an album or
+    artist is the folder they filed it in. nbi18n looks up every label, so the
+    sidebar, the header and the Add-to-playlist menu all showed a name that was
+    not in music.json and not on the disk."""
+    value = str(text or "")
+    nbi18n.set_verbatim(label, value)
+    # A Gtk.MenuItem holds its text in a child AccelLabel, and the show_all
+    # walk descends into it — stamping the item alone protected nothing, the
+    # same way it did not for a Gtk.Button until nbi18n learned to carry the
+    # stamp onto the child. nbi18n does that for Buttons only, so the menu
+    # item does it here.
+    try:
+        child = label.get_child()
+    except Exception:
+        child = None
+    if isinstance(child, Gtk.Label):
+        nbi18n.set_verbatim(child, value)
+
+
+def _set_user_tooltip(widget, text):
+    """Hover text naming a playlist. set_tooltip_text is patched by nbi18n;
+    set_tooltip_markup is not, and renders the same once escaped."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+class MusicStoreTooLarge(ValueError):
+    pass
+
+
+def _read_store_json(path=None, limit=MAX_STORE_BYTES):
+    if path is None:
+        path = CFG_FILE
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise MusicStoreTooLarge("music store is too large")
+    return json.loads(raw)
+# where the volume slider starts before anyone has moved it (0..100)
+DEFAULT_VOLUME = 70
 MUSIC_DIR = os.path.join(HOME, "Music")
 AUDIO_EXTS = (".mp3", ".flac", ".ogg", ".wav", ".m4a")
+
+
+def _is_track_number(text):
+    """True when this half of a 'NN - Title' file name is a track number.
+
+    Digits only, allowing the trailing '.' or ')' rippers add. Nobody is
+    called "01": read as an artist, the ubiquitous "01 - Morning Light.mp3"
+    convention turned one album folder into as many one-track albums by
+    as many numeric artists as it held (see _track_from_path)."""
+    text = str(text or "").strip().rstrip(".)").strip()
+    return bool(text) and text.isdigit()
 
 
 def _info_tags(info):
@@ -100,7 +172,10 @@ def _info_tags(info):
     return out[0], out[1], out[2]
 
 
-def _info_image(info):
+MAX_EMBEDDED_COVER_BYTES = 32 * 1024 * 1024
+
+
+def _info_image(info, limit=MAX_EMBEDDED_COVER_BYTES):
     """The bytes of an embedded cover image, or None.
 
     ID3 art arrives as a sample under the "image" tag; a file can carry several
@@ -113,6 +188,11 @@ def _info_image(info):
         if not ok or sample is None:
             return None
         buf = sample.get_buffer()
+        # Scaling bounds decoded dimensions later, but bytes(mi.data) below
+        # first duplicates the complete tag. Refuse pathological embedded art
+        # before mapping/copying it into the GTK process.
+        if buf is None or buf.get_size() > limit:
+            return None
         ok2, mi = buf.map(Gst.MapFlags.READ)
         if not ok2:
             return None
@@ -168,6 +248,7 @@ class Music(nbapp.AppWindow):
         # a listener is already reading, so a failure borrows it for a moment.
         self._flash_serial = 0     # so a later message wins the restore race
         self._flashing = False     # while set, refreshes leave the label alone
+        self._flash_timer = 0      # one owned transient-message restore source
         self.lbl_total = None
         self.lbl_elapsed = None
         # --- GStreamer engine state (all None/0 until _build_engine) ---
@@ -260,6 +341,7 @@ class Music(nbapp.AppWindow):
         with self._restoring:
             self.shuffle.set_active(bool(getattr(self, "_saved_shuffle", False)))
             self.repeat.set_active(bool(getattr(self, "_saved_repeat", False)))
+            self.vol.set_value(getattr(self, "_saved_volume", DEFAULT_VOLUME))
         self._refresh_transport()
 
         self._restore_selection()
@@ -283,6 +365,13 @@ class Music(nbapp.AppWindow):
             # Deferred to idle because __init__ is still building the window
             # the card has to sit inside.
             GLib.idle_add(self._say_store_unreadable)
+        elif getattr(self, "_store_quarantined", None):
+            # THE SAME RULE WHEN THE MOVE ASIDE SUCCEEDED. Saving works again
+            # from here, so the read-only card above would be wrong — but the
+            # playlists a person made are still not in the sidebar, and a
+            # silently empty sidebar reads as an app that lost them. Say what
+            # happened, once, at open.
+            GLib.idle_add(self._say_store_quarantined)
 
     def _open_arg_file(self):
         """Play a track handed in as sys.argv[1] (the Finder opens audio files
@@ -429,7 +518,8 @@ class Music(nbapp.AppWindow):
         btn.get_style_context().add_class("playlistrow")
         row = Gtk.Box(spacing=12)
         row.pack_start(nbicons.image("viewlist", 18, "#1A1916"), False, False, 0)
-        name_lbl = Gtk.Label(label=name, xalign=0)
+        name_lbl = Gtk.Label(xalign=0)
+        _set_user_text(name_lbl, name)
         # a playlist the user named "Long Drive Home Through The Mountains"
         # asked for its full 325px as a MINIMUM, which dragged the whole sidebar
         # out to 375px on a 1024 panel and squeezed the track list. Truncate the
@@ -437,7 +527,7 @@ class Music(nbapp.AppWindow):
         name_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         name_lbl.set_max_width_chars(16)
         row.pack_start(name_lbl, True, True, 0)
-        btn.set_tooltip_text(name)
+        _set_user_tooltip(btn, name)
         btn.add(row)
         btn._name_lbl = name_lbl
         # store the name on the row so a rename stays in sync — the click must
@@ -464,7 +554,8 @@ class Music(nbapp.AppWindow):
                     ctx.add_class("active")
                 else:
                     ctx.remove_class("active")
-            self.title.set_text(name)
+            _set_user_text(self.title, name)
+            _set_user_tooltip(self.title, name)  # the header truncates too
             # the Rename/Delete actions apply to whichever playlist is open
             self._set_playlist_actions(True)
             has = bool(self._playlist_tracks.get(name))
@@ -486,11 +577,21 @@ class Music(nbapp.AppWindow):
         # (empty) playlist — with the Rename/Delete actions and the "add tracks"
         # guidance visible — rather than dropping a mystery row into the sidebar
         # with the main pane unchanged and nothing selected.
+        # EVERY EDIT IS ITS OWN STEP. Creating, adding and renaming used to
+        # tell the history nothing, so the newest recorded state stayed the one
+        # from launch: an undo of the first removal that DID checkpoint jumped
+        # the whole session back to no playlists at all and wrote that to disk.
+        # Checkpoint here and the step before this one is the playlist the
+        # person was actually looking at.
+        if hasattr(self, "undo"):
+            self.undo.checkpoint("New Playlist")
         name = self._unique_playlist_name()
         row = self._create_playlist(name)
         self._save()
         if row is not None:
             self._select_playlist(row, name)
+        if hasattr(self, "undo"):
+            self.undo.commit()
 
     def _unique_playlist_name(self):
         # "Playlist N", stepping past any name already in use
@@ -561,6 +662,13 @@ class Music(nbapp.AppWindow):
         head.get_style_context().add_class("mainhead")
         self.title = Gtk.Label(label=_t("Songs"), xalign=0)
         self.title.get_style_context().add_class("viewtitle")
+        # A playlist named "Long Drive Home Through The Mountains And Back
+        # Again Twice" asked the header for its full 745px, which pushed the
+        # Delete icon and the whole search field off the right edge of a 1024
+        # panel and clipped the Album/Time columns. Truncate the title, as the
+        # sidebar row and the now-playing label already do; the full name is on
+        # the tooltip (set with the title in _select_playlist).
+        self.title.set_ellipsize(Pango.EllipsizeMode.END)
         head.pack_start(self.title, False, False, 0)
 
         # per-playlist actions (Rename / Delete) — shown next to the title only
@@ -839,7 +947,8 @@ class Music(nbapp.AppWindow):
         self.vol = Gtk.Scale.new_with_range(
             Gtk.Orientation.HORIZONTAL, 0, 100, 1)
         self.vol.set_draw_value(False)
-        self.vol.set_value(70)
+        self.vol.set_value(DEFAULT_VOLUME)
+        self.vol.get_accessible().set_name(_t("Volume"))
         self.vol.get_style_context().add_class("volslider")
         # drive the playbin "volume" property (0..1) live as the slider moves
         self.vol.connect("value-changed", self._on_volume)
@@ -902,7 +1011,15 @@ class Music(nbapp.AppWindow):
             # and go back to the beginning" to anyone who isn't guessing.
             nbicons.set_image(self._play_img, "pause" if playing else "play", 19, "#1A1916")
         if self._play_ev is not None:
-            self._play_ev.set_tooltip_text(_t("Pause") if playing else "Play")
+            action = _t("Pause") if playing else _t("Play")
+            self._play_ev.set_tooltip_text(action)
+            # The global tooltip bridge intentionally does not overwrite an
+            # existing ATK name.  This control changes action in place, so
+            # keep its semantic name synchronized explicitly.
+            try:
+                self._play_ev.get_accessible().set_name(action)
+            except (AttributeError, TypeError):
+                pass
         self._refresh_now_label()
         if self.lbl_total is not None:
             self.lbl_total.set_text(self._nowtotal())
@@ -974,6 +1091,15 @@ class Music(nbapp.AppWindow):
         # last failure is over, and leaving it up would caption the wrong song.
         self._flashing = False
         self._flash_serial += 1
+        # ...and its restore timer goes with it: a serial bump alone leaves
+        # _flash_timer holding a source that fires into a no-op, and the next
+        # _flash would source_remove an id that is already dead.
+        if self._flash_timer:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:                                     # noqa: BLE001
+                pass
+            self._flash_timer = 0
         path = track.get("path") if track else None
         if not (self._engine_ok() and path and os.path.isfile(path)):
             # nothing to decode — leave the row cued but not playing
@@ -1062,7 +1188,17 @@ class Music(nbapp.AppWindow):
         except Exception:
             pass
         if shuffle and direction > 0:
-            self._play_track(self._shuffle_next(tracks, idx))
+            repeat = False
+            try:
+                repeat = self.repeat.get_active()
+            except Exception:
+                pass
+            target = self._shuffle_next(tracks, idx,
+                                        refill=(not auto or repeat))
+            if target is None:
+                self._stop_playback()
+            else:
+                self._play_track(target)
             return
         if auto:
             # end-of-track (sequential): loop only when Repeat is on
@@ -1092,7 +1228,7 @@ class Music(nbapp.AppWindow):
             j += 1
         return tracks[j]
 
-    def _shuffle_next(self, tracks, idx):
+    def _shuffle_next(self, tracks, idx, refill=True):
         """Draw once from every other track before starting a new cycle.
 
         Identity, rather than metadata equality, defines queue membership: two
@@ -1100,15 +1236,19 @@ class Music(nbapp.AppWindow):
         """
         key = tuple(id(t) for t in tracks)
         remaining = getattr(self, "_shuffle_remaining", [])
-        if getattr(self, "_shuffle_queue_key", ()) != key:
-            remaining = []
-        if not remaining:
+        new_cycle = getattr(self, "_shuffle_queue_key", ()) != key
+        if new_cycle:
+            current = tracks[idx]
+            remaining = [t for t in tracks if t is not current]
+        elif not remaining:
+            if not refill:
+                return None
             current = tracks[idx]
             remaining = [t for t in tracks if t is not current]
         self._shuffle_queue_key = key
         self._shuffle_remaining = remaining
         if not remaining:
-            return tracks[idx]
+            return tracks[idx] if refill else None
         j = random.randrange(len(remaining))
         return remaining.pop(j)
 
@@ -1228,12 +1368,19 @@ class Music(nbapp.AppWindow):
         self._flashing = True
         serial = self._flash_serial
         self._nowlbl.set_text(msg)
-        GLib.timeout_add(restore_ms, self._unflash, serial)
+        if self._flash_timer:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:
+                pass
+        self._flash_timer = GLib.timeout_add(
+            restore_ms, self._unflash, serial)
 
     def _unflash(self, serial):
         # A newer message (or a track that started playing) owns the label now.
         if serial != self._flash_serial:
             return False
+        self._flash_timer = 0
         self._flashing = False
         self._refresh_now_label()
         return False
@@ -1242,7 +1389,9 @@ class Music(nbapp.AppWindow):
         """Put the live now-playing text back, unless a message is showing."""
         if self._closed or self._nowlbl is None or self._flashing:
             return
-        self._nowlbl.set_text(self._nowtext())
+        # "Title — Artist", which collapses to a bare title when a file
+        # carries no artist tag.
+        _set_user_text(self._nowlbl, self._nowtext())
 
     # ---------------- progress polling + seek + volume ----------------
     def _start_poll(self):
@@ -1379,6 +1528,7 @@ class Music(nbapp.AppWindow):
             prow.get_style_context().remove_class("active")
         title = dict((v[0], v[1]) for v in self.VIEWS)[vid]
         self.title.set_text(title)
+        self.title.set_tooltip_text(None)   # a view name is never truncated
         self.colhead.set_visible(vid == "songs")
         self.colhead.set_no_show_all(vid != "songs")
         # a view switch starts clean: drop any search carried over from the
@@ -1425,7 +1575,10 @@ class Music(nbapp.AppWindow):
     def _track_from_path(self, path):
         """Derive a track dict from a file path. Honours the common
         'Artist - Title.ext' file convention and an Artist/Album/track folder
-        layout; anything unknown reads as Unknown Artist / Album.
+        layout; anything unknown reads as Unknown Artist / Album. A NUMERIC
+        left half is the other ubiquitous convention — "01 - Morning Light" —
+        and is read as the track number it is, so the folder layout keeps the
+        artist (see _is_track_number).
 
         This is the FIRST guess, not the final answer: the Discoverer runs over
         every file afterwards and replaces title/artist/album with the real
@@ -1441,8 +1594,14 @@ class Music(nbapp.AppWindow):
         artist, title = "", base
         if " - " in base:
             a, t = base.split(" - ", 1)
-            if a.strip() and t.strip():
-                artist, title = a.strip(), t.strip()
+            a, t = a.strip(), t.strip()
+            if a and t:
+                if _is_track_number(a):
+                    # a track number, so the name carries no artist at all and
+                    # the Artist/Album folders below answer for it
+                    title = t
+                else:
+                    artist, title = a, t
         # album/artist from the folder layout under ~/Music
         try:
             rel = os.path.relpath(os.path.dirname(path), MUSIC_DIR)
@@ -1552,6 +1711,12 @@ class Music(nbapp.AppWindow):
     def _on_discovered(self, _disc, info, _err):
         """One track's length came back. Record it, cache it, and update just
         that row's Time cell — never a re-render of the list."""
+        # Discoverer runs on its own thread and dispatches results through the
+        # main loop. stop() cannot retract a result already queued when the
+        # window closes; that late callback must not mutate caches or widgets
+        # belonging to the destroyed Music window.
+        if getattr(self, "_closed", False):
+            return
         try:
             uri = info.get_uri()
             path = GLib.filename_from_uri(uri)[0] if uri else ""
@@ -1739,7 +1904,7 @@ class Music(nbapp.AppWindow):
         tags arrived, without re-rendering the whole list."""
         try:
             for lbl, field in self._tag_labels.get(path, ()):
-                lbl.set_text(song.get(field) or "")
+                _set_user_text(lbl, song.get(field) or "")
         except Exception:                                      # noqa: BLE001
             pass
         try:
@@ -1751,6 +1916,8 @@ class Music(nbapp.AppWindow):
     def _on_discover_finished(self, _disc):
         """Every queued track has been read — persist the answers once (not
         once per file) so the next launch shows the times immediately."""
+        if getattr(self, "_closed", False):
+            return
         try:
             if self._disc_dirty:
                 self._disc_dirty = False
@@ -1771,20 +1938,31 @@ class Music(nbapp.AppWindow):
             except Exception:
                 pass
 
+    @staticmethod
+    def _fold(value):
+        """Text as a reader compares it: case and accents ignored.
+
+        The library SORTS this way already (see _sort_key). Searching did not:
+        a plain lower-case substring test meant "cafe" found nothing while
+        "Café Noir" sat on screen, and nobody types the accent to find their
+        own music. One helper now serves both, so the two can never disagree
+        about whether é and e are the same letter."""
+        text = unicodedata.normalize("NFKD", str(value or "").strip())
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        return text.casefold()
+
     def _match(self, song, q):
-        """True when a track matches the (already lower-cased) search text."""
+        """True when a track matches the (already folded) search text."""
         if not q:
             return True
-        return (q in song.get("title", "").lower()
-                or q in song.get("artist", "").lower()
-                or q in song.get("album", "").lower())
+        return (q in self._fold(song.get("title", ""))
+                or q in self._fold(song.get("artist", ""))
+                or q in self._fold(song.get("album", "")))
 
     @staticmethod
     def _sort_key(value):
         """A reader-facing key: ignore leading articles, case and accents."""
-        text = unicodedata.normalize("NFKD", str(value or "").strip())
-        text = "".join(ch for ch in text if not unicodedata.combining(ch))
-        text = text.casefold()
+        text = Music._fold(value)
         for article in ("the ", "an ", "a "):
             if text.startswith(article):
                 text = text[len(article):]
@@ -1852,7 +2030,7 @@ class Music(nbapp.AppWindow):
         try:
             if row is self._empty_row:
                 return self._match_count == 0
-            q = (self._query or "").strip().lower()
+            q = self._fold(self._query)
             if not q:
                 return True
             song = getattr(row, "_song", None)
@@ -1866,7 +2044,7 @@ class Music(nbapp.AppWindow):
         """Re-count what the search matches, retitle the placeholder, and re-run
         the filter over the rows already built."""
         try:
-            q = (self._query or "").strip().lower()
+            q = self._fold(self._query)
             n = 0
             for row in self.songrows.get_children():
                 if row is self._empty_row:
@@ -1960,16 +2138,19 @@ class Music(nbapp.AppWindow):
                       spacing=self.COLUMN_GAP)
         box.get_style_context().add_class("songrow")
 
-        title = Gtk.Label(label=s.get("title", ""), xalign=0)
+        title = Gtk.Label(xalign=0)
+        _set_user_text(title, s.get("title", ""))
         title.set_ellipsize(Pango.EllipsizeMode.END)
         title.get_style_context().add_class("s-title")
         box.pack_start(title, True, True, 0)
 
-        artist = Gtk.Label(label=s.get("artist", ""), xalign=0)
+        artist = Gtk.Label(xalign=0)
+        _set_user_text(artist, s.get("artist", ""))
         self._fixed_cell(artist)
         box.pack_start(artist, False, False, 0)
 
-        album = Gtk.Label(label=s.get("album", ""), xalign=0)
+        album = Gtk.Label(xalign=0)
+        _set_user_text(album, s.get("album", ""))
         self._fixed_cell(album)
         box.pack_start(album, False, False, 0)
 
@@ -2044,7 +2225,8 @@ class Music(nbapp.AppWindow):
             menu.append(Gtk.SeparatorMenuItem())
             if self._playlists:
                 for pname in self._playlists:
-                    item = Gtk.MenuItem(label=pname)
+                    item = Gtk.MenuItem()
+                    _set_user_text(item, pname)
                     item.connect(
                         "activate",
                         lambda _mi, s=song, n=pname: self._add_to_playlist(s, n))
@@ -2067,8 +2249,13 @@ class Music(nbapp.AppWindow):
         try:
             tracks = self._playlist_tracks.setdefault(name, [])
             if not any(t is song for t in tracks):
+                # its own undo step, like every other playlist edit
+                if hasattr(self, "undo"):
+                    self.undo.checkpoint("Add to Playlist")
                 tracks.append(song)
                 self._save()   # persist the new membership
+                if hasattr(self, "undo"):
+                    self.undo.commit()
             if (self.view is None
                     and getattr(self, "_current_playlist", None) == name):
                 has = bool(tracks)
@@ -2106,8 +2293,16 @@ class Music(nbapp.AppWindow):
             return
         if hasattr(self, "undo"):
             self.undo.checkpoint("Remove Track")
+        before = list(tracks)
         self._playlist_tracks[name] = [t for t in tracks if t is not song]
-        self._save()   # persist the new membership
+        if not self._save():
+            self._playlist_tracks[name] = before
+            if hasattr(self, "undo"):
+                self.undo.commit()  # clear pending label; state is unchanged
+            if (self.view is None
+                    and getattr(self, "_current_playlist", None) == name):
+                self._populate()
+            return
         if (self.view is None
                 and getattr(self, "_current_playlist", None) == name):
             has = bool(self._playlist_tracks[name])
@@ -2180,18 +2375,20 @@ class Music(nbapp.AppWindow):
         row._scope = scope
         row._scope_label = label
         # what the search matches this row on (the filter never rebuilds rows)
-        row._filter_text = ("%s %s" % (title, sub)).lower()
+        row._filter_text = self._fold("%s %s" % (title, sub))
         if scope is not None:
             row.get_style_context().add_class("metarow")
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.get_style_context().add_class("songrow")
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        t = Gtk.Label(label=title, xalign=0)
+        t = Gtk.Label(xalign=0)
+        _set_user_text(t, title)
         t.set_ellipsize(Pango.EllipsizeMode.END)
         t.get_style_context().add_class("m-title")
         left.pack_start(t, False, False, 0)
         if sub:
-            su = Gtk.Label(label=sub, xalign=0)
+            su = Gtk.Label(xalign=0)
+            _set_user_text(su, sub)
             su.set_ellipsize(Pango.EllipsizeMode.END)
             su.get_style_context().add_class("m-sub")
             left.pack_start(su, False, False, 0)
@@ -2301,7 +2498,7 @@ class Music(nbapp.AppWindow):
                     ctx.remove_class("active")
             for prow in self._playlist_rows:
                 prow.get_style_context().remove_class("active")
-            self.title.set_text(self._scope_label)
+            _set_user_text(self.title, self._scope_label)
             # clear any lingering search so the whole group shows
             if self._search is not None:
                 self._search.set_text("")
@@ -2332,7 +2529,7 @@ class Music(nbapp.AppWindow):
         # the ordered list of track dicts currently on screen, used by the
         # prev/next transport controls. Albums/Artists views (which list groups,
         # not tracks) fall back to the whole filtered library.
-        q = (self._query or "").strip().lower()
+        q = self._fold(self._query)
         if self.view == "scope":
             return self._ordered_songs([s for s in self.songs
                                         if self._scope_matches(s)
@@ -2357,23 +2554,43 @@ class Music(nbapp.AppWindow):
     def _track_dict(self, t):
         """The on-disk shape of a track — the rendered fields plus the file
         path so a saved playlist track can still play after a relaunch."""
-        return {"title": str(t.get("title", "")),
-                "artist": str(t.get("artist", "")),
-                "album": str(t.get("album", "")),
-                "time": str(t.get("time", "") or ""),
-                "path": str(t.get("path", "") or "")}
+        out = dict(t)
+        out.update({"title": str(t.get("title", "")),
+                    "artist": str(t.get("artist", "")),
+                    "album": str(t.get("album", "")),
+                    "time": str(t.get("time", "") or ""),
+                    "path": str(t.get("path", "") or "")})
+        return out
 
     def _link_track(self, t):
-        """Re-link a saved track to the live library object with the same
-        title/artist/album (so highlight + dedupe by identity keep working);
-        fall back to the saved dict when the file is no longer in the library."""
+        """Re-link a saved track to its live library object.
+
+        Path is the durable identity when it is present. Two different files
+        can legitimately carry identical title/artist/album tags; matching
+        those first made a playlist saved with the second file silently play
+        the first one after restart. Metadata remains the fallback for legacy
+        records without paths, and for a file moved within the library.
+        """
+        path = str(t.get("path", "") or "")
+        known = {"title", "artist", "album", "time", "path"}
+
+        def _retain_extras(song):
+            for key, value in t.items():
+                if key not in known and key not in song:
+                    song[key] = value
+            return song
+
+        if path:
+            for s in self.songs:
+                if str(s.get("path", "") or "") == path:
+                    return _retain_extras(s)
         title = str(t.get("title", ""))
         artist = str(t.get("artist", ""))
         album = str(t.get("album", ""))
         for s in self.songs:
             if (s.get("title", "") == title and s.get("artist", "") == artist
                     and s.get("album", "") == album):
-                return s
+                return _retain_extras(s)
         return self._track_dict(t)
 
     def _load(self):
@@ -2381,15 +2598,20 @@ class Music(nbapp.AppWindow):
         self._loaded_playlists, applied to the sidebar once it is built. Must
         run after the library is populated so saved tracks can be re-linked."""
         self._loaded_playlists = []
+        self._store_extra = {}
+        # the path a damaged store was moved aside to, so the open can say so
+        self._store_quarantined = None
         # Closing the window is not consent to replace a store we could not
         # parse.  Stay read-only for this run after damage; a missing file is
         # the normal first-run case and is handled separately below.
         self._store_load_ok = False
         try:
-            with open(CFG_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json()
             if not isinstance(data, dict):
                 return
+            known = {"playlists", "tracks", "lengths", "tags", "view",
+                     "playlist", "shuffle", "repeat", "volume"}
+            self._store_extra = {k: v for k, v in data.items() if k not in known}
             damaged = False
             # be strict about the shapes: a garbage file whose "playlists" is a
             # string (or "tracks" a list) must not iterate characters or crash —
@@ -2409,6 +2631,12 @@ class Music(nbapp.AppWindow):
             self._saved_repeat = (data.get("repeat")
                                   if isinstance(data.get("repeat"), bool)
                                   else False)
+            # ...and the level the slider was left at, kept exactly like the
+            # two toggles beside it. Anything that is not a number in range
+            # falls back to the build default rather than muting the player.
+            vol = data.get("volume")
+            if isinstance(vol, (int, float)) and not isinstance(vol, bool):
+                self._saved_volume = max(0, min(100, int(vol)))
             names = data.get("playlists")
             tracks = data.get("tracks")
             if not isinstance(names, list):
@@ -2457,7 +2685,7 @@ class Music(nbapp.AppWindow):
                             and isinstance(ent[0], str)):
                         try:
                             self._lengths[str(path)] = [ent[0], int(ent[1])]
-                        except (TypeError, ValueError):
+                        except (TypeError, ValueError, OverflowError):
                             pass
             # cached tags: {path: [stat-key, title, artist, album]}. Same
             # shape-or-drop rule, so an older music.json with no "tags" key
@@ -2468,12 +2696,23 @@ class Music(nbapp.AppWindow):
                     if (isinstance(ent, list) and len(ent) == 4
                             and all(isinstance(x, str) for x in ent)):
                         self._tags[str(path)] = list(ent)
-            self._store_load_ok = not damaged
+            if damaged:
+                self._store_quarantined = nbapp.quarantine_unrecognized(
+                    CFG_FILE)
+                self._store_load_ok = not os.path.exists(CFG_FILE)
+            else:
+                self._store_load_ok = True
         except FileNotFoundError:
             self._store_load_ok = True
+        except MusicStoreTooLarge:
+            self._loaded_playlists = []
+            self._store_quarantined = nbapp.quarantine_unrecognized(CFG_FILE)
+            self._store_load_ok = not os.path.exists(CFG_FILE)
         except Exception:
             # no file yet / unreadable — start with no saved playlists
             self._loaded_playlists = []
+            self._store_quarantined = nbapp.preserve_damaged(CFG_FILE)
+            self._store_load_ok = not os.path.exists(CFG_FILE)
 
     def _save(self):
         """Persist playlists + their track lists to music.json. Called on every
@@ -2483,13 +2722,14 @@ class Music(nbapp.AppWindow):
         sidebar back walks the same setters a click walks, and restoration must
         never be recorded as a change the user made."""
         if self._restoring.active or not getattr(self, "_store_load_ok", False):
-            return
+            return False
         try:
             os.makedirs(CFG_DIR, exist_ok=True)
             # only keep lengths for files still in the library, so the cache
             # can never grow without bound as folders come and go
             live = set(self._by_path)
-            data = {
+            data = dict(getattr(self, "_store_extra", {}))
+            data.update({
                 "playlists": list(self._playlists),
                 "tracks": {n: [self._track_dict(t)
                                for t in self._playlist_tracks.get(n, [])]
@@ -2516,14 +2756,20 @@ class Music(nbapp.AppWindow):
                 "repeat": bool(self.repeat.get_active()) if hasattr(
                     self, "repeat") else bool(getattr(self, "_saved_repeat",
                                                       False)),
-            }
+                # the volume slider, read the same guarded way
+                "volume": int(self.vol.get_value()) if hasattr(
+                    self, "vol") else int(getattr(self, "_saved_volume",
+                                                  DEFAULT_VOLUME)),
+            })
             nbapp.atomic_write_json(CFG_FILE, data)
+            return True
         except Exception as exc:                                  # noqa: BLE001
             # Playlists are made one drag at a time and there is no Save button
             # to press again, so a write that does not land has to say so —
             # silence here means an evening of sorting reappears as nothing at
             # the next launch.
             nbapp.note_save_failure(self, exc, CFG_FILE)
+            return False
 
     def _undo_snapshot(self):
         return {
@@ -2535,6 +2781,29 @@ class Music(nbapp.AppWindow):
         }
 
     def _restore_undo_snapshot(self, state):
+        before = self._undo_snapshot()
+        engine = (getattr(self, "_loaded_path", None),
+                  getattr(self, "_playing", False))
+        self._apply_undo_snapshot(state)
+        # Playlist edits never own playback. Sidebar rebuilding must not stop
+        # or retarget the track that was already in the engine.
+        self._loaded_path, self._playing = engine
+        if not self._save():
+            self._apply_undo_snapshot(before)
+            self._loaded_path, self._playing = engine
+            try:
+                self._refresh_transport()
+                self._mark_playing_row()
+            except Exception:
+                pass
+            # Repair best-effort in case a writer failed after publishing. The
+            # original note_save_failure notification remains visible.
+            self._save()
+            return False
+        return True
+
+    def _apply_undo_snapshot(self, state):
+        """Apply playlist/view state without claiming it reached disk."""
         names = list(state.get("playlists", []))
         saved = state.get("tracks", {})
         tracks = {name: [self._link_track(copy.deepcopy(t)) for t in
@@ -2569,16 +2838,20 @@ class Music(nbapp.AppWindow):
             self._playlist_tracks = tracks
             self._current_playlist = state.get("playlist")
             self.view = state.get("view", "songs")
-        self._save()
 
     def _on_destroy(self, *_):
         # tear the engine down cleanly: stop the poll, the length scan and the
         # pipeline. The flag goes up FIRST, so a bus message still queued on
         # the main loop cannot restart any of them behind us.
         self._closed = True
+        self._flash_serial += 1
+        self._flashing = False
         self._playing = False
         self._loaded_path = None
         try:
+            if self._flash_timer:
+                GLib.source_remove(self._flash_timer)
+                self._flash_timer = 0
             if self._poll_id:
                 GLib.source_remove(self._poll_id)
                 self._poll_id = 0
@@ -2602,14 +2875,19 @@ class Music(nbapp.AppWindow):
             # app in the OS. They used to be reachable only from an unlabelled
             # pair of icons in the playlist header, and New Playlist sat under
             # View, which is for choosing what the pane shows.
-            # Rename/Delete both raise a card before anything happens, so both
-            # take an ellipsis; New Playlist makes one immediately, so it does
-            # not. Both grey out when no playlist is open.
+            # Rename asks for the new name, so it takes an ellipsis (rule 1).
+            # Delete does NOT ask: per the Interaction Constitution §5 an
+            # action Undo can reverse simply happens and says so, which is what
+            # this one does — it deletes, flashes what it did, and Edit > Undo
+            # Delete Playlist brings the playlist and its tracks back. The
+            # ellipsis it used to carry promised a confirmation card that never
+            # came. New Playlist makes one immediately, so it takes none
+            # either. Rename/Delete grey out when no playlist is open.
             have_pl = bool(getattr(self, "_current_playlist", None))
             return [("New Playlist", self._new_playlist),
                     ("Rename Playlist…",
                      self._rename_current_playlist if have_pl else None),
-                    ("Delete Playlist…",
+                    ("Delete Playlist",
                      self._delete_current_playlist if have_pl else None),
                     nbapp.SEP,
                     # the library lives in Home / Music; opening it creates it
@@ -2666,7 +2944,9 @@ class Music(nbapp.AppWindow):
                     self._premute_vol = cur
                     self.vol.set_value(0)
                 else:
-                    self.vol.set_value(getattr(self, "_premute_vol", 70) or 70)
+                    self.vol.set_value(getattr(self, "_premute_vol",
+                                                DEFAULT_VOLUME)
+                                       or DEFAULT_VOLUME)
                 return
             v = max(0, min(100, self.vol.get_value() + delta))
             self.vol.set_value(v)
@@ -2706,23 +2986,36 @@ class Music(nbapp.AppWindow):
             if new in self._playlists:
                 # a name already in use would collide the track map — ignore
                 return
+            before = self._undo_snapshot()
+            if hasattr(self, "undo"):
+                self.undo.checkpoint("Rename Playlist")
             idx = self._playlists.index(old)
             self._playlists[idx] = new
             self._playlist_tracks[new] = self._playlist_tracks.pop(old, [])
             try:
                 row = self._playlist_rows[idx]
-                row._name_lbl.set_text(new)
+                _set_user_text(row._name_lbl, new)
                 row._pl_name = new     # keep the row's live name in sync
-                row.set_tooltip_text(new)   # the row truncates, so does its hint
+                _set_user_tooltip(row, new)  # the row truncates, so does its hint
             except Exception:
                 pass
             if getattr(self, "_current_playlist", None) == old:
                 self._current_playlist = new
-                self.title.set_text(new)
+                _set_user_text(self.title, new)
+                _set_user_tooltip(self.title, new)
                 # re-render so the open playlist's rows carry the new name (their
                 # per-row remove control is keyed by it)
                 self._populate()
-            self._save()
+            if not self._save():
+                # Keep the interface aligned with the only durable copy. This
+                # is the same rollback contract deletion uses; the failed save
+                # has already posted the actionable storage warning.
+                self._apply_undo_snapshot(before)
+                self._save()  # best-effort repair of the durable snapshot
+            if hasattr(self, "undo"):
+                # after a rollback this records no step: the state matches the
+                # one the checkpoint pushed (see UndoHistory._push)
+                self.undo.commit()
         except Exception:
             pass
 
@@ -2730,12 +3023,22 @@ class Music(nbapp.AppWindow):
         name = getattr(self, "_current_playlist", None)
         if not name:
             return
+        before = self._undo_snapshot()
         if hasattr(self, "undo"):
             self.undo.checkpoint("Delete Playlist")
-        self._remove_playlist(name)
+        saved = self._remove_playlist(name)
+        if not saved:
+            # The playlist exists on disk and must remain on screen too. The
+            # restore attempts the same save and therefore leaves the existing
+            # actionable failure notice visible; never cover it with success.
+            self._apply_undo_snapshot(before)
+            self._save()  # best-effort repair of the durable snapshot
+            if hasattr(self, "undo"):
+                self.undo.commit()  # clears the pending label; state is unchanged
+            return
         if hasattr(self, "undo"):
             self.undo.commit()
-        self._flash(_t('Playlist “%s” deleted; tracks remain in the music library.')
+            self._flash(_t('Playlist “%s” deleted; tracks remain in the music library.')
                     % name)
 
     def _remove_playlist(self, name):
@@ -2743,7 +3046,7 @@ class Music(nbapp.AppWindow):
         # none remain, and fall back to the Songs view if it was the open one
         try:
             if name not in self._playlists:
-                return
+                return False
             idx = self._playlists.index(name)
             row = self._playlist_rows[idx]
             try:
@@ -2759,12 +3062,14 @@ class Music(nbapp.AppWindow):
                     self._none.show()
                 except Exception:
                     pass
-            self._save()
+            if not self._save():
+                return False
             if getattr(self, "_current_playlist", None) == name:
                 self._current_playlist = None
                 self._select("songs")
+            return True
         except Exception:
-            pass
+            return False
 
     # ---------------- in-window dialogs (reliable on the no-compositor stack) --
     def _open_dialog(self, card):
@@ -2897,6 +3202,21 @@ class Music(nbapp.AppWindow):
             _t("Continue"), lambda: None)
         return False
 
+    def _say_store_quarantined(self):
+        """Say why the sidebar is empty when saving still works.
+
+        The playlists ARE the data here, so the session keeps saving (that is
+        the damaged-store doctrine, and the store the app could not read was
+        moved aside before anything replaced it). The half that was missing is
+        this one: the file went aside, the sidebar opened with nothing in it,
+        and not a word was said. _say_store_unreadable's wording cannot serve —
+        it promises that nothing will be saved, which here is untrue."""
+        self._confirm(
+            _t("Your playlists could not be read"),
+            _t("They were kept, and new playlists will be saved as usual."),
+            _t("Continue"), lambda: None)
+        return False
+
     def _confirm(self, title, message, ok_label, on_yes):
         # house-style destructive confirmation; the primary action is the one
         # signage red (an alert, per the design language)
@@ -2976,7 +3296,7 @@ class Music(nbapp.AppWindow):
         .sidebar { background: #F1EEE6; border-right: 1px solid #C9C4B6;
                    padding: 24px 14px; }
         .sidebar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .sidehead { font-size: 11px; letter-spacing: 0.14em; color: #9A9484;
+        .sidehead { font-size: 11px; letter-spacing: 0.14em; color: #6E695E;
                     font-weight: 700; padding: 0 12px; margin-bottom: 10px; }
         .viewrow { padding: 9px 12px; border-radius: 6px; font-size: 15px;
                    color: #1A1916; font-weight: 500; margin-bottom: 2px;
@@ -2990,8 +3310,9 @@ class Music(nbapp.AppWindow):
            engaged shuffle/repeat are INK (see below). */
         .viewrow.active { background: #EAE3D2;
                           box-shadow: inset 3px 0 0 #C8341E; }
-        .viewcount { font-size: 13px; color: #9A9484; }
-        .empty-mini { padding: 6px 12px; font-size: 13px; color: #9A9484; }
+        .viewcount { font-size: 13px; color: #6E695E; }
+        .viewrow.active .viewcount, .viewrow.sel .viewcount { color: #3A362E; }
+        .empty-mini { padding: 6px 12px; font-size: 13px; color: #6E695E; }
         /* the playlist scroller must be INVISIBLE: the theme paints every
            scrolledwindow/viewport in page paper (#FCFBF8), which inside the
            darker sidebar panel drew a pale rounded slab that read like an empty
@@ -3003,7 +3324,7 @@ class Music(nbapp.AppWindow):
                        color: #1A1916; background: transparent; border: none;
                        box-shadow: none; }
         .newplaylist:hover { background: #EFEBE0; }
-        .sidefoot { font-size: 12px; color: #9A9484; padding: 0 12px; }
+        .sidefoot { font-size: 12px; color: #6E695E; padding: 0 12px; }
 
         /* ---- main pane ---- */
         .mainpane { background: #FCFBF8; }
@@ -3016,10 +3337,10 @@ class Music(nbapp.AppWindow):
                        font-size: 13px; color: #1A1916; padding: 0; }
         .colhead { padding: 0 36px; min-height: 34px;
                    border-bottom: 1px solid #D7D2C5; background: transparent; }
-        .colhead label { font-size: 11px; letter-spacing: 0.12em; color: #9A9484;
+        .colhead label { font-size: 11px; letter-spacing: 0.12em; color: #6E695E;
                          font-weight: 700; }
         .empty-title { font-size: 16px; font-weight: 600; color: #6E695E; }
-        .empty-desc { font-size: 13px; color: #9A9484; }
+        .empty-desc { font-size: 13px; color: #6E695E; }
 
         /* ---- populated library list ---- */
         /* the scroll (and any viewport) must paint an OPAQUE page background so
@@ -3041,18 +3362,18 @@ class Music(nbapp.AppWindow):
         .songlist row.playing .s-cell,
         .songlist row.playing .s-time { color: #3A362E; }
         .s-cell { font-size: 13px; color: #6E695E; }
-        .s-time { font-size: 13px; color: #9A9484; }
+        .s-time { font-size: 13px; color: #6E695E; }
         /* per-row add-to-playlist button - quiet until hovered */
         .addbtn { min-width: 30px; min-height: 30px; padding: 0; border: none;
                   background: transparent; box-shadow: none; border-radius: 50%; }
         .addbtn:hover { background: #F1EEE6; }
         .m-title { font-size: 15px; font-weight: 600; color: #1A1916; }
-        .m-sub { font-size: 12px; color: #9A9484; }
-        .m-right { font-size: 13px; color: #9A9484; }
+        .m-sub { font-size: 12px; color: #6E695E; }
+        .m-right { font-size: 13px; color: #6E695E; }
         /* drillable album/artist rows: a touch stronger on hover to read as
            tappable (they open a filtered track list) */
         .songlist row.metarow:hover { background: #EFEBE0; }
-        .listempty { padding: 40px 12px; font-size: 13px; color: #9A9484; }
+        .listempty { padding: 40px 12px; font-size: 13px; color: #6E695E; }
         /* Empty-state CTA -> the OS paper-outline create/CTA treatment (matching
            GBA SDK's "Open the example game", Calendar's New Event, Novel's New
            Chapter, Cookbook's New Recipe). Opening the Music folder is a mild
@@ -3096,7 +3417,7 @@ class Music(nbapp.AppWindow):
         .roundbig { border: 1px solid #C9C4B6; border-radius: 50%; }
         .artwork { border: 1px solid #C9C4B6; background: #EFEBE0; }
         .nowplaying { font-size: 14px; color: #6E695E; }
-        .timecode { font-size: 11px; color: #9A9484; }
+        .timecode { font-size: 11px; color: #6E695E; }
         /* seek bar: a thin papertone track with an ink fill + small knob,
            matching the volume slider's language (no signage red) */
         .seekbar { padding: 0; }

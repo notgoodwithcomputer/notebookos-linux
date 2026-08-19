@@ -244,8 +244,9 @@ class Splash(Gtk.Window):
                              easing=nbmotion.DEPART)
         except Exception:
             # Motion is strictly best-effort at boot.  A broken import,
-            # primitive, widget or frame clock hands over immediately.
-            Gtk.main_quit()
+            # primitive, widget or frame clock must not skip the already-armed
+            # grace period: the completed bar should remain briefly visible.
+            pass
 
     def _failsafe(self):
         # never let the splash trap the session behind it

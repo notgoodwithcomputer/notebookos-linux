@@ -25,6 +25,16 @@ import json
 # _poll_video_full. Holds the player's PID so a stale flag cannot strand the
 # desktop with no menu bar.
 VIDEO_FULL_FLAG = "/tmp/nb-video-fullscreen"
+
+
+def _process_token(pid):
+    """Return the PID/birth-time identity used by Media's ownership flag."""
+    try:
+        with open("/proc/%s/stat" % pid) as fh:
+            tail = fh.read().rsplit(") ", 1)[1].split()
+        return "%s %s" % (pid, tail[19])
+    except (OSError, IndexError):
+        return ""
 # subprocess is imported lazily inside the functions that spawn processes
 # (launch / _paint_below_bar / _power / _do_power). None of those run during
 # construct or the first paint, so the boot-foreground panel never pays the
@@ -34,7 +44,17 @@ import xshape
 import nbapp  # for nudge_paint (swrast scanout flush) + version/pretty name
 import nbicons        # the bell mark and the per-app glyph on a notification
 import nbnotify       # the notification spool every app posts to
-from nbi18n import _t  # panel menu labels (Finder/File/Edit/View/Label) translate
+import nbprefs        # the one place a saved preference is turned into effect
+# Fail CLOSED: nothing launches without a release-key signature over the
+# bytes on disk (docs/APP-TRUST.md). A missing nbtrust refuses.
+try:
+    import nbtrust
+except Exception:
+    nbtrust = None
+# _t: panel menu labels (Finder/File/Edit/View/Label) translate.
+# set_verbatim: ...and the one card that reports the CLIPBOARD's own bytes back
+# must NOT (see _card_dialog).
+from nbi18n import _t, set_verbatim
 # The panel is MOTION-EXEMPT: the menu bar stays static across the OS, and its
 # dropdowns appear and leave at rest (design owner's direction, 2026-08-10 —
 # the G1 drop-from-the-title arrival is retired; see motion_inventory
@@ -98,6 +118,9 @@ DE_DIR = os.path.dirname(os.path.abspath(__file__))
 HOME = os.environ.get("NB_HOME", "/root")
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 SHELL_FILE = os.path.join(CFG_DIR, "shell.json")
+# The Settings app's own store, watched here for the time zone (see
+# _sync_timezone). Settings owns this file; the panel only ever reads it.
+SETTINGS_FILE = os.path.join(CFG_DIR, "settings.json")
 
 # Mac OS 7 Finder "Label" menu: name -> colour of its dot (None clears it).
 # There is no shared selection between this panel and a separate Finder
@@ -114,7 +137,12 @@ FINDER_LABEL_COLORS = ["#B5502F", "#CC6B1F", "#B8912E",
 N_LABELS = len(FINDER_LABEL_COLORS)
 
 
-def launch(mod):
+def launch(mod, name=""):
+    """Start DE module `mod`. `name` is what the person who asked calls it —
+    the menu row's own words, or the app name a notification recorded — and is
+    used only if the launch is REFUSED, so the message in the tray says which
+    app it is about. The caller passes it because the panel must not keep a
+    second table of what the apps are (see nbnotify.post)."""
     # A launched app hides the desktop home (Finder + widget column) while it
     # runs. That flag (/tmp/nb-app-active) is now owned by nbapp.AppWindow and
     # ref-counted across every app process — however it was launched, including
@@ -124,6 +152,25 @@ def launch(mod):
     import subprocess
     script = os.path.join(DE_DIR, mod + ".py")
     if os.path.exists(script):
+        ok, why = (nbtrust.check_path(script) if nbtrust
+                   else (False, "the trust module is missing"))
+        if not ok:
+            print("nbtrust: refused %s (%s)" % (script, why))
+            try:
+                import nbnotify
+                # No `app`: a row that records the module offers to OPEN it,
+                # and opening it is what was just refused — clicking the row
+                # took the message away, ran the same refusal again and left
+                # an identical message in its place. The icon is passed
+                # directly so dropping `app` costs the row nothing, and the
+                # sender line names the app the refusal is about, which the
+                # shared title cannot.
+                nbnotify.post(_t("This app can't be opened on this computer."),
+                              app_name=name or _t("System"),
+                              icon=nbicons.glyph_for(mod))
+            except Exception:
+                pass
+            return
         subprocess.Popen(["python3", script],
                          env=dict(os.environ, PYTHONPATH=DE_DIR))
 
@@ -218,6 +265,14 @@ class Panel(Gtk.Window):
         self.set_skip_taskbar_hint(True)
         self.set_type_hint(Gdk.WindowTypeHint.DOCK)
         self.set_keep_above(True)
+        # A DOCK does not take the keyboard. It never did on this machine --
+        # matchbox does not move focus for a click -- but nbapp's dispatcher now
+        # gives a clicked window the focus the WM will not (see
+        # note_input_modality), and without this the menu bar would take the
+        # caret out of whatever app was being typed into every time someone
+        # opened a menu. Declaring it here is also simply what a panel is: its
+        # menus take a GTK grab of their own and work perfectly without it.
+        self.set_accept_focus(False)
 
         display = Gdk.Display.get_default()
         mon = display.get_primary_monitor() or display.get_monitor(0)
@@ -292,6 +347,7 @@ class Panel(Gtk.Window):
         self.add(self.fixed)
 
         root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        self._root_bar = root
         root.get_style_context().add_class("menubar")
         root.set_size_request(self.screen_w, PANEL_H)
         self.fixed.put(root, 0, 0)
@@ -369,16 +425,26 @@ class Panel(Gtk.Window):
         # pixels on this GPU-less software-rendered stack.
         self._last_clock = self._last_tip = self._last_date = None
         self._last_bat = None
+        self._last_bat_tip = None
         # Notification state, cached the same way and for the same reason. The
         # spool's key is a stat rather than a read (nbnotify.state_key), so the
         # tick only opens a record on the seconds when something changed.
         self._notify_state = None
+        self._notify_error = ""
         self._bell_unread = None      # what the mark currently SHOWS
         self._bell_count = None       # ...and what its tooltip currently says
+        # Time zone, followed the same cheap way (see _sync_timezone).
+        self._tz_stamp = None
         self._paint_bell(nbnotify.unread_count())
         self._pin_widths()
         self._tick()
         GLib.timeout_add_seconds(1, self._tick)
+        # ...and the fullscreen-video watch on its own second. It is a
+        # SEPARATE source rather than a line in _tick because _tick is also
+        # called directly during construct (and after a View toggle), and this
+        # one shows/hides the panel window — work that must only ever happen
+        # from the main loop, i.e. after main() has shown the bar.
+        GLib.timeout_add_seconds(1, self._poll_video_full)
 
         # dismiss an open menu when the pointer clicks outside it
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
@@ -387,12 +453,56 @@ class Panel(Gtk.Window):
         # once the panel is actually on screen, tell the boot splash the desktop
         # is up so it fills to 100% and dismisses. See splash.py / session.sh.
         self.connect("map-event", self._signal_ready)
+        self._geometry_refresh_id = 0
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            try:
+                screen.connect("size-changed", self._queue_geometry_refresh)
+                screen.connect("monitors-changed", self._queue_geometry_refresh)
+            except Exception:
+                pass
 
     def _signal_ready(self, *_):
         try:
             open("/tmp/nb-ready", "w").close()
         except Exception:
             pass
+        return False
+
+    def _queue_geometry_refresh(self, *_):
+        """Coalesce the burst of RandR signals produced by one mode change."""
+        if not self._geometry_refresh_id:
+            self._geometry_refresh_id = GLib.timeout_add(
+                100, self._refresh_geometry)
+        return False
+
+    def _refresh_geometry(self):
+        self._geometry_refresh_id = 0
+        display = Gdk.Display.get_default()
+        mon = (display.get_primary_monitor() or display.get_monitor(0)) \
+            if display is not None else None
+        geo = mon.get_geometry() if mon is not None else None
+        if geo is not None and geo.width > 1 and geo.height > 1:
+            width, height = geo.width, geo.height
+        else:
+            width, height = nbapp.screen_size()
+        if width == self.screen_w and height == self.screen_h:
+            return False
+
+        # A dropdown's placement and full-screen input catch were calculated
+        # in the old coordinate space. Close it rather than leaving an
+        # invisible input-stealing rectangle after a live RandR change.
+        self._menu_close()
+        self.screen_w, self.screen_h = width, height
+        self.set_size_request(width, height)
+        self.set_default_size(width, height)
+        self._root_bar.set_size_request(width, PANEL_H)
+        win = self.get_window()
+        if win is not None:
+            win.move_resize(0, 0, width, height)
+        self._reserve_strut()
+        self._apply_shape()
+        self.queue_resize()
         return False
 
     # ---- video fullscreen ----
@@ -409,8 +519,9 @@ class Panel(Gtk.Window):
         want_hidden = False
         try:
             with open(VIDEO_FULL_FLAG) as fh:
-                pid = fh.read().strip()
-            want_hidden = bool(pid) and os.path.isdir("/proc/" + pid)
+                owner = fh.read().strip()
+            pid = owner.split(" ", 1)[0]
+            want_hidden = bool(owner) and owner == _process_token(pid)
             if not want_hidden:
                 os.remove(VIDEO_FULL_FLAG)     # stale: its owner is gone
         except (OSError, ValueError):
@@ -506,6 +617,9 @@ class Panel(Gtk.Window):
         btn.get_style_context().add_class("menuitem")
         if is_logo:
             btn.get_style_context().add_class("logo")
+            menu_name = "%s — %s" % (_t("Notebook OS"), _t("Show Menu"))
+            btn.set_tooltip_text(menu_name)
+            btn.get_accessible().set_name(menu_name)
             img = Gtk.Image()
             try:
                 from gi.repository import GdkPixbuf
@@ -575,6 +689,8 @@ class Panel(Gtk.Window):
             # glued onto the end of the first, so the checks in a menu line up
             # in a column instead of landing wherever each label happens to end.
             trailing = item[3] if len(item) > 3 else None
+            # item[4] says the row's text is the USER's, not ours.
+            verbatim = item[4] if len(item) > 4 else False
             if label is None:
                 sep = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
                 sep.get_style_context().add_class("sysmenu-sep")
@@ -584,9 +700,18 @@ class Panel(Gtk.Window):
             it.set_relief(Gtk.ReliefStyle.NONE)
             it.get_style_context().add_class("sysmenu-item")
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            text = Gtk.Label(label=label, xalign=0.0)
-            if markup:
-                text.set_markup(markup)
+            text = Gtk.Label(xalign=0.0)
+            if verbatim:
+                # A Finder label the user renamed. _t_markup looks INSIDE the
+                # coloured-dot markup and translates each text RUN, so the
+                # stamp has to carry the markup string itself.
+                set_verbatim(text, markup or label)
+                if markup:
+                    text.set_markup(markup)
+            else:
+                text.set_label(label)
+                if markup:
+                    text.set_markup(markup)
             row.pack_start(text, True, True, 0)
             if trailing:
                 acc = Gtk.Label(xalign=1.0)
@@ -618,12 +743,42 @@ class Panel(Gtk.Window):
         cluster is aligned to a margin, not to the bare screen edge, and a card
         dropping out of that cluster comes to rest against the line the clock,
         date and battery already end on (Paper Physics §E2).
+
+        A card that sets `nb_scroll_only` names the one child that may scroll;
+        everything above it — the notification centre's heading and its Clear
+        All — stays put while the list moves under it.
         """
         self._cancel_nudges()
         inner.show_all()
         _imin, inat = inner.get_preferred_size()
-        avail_h = max(160, self.screen_h - PANEL_H)
-        if inat.height > avail_h:
+        # A full card rests SHORT of the bottom of the screen, on the same
+        # margin the right cluster ends on, rather than running flush into the
+        # edge: the card is a sheet of paper on the desktop, and paper that
+        # touches the edge of the table reads as clipped, not as full.
+        avail_h = max(160, self.screen_h - PANEL_H - RIGHT_MARGIN)
+        scroll_only = getattr(inner, "nb_scroll_only", None)
+        if inat.height > avail_h and scroll_only is not None:
+            # Scroll the LIST, not the card. Wrapping the whole card put its
+            # heading inside the scroller, so forty messages scrolled the word
+            # Notifications and the Clear All button off the top — and clearing
+            # the tray meant scrolling all the way back up to find the control.
+            _smin, snat = scroll_only.get_preferred_size()
+            room = max(80, avail_h - (inat.height - snat.height))
+            sw = Gtk.ScrolledWindow()
+            sw.get_style_context().add_class("sysmenu-scroll")
+            sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            sw.set_min_content_width(snat.width)
+            sw.set_min_content_height(room)
+            sw.set_max_content_height(room)
+            # (see the note below: a scroller consumes its own wheel events)
+            sw.add_events(Gdk.EventMask.SCROLL_MASK)
+            sw.connect("scroll-event", self._menu_activity)
+            inner.remove(scroll_only)
+            sw.add(scroll_only)
+            inner.pack_start(sw, True, True, 0)
+            inner.show_all()
+            body = inner
+        elif inat.height > avail_h:
             body = Gtk.ScrolledWindow()
             body.get_style_context().add_class("sysmenu-scroll")
             body.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -631,14 +786,33 @@ class Panel(Gtk.Window):
             body.set_min_content_height(avail_h)
             body.set_max_content_height(avail_h)
             body.add(inner)
+            # GtkScrolledWindow consumes wheel/trackpad events in its default
+            # handler, so an ancestor EventBox is not guaranteed to see them.
+            # Stamp activity on the consumer itself before scrolling proceeds.
+            body.add_events(Gdk.EventMask.SCROLL_MASK)
+            body.connect("scroll-event", self._menu_activity)
         else:
             body = inner
 
         menu = Gtk.EventBox()
         menu.get_style_context().add_class("sysmenu-host")
         menu.add(body)
-        menu.add_events(Gdk.EventMask.POINTER_MOTION_MASK)
+        menu.add_events(
+            Gdk.EventMask.POINTER_MOTION_MASK
+            | Gdk.EventMask.SCROLL_MASK
+            | Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.KEY_PRESS_MASK
+            | Gdk.EventMask.KEY_RELEASE_MASK
+            | Gdk.EventMask.TOUCH_MASK
+        )
         menu.connect("motion-notify-event", self._menu_activity)
+        menu.connect("scroll-event", self._menu_activity)
+        menu.connect("button-press-event", self._menu_activity)
+        menu.connect("button-release-event", self._menu_activity)
+        menu.connect("key-press-event", self._menu_key)
+        menu.connect("key-release-event", self._menu_activity)
+        menu.connect("touch-event", self._menu_activity)
 
         bx, _by = button.translate_coordinates(self.fixed, 0, 0)
         menu.show_all()
@@ -686,7 +860,7 @@ class Panel(Gtk.Window):
             self._apply_shape()
 
     def _menu_activity(self, *_):
-        # Pointer motion only STAMPS the last-interaction time; the idle source
+        # User activity only STAMPS the last-interaction time; the idle source
         # is left alone. This used to tear the GLib timeout down and build a new
         # one on every motion-notify event, i.e. dozens of main-context source
         # add/remove pairs per second of pointer travel across a menu — main
@@ -694,6 +868,13 @@ class Panel(Gtk.Window):
         # as the panel's repaints, for a 15-second safety net that never needed
         # that resolution. _menu_idle re-arms itself instead.
         self._menu_active_at = GLib.get_monotonic_time()
+        return False
+
+    def _menu_key(self, _widget, event):
+        self._menu_activity()
+        if event.keyval == Gdk.KEY_Escape:
+            self._menu_close()
+            return True
         return False
 
     def _menu_idle(self):
@@ -714,8 +895,13 @@ class Panel(Gtk.Window):
         return False
 
     def _maybe_dismiss(self, _w, ev):
-        # a click below the bar and outside the open menu closes it
-        if self._menu_rect is None or ev.y <= PANEL_H:
+        # ANY click outside the open menu closes it — including one on the bar
+        # itself, which used to be exempted and so left a menu hanging until
+        # the idle timeout when somebody clicked the clock or the bare bar to
+        # put it away. A click on a menu TITLE never arrives here: that button
+        # has its own input window and handles the press itself, so the guard
+        # only ever suppressed clicks on dead bar background.
+        if self._menu_rect is None:
             return False
         mx, my, mw, mh = self._menu_rect
         if not (mx <= ev.x <= mx + mw and my <= ev.y <= my + mh):
@@ -767,18 +953,17 @@ class Panel(Gtk.Window):
     def _notify_menu(self, button):
         if self._toggle_or_replace(button):
             return
-        items = nbnotify.load()
+        items, marked = nbnotify.open_tray(with_status=True)
         # Opening the tray IS reading it. The mark goes to now, so everything
         # on screen stops counting as new; anything that lands WHILE it is open
         # is later than the mark and is still new when it closes. That is the
         # honest alternative to rebuilding the list under the pointer, which
         # would reset the scroll of the thing being read (Article III §2).
-        nbnotify.mark_seen()
         self._present(self._notify_card(items), button,
                       right_edge=self.screen_w - RIGHT_MARGIN,
                       idle_s=NOTIFY_IDLE_TIMEOUT_S)
         self._notify_state = nbnotify.state_key()
-        self._paint_bell(0)
+        self._paint_bell(0 if marked else nbnotify.unread_count(items))
 
     def _notify_rebuild(self):
         """Redraw the open tray in place, after the user changed what is in it.
@@ -818,6 +1003,13 @@ class Panel(Gtk.Window):
             head.pack_end(clear, False, False, 0)
         card.pack_start(head, False, False, 0)
         card.pack_start(self._notify_rule(), False, False, 0)
+        if self._notify_error:
+            error = Gtk.Label(label=self._notify_error, xalign=0)
+            error.get_style_context().add_class("nbn-empty")
+            error.get_style_context().add_class("warn")
+            error.set_line_wrap(True)
+            error.set_max_width_chars(40)
+            card.pack_start(error, False, False, 0)
 
         if not items:
             # An empty state says what the surface is and what fills it, in
@@ -832,13 +1024,19 @@ class Panel(Gtk.Window):
             card.pack_start(empty, False, False, 0)
             return card
 
+        # The messages live in their own box so that a tray taller than the
+        # screen scrolls the LIST and leaves the heading — and Clear All —
+        # where they are (see _present's nb_scroll_only).
+        rows = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         for n, rec in enumerate(items):
             if n:
                 # A hairline between messages, not a gap: the seam is what says
                 # where one message ends, and revealed structure is the design
                 # (Paper Physics §E1).
-                card.pack_start(self._notify_rule(inset=True), False, False, 0)
-            card.pack_start(self._notify_row(rec), False, False, 0)
+                rows.pack_start(self._notify_rule(inset=True), False, False, 0)
+            rows.pack_start(self._notify_row(rec), False, False, 0)
+        card.pack_start(rows, False, False, 0)
+        card.nb_scroll_only = rows
         return card
 
     @staticmethod
@@ -851,11 +1049,10 @@ class Panel(Gtk.Window):
     def _notify_row(self, rec):
         """One message: who it is from and when, then what happened.
 
-        The row is the button — clicking anywhere on it opens the app that
+        The message body is a button — clicking it opens the app that
         posted it and takes the message away, which is the action a person
         actually wants and the only one that needs no explanation. The dismiss
-        cross is a second, smaller button inside it for the messages you have
-        read by reading them.
+        cross is a separate sibling action for messages already read here.
         """
         row = Gtk.Button()
         row.set_relief(Gtk.ReliefStyle.NONE)
@@ -876,7 +1073,13 @@ class Panel(Gtk.Window):
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
         col.set_valign(Gtk.Align.START)
         top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        who = Gtk.Label(label=rec.get("app_name") or "", xalign=0)
+        # A notification is ANOTHER APP'S words, and most of them carry
+        # something the user named — the stick that finished writing, the film
+        # that finished exporting, the file that was kept. This panel is the
+        # one surface in the OS that shows other apps' user text, so nothing
+        # on a row is ours to translate.
+        who = Gtk.Label(xalign=0)
+        set_verbatim(who, rec.get("app_name") or "")
         who.get_style_context().add_class("nbn-who")
         who.set_ellipsize(Pango.EllipsizeMode.END)
         top.pack_start(who, True, True, 0)
@@ -885,8 +1088,16 @@ class Panel(Gtk.Window):
         top.pack_end(when, False, False, 0)
         col.pack_start(top, False, False, 0)
 
-        # The title is a HEADLINE: one line, ellipsized. The body may take a
-        # second line and is then ellipsized too.
+        # The title is a HEADLINE, bounded at TWO lines like the body and
+        # then ellipsized. One line was the rule until the panel's own
+        # "This app can't be opened on this computer." was measured in the
+        # languages it ships in: 34 char-widths cut the German at "auf diesem
+        # Comp…" and the Japanese at "このアプリはこのコンピューターでは開け…",
+        # both times losing the verb that carries the meaning, with nothing
+        # anywhere else to read the rest from. A cap counted in CHARACTERS is
+        # what makes CJK worse than Latin here (a CJK glyph is about two char
+        # widths wide), so the second line is not a luxury in eleven of the
+        # seventeen languages — it is the sentence.
         #
         # Bounding them is what makes this a list somebody can scan rather than
         # a column of paragraphs of different lengths — and it is also the only
@@ -896,14 +1107,22 @@ class Panel(Gtk.Window):
         # a grid bought with cut-off Chinese is not a grid, it is a bug in
         # eleven languages. So the ROW carries the rhythm (min-height, on the
         # open ladder) and the text is free to be as tall as its script needs.
-        title = Gtk.Label(label=rec.get("title") or "", xalign=0)
+        title = Gtk.Label(xalign=0)
+        set_verbatim(title, rec.get("title") or "")
         title.get_style_context().add_class("nbn-msg")
+        title.set_line_wrap(True)
+        # WORD_CHAR, not WORD: Japanese and Chinese write no spaces, so a
+        # word-only wrap would leave the whole sentence on line one and
+        # ellipsize it exactly as before.
+        title.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        title.set_lines(2)
         title.set_ellipsize(Pango.EllipsizeMode.END)
         title.set_max_width_chars(34)
         col.pack_start(title, False, False, 0)
 
         if rec.get("body"):
-            body = Gtk.Label(label=rec["body"], xalign=0)
+            body = Gtk.Label(xalign=0)
+            set_verbatim(body, rec["body"])
             body.get_style_context().add_class("nbn-body")
             body.set_line_wrap(True)
             body.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
@@ -920,8 +1139,6 @@ class Panel(Gtk.Window):
         x.add(nbicons.image("wclose", 12, "#6E695E"))
         x.set_tooltip_text(_t("Dismiss"))
         x.connect("clicked", self._notify_dismiss, rec)
-        line.pack_end(x, False, False, 0)
-
         row.add(line)
         # The row's promise, said out loud rather than left to be guessed —
         # and the accessible name too, since every tooltip in this OS becomes
@@ -930,7 +1147,11 @@ class Panel(Gtk.Window):
         row.set_tooltip_text(_t("Open %s") % opens if opens
                              else _t("Dismiss"))
         row.connect("clicked", self._notify_open, rec)
-        return row
+        wrap = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        row.set_hexpand(True)
+        wrap.pack_start(row, True, True, 0)
+        wrap.pack_end(x, False, False, 0)
+        return wrap
 
     def _notify_opens(self, rec):
         """The app name a click on this row would open, or "" when there is
@@ -943,18 +1164,38 @@ class Panel(Gtk.Window):
         return ""
 
     def _notify_open(self, _btn, rec):
+        if not nbnotify.dismiss(rec.get("id")):
+            self._notify_error = _t("Could not delete “%s”") % \
+                (rec.get("title") or _t("Notifications"))
+            self._notify_rebuild()
+            return
+        self._notify_error = ""
         self._menu_close()
         if self._notify_opens(rec):
-            launch(rec.get("app"))
-        nbnotify.dismiss(rec.get("id"))
+            launch(rec.get("app"), rec.get("app_name") or "")
         self._notify_state = None       # the tick re-reads and clears the mark
 
     def _notify_dismiss(self, _btn, rec):
-        nbnotify.dismiss(rec.get("id"))
+        if nbnotify.dismiss(rec.get("id")):
+            self._notify_error = ""
+        else:
+            self._notify_error = _t("Could not delete “%s”") % \
+                (rec.get("title") or _t("Notifications"))
         self._notify_rebuild()
 
     def _notify_clear(self, _btn):
-        nbnotify.clear_all()
+        # Clearing is one ACTION over many messages, so it reports on the
+        # action: the per-message "Could not delete “%s”" borrowed here read
+        # 'Could not delete “Notifications”', which quotes the card's own name
+        # as though a message by that title had failed. This is the house
+        # sentence for a batch delete that did not all go through (Finder says
+        # the same thing after a multi-file delete), and it says how many.
+        before = len(nbnotify.load())
+        gone = nbnotify.clear_all()
+        left = before - gone
+        self._notify_error = ("" if left <= 0 else
+                              _t("%d item%s could not be deleted.") %
+                              (left, "" if left == 1 else "s"))
         self._notify_rebuild()          # the tray stays open, on its empty state
 
     def _notify_when(self, at):
@@ -1030,17 +1271,18 @@ class Panel(Gtk.Window):
             # The count lives here rather than on the bar, so the mark never
             # changes width and the cluster beside it never moves — and a
             # screen reader gets the exact number, which a spot cannot give.
-            self.bell.set_tooltip_text(
-                _t("Notifications") if not n
-                else _t("%d new notification%s") % (n, "" if n == 1 else "s"))
+            text = (_t("Notifications") if not n else
+                    _t("%d new notification%s") %
+                    (n, "" if n == 1 else "s"))
+            self.bell.set_tooltip_text(text)
+            self.bell.get_accessible().set_name(text)
 
     def _logo_menu(self, button):
         self._popup([
             ("About This Notebook…", self._about),
             (None, None),
-            ("System Settings…", lambda: launch("settings")),
-            ("System Monitor", lambda: launch("sysmon")),
-            ("Terminal", lambda: launch("terminal")),
+            ("System Settings…", lambda: launch("settings", _t("Settings"))),
+            ("System Monitor", lambda: launch("sysmon", _t("System Monitor"))),
             (None, None),
             ("Sleep", lambda: self._power("sleep")),
             ("Restart…", lambda: self._power("reboot")),
@@ -1082,7 +1324,6 @@ class Panel(Gtk.Window):
     def _file_menu(self, button):
         self._popup([
             ("New Finder Window", lambda: launch_finder()),
-            ("Open Terminal", lambda: launch("terminal")),
             (None, None),
             ("About This Notebook…", self._about),
         ], button)
@@ -1095,11 +1336,17 @@ class Panel(Gtk.Window):
         # are genuinely useful, working actions (no dead items).
         # the copied time matches the clock format the user chose in View, so a
         # 12-hour bar clock copies "3:45 PM", not a surprise 24-hour "15:45".
+        # ...and in the interface LANGUAGE. time.strftime has no locale on
+        # this image and always writes English month and weekday names, so a
+        # raw stamp put "Mon 17 Aug 2026" on a Japanese install's clipboard
+        # while the bar beside it read 8月17日 月. _t() is the same path the
+        # date label goes through (nbi18n translates the date words inside an
+        # otherwise-numeric string), so one date has one set of words.
         stamp = "%a %-d %b %Y, %H:%M" if self._clock_24h \
             else "%a %-d %b %Y, %-I:%M %p"
         self._popup([
             ("Copy Date & Time",
-             lambda: self._copy_text(time.strftime(stamp))),
+             lambda: self._copy_text(_t(time.strftime(stamp)))),
             (None, None),
             ("Show Clipboard…", self._show_clipboard),
             ("Clear Clipboard", self._clear_clipboard),
@@ -1138,15 +1385,21 @@ class Panel(Gtk.Window):
         # $NB_HOME/.config/notebook pattern as the Finder Label); the tick
         # honours the new state on the spot.
         if which == "24h":
-            self._clock_24h = not self._clock_24h
-            self._persist("clock_24h", self._clock_24h)
+            new = not self._clock_24h
+            if not self._persist("clock_24h", new):
+                return
+            self._clock_24h = new
         elif which == "seconds":
-            self._clock_seconds = not self._clock_seconds
-            self._persist("clock_seconds", self._clock_seconds)
+            new = not self._clock_seconds
+            if not self._persist("clock_seconds", new):
+                return
+            self._clock_seconds = new
         elif which == "date":
-            self._show_date = not self._show_date
+            new = not self._show_date
+            if not self._persist("show_date", new):
+                return
+            self._show_date = new
             self.datelbl.set_visible(self._show_date)
-            self._persist("show_date", self._show_date)
         self._pin_widths()      # the clock's widest reading just changed
         self._tick()
 
@@ -1167,21 +1420,48 @@ class Panel(Gtk.Window):
         clip.store()
 
     def _show_clipboard(self):
-        text = self._clipboard().wait_for_text()
-        # wait_for_text() returns None when there is no text to fetch (the
+        # Clipboard owners are other X clients and may be hung. Never enter
+        # GTK's unbounded synchronous selection wait on the panel callback.
+        generation = getattr(self, "_clipboard_read_generation", 0) + 1
+        self._clipboard_read_generation = generation
+        state = {"done": False, "timer": 0}
+
+        def finish(text, timed_out=False):
+            if (state["done"] or generation !=
+                    getattr(self, "_clipboard_read_generation", 0)):
+                return False
+            state["done"] = True
+            if state["timer"]:
+                GLib.source_remove(state["timer"])
+                state["timer"] = 0
+            verbatim = False
+            if timed_out:
+                body = "Clipboard text could not be read."
+            elif not text:
+                body = "There is no text on the clipboard to show."
+            elif not text.strip():
+                body = "The clipboard contains only blank space."
+            else:
+                body = text if len(text) <= 2000 else text[:2000] + "\n…"
+                # Only the clipboard's OWN text is reported back verbatim; the
+                # three sentences above are chrome and still translate.
+                verbatim = True
+            self._card_dialog(_t("Clipboard"), body, scroll_body=True,
+                              verbatim=verbatim)
+            return False
+
+        def received(_clipboard, text, _data=None):
+            finish(text)
+
+        state["timer"] = GLib.timeout_add(1500, finish, None, True)
+        self._clipboard().request_text(received, None)
+        # request returns None when there is no text to fetch (the
         # clipboard may still hold an image, or nothing) — report "no text"
         # rather than the dishonest "empty". Cap the shown text so a huge copied
         # document can't inflate the dialog past the edges of the screen.
-        if not text:
-            body = "There is no text on the clipboard to show."
-        elif not text.strip():
-            body = "The clipboard contains only blank space."
-        else:
-            body = text if len(text) <= 2000 else text[:2000] + "\n…"
-        self._card_dialog(_t("Clipboard"), body, scroll_body=True)
 
     def _card_dialog(self, heading, body, ok_label=None, danger=False,
-                     scroll_body=False):
+                     scroll_body=False, verbatim=False):
         """An undecorated Papertone dialog card — the shape every app in this OS
         uses for a confirm.
 
@@ -1207,17 +1487,35 @@ class Panel(Gtk.Window):
         box.pack_start(hd, False, False, 0)
 
         msg = Gtk.Label(label=body, xalign=0)
+        if verbatim:
+            # `body` is the user's own bytes, not chrome. nbi18n's show_all
+            # walk translates any label whose text matches a catalog key, so
+            # the card whose whole job is "here is what is on your clipboard"
+            # showed something else: a copied "Save" was displayed as
+            # "Speichern", a copied date came back rewritten. Stamping the
+            # label is what makes the walk leave it alone.
+            set_verbatim(msg, body)
         msg.get_style_context().add_class("pdlgmsg")
         msg.set_line_wrap(True)
         msg.set_width_chars(40)
         msg.set_max_width_chars(46)
         if scroll_body:
             # The clipboard can hold a whole document; it must not be allowed to
-            # inflate the card past the edges of the screen.
+            # inflate the card past the edges of the screen. A FIXED 260px box
+            # is the other half of that mistake, though: one copied timestamp
+            # then floated in the middle of an empty card the size of a page.
+            # The scroller grows with what it holds and only starts scrolling
+            # at the cap, and the text sits under the heading, not centred in
+            # the leftover room.
             msg.set_selectable(True)
+            msg.set_valign(Gtk.Align.START)
+            # A 4000-character paste with no spaces in it — a URL, a base64
+            # blob — has nowhere to wrap, and gave the card a 14000px width.
+            msg.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
             sw = Gtk.ScrolledWindow()
             sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            sw.set_size_request(-1, 260)
+            sw.set_propagate_natural_height(True)
+            sw.set_max_content_height(260)
             sw.add(msg)
             box.pack_start(sw, True, True, 0)
         else:
@@ -1241,6 +1539,10 @@ class Panel(Gtk.Window):
         cancel.set_can_default(True)
         dlg.set_default(cancel)
         dlg.set_default_response(Gtk.ResponseType.CANCEL)
+        # ...and it takes the focus before the card is shown, so the selectable
+        # clipboard body cannot be handed the initial focus and select itself
+        # (see _about).
+        dlg.set_focus(cancel)
         dlg.show_all()
         cancel.grab_focus()
         resp = dlg.run()
@@ -1254,8 +1556,8 @@ class Panel(Gtk.Window):
         # label state (persisted to shell.json) rather than tagging a file. The
         # active label carries a signage-red check when the menu is reopened —
         # honest feedback, and no dead or mislabeled items.
-        items = [("None", lambda: self._set_label(None),
-                  self._label_item_markup("None", None),
+        items = [(_t("None"), lambda: self._set_label(None),
+                  self._label_item_markup(_t("None"), None),
                   self._check_markup(self._label_idx is None))]
         items.append((None, None))
         for i, color in enumerate(FINDER_LABEL_COLORS):
@@ -1266,9 +1568,10 @@ class Panel(Gtk.Window):
             items.append((name or "\u2014",
                           lambda n=i: self._set_label(n),
                           self._label_item_markup(name, color),
-                          self._check_markup(self._label_idx == i)))
+                          self._check_markup(self._label_idx == i),
+                          True))          # the name is the user's own
         items.append((None, None))
-        items.append(("Edit Labels\u2026", self._edit_labels, None))
+        items.append((_t("Edit Labels\u2026"), self._edit_labels, None))
         self._popup(items, button)
 
     def _sane_label_names(self, saved):
@@ -1326,10 +1629,10 @@ class Panel(Gtk.Window):
         row = Gtk.Box(spacing=10)
         row.set_halign(Gtk.Align.END)
         row.set_margin_top(20)
-        cancel = Gtk.Button(label="Cancel")
+        cancel = Gtk.Button(label=_t("Cancel"))
         cancel.get_style_context().add_class("nbabout-btn")
         cancel.connect("clicked", lambda *_: dlg.destroy())
-        save = Gtk.Button(label="Save")
+        save = Gtk.Button(label=_t("Save"))
         save.get_style_context().add_class("nbabout-btn")
 
         def _save(*_a):
@@ -1337,14 +1640,24 @@ class Panel(Gtk.Window):
             # state — it is not an error to be filled in with placeholder copy.
             names = [ent.get_text().strip()[:24] for ent in entries]
             # The selection is an index, so a rename cannot lose it.
+            if not self._persist("label_names", names):
+                return
             self._label_names = names
-            self._persist("label_names", names)
             dlg.destroy()
 
         save.connect("clicked", _save)
         row.pack_end(save, False, False, 0)
         row.pack_end(cancel, False, False, 0)
         box.pack_start(row, False, False, 0)
+        # Return saves. Typing IS the task here, and every other dialog in this
+        # OS gives its confirming button the default (nbpicker, firstrun, the
+        # panel's own _card_dialog); in this one Return did nothing at all, so
+        # a name typed and confirmed the way every other field in the system
+        # takes one was simply not written.
+        save.set_can_default(True)
+        dlg.set_default(save)
+        for ent in entries:
+            ent.set_activates_default(True)
         dlg.connect("key-press-event", lambda _w, ev: (
             dlg.destroy() if ev.keyval == Gdk.KEY_Escape else None))
         dlg.show_all()
@@ -1368,8 +1681,8 @@ class Panel(Gtk.Window):
         return dot + text
 
     def _set_label(self, idx):
-        self._label_idx = idx
-        self._persist("finder_label_idx", idx)
+        if self._persist("finder_label_idx", idx):
+            self._label_idx = idx
 
     def _load_prefs(self):
         # the whole persisted session dict (Finder Label + menu-bar View
@@ -1393,8 +1706,18 @@ class Panel(Gtk.Window):
             data = self._load_prefs()
             data[key] = value
             nbapp.atomic_write_json(SHELL_FILE, data)
-        except Exception:
-            pass
+            return True
+        except Exception as exc:
+            try:
+                # app_name, not app: "System" is who is speaking, and the
+                # module field would make the row offer to open a de/System.py
+                # that does not exist. Without a name the row's sender line
+                # was blank.
+                nbnotify.post(nbapp.save_failure_reason(exc, SHELL_FILE),
+                              app_name=_t("System"))
+            except Exception:
+                pass
+            return False
 
     def _about(self):
         """About This Notebook — the snail mark over plain machine facts.
@@ -1444,13 +1767,13 @@ class Panel(Gtk.Window):
         if kernel:
             # Same two labels the Settings About page uses for these exact
             # values — one machine fact cannot have two names in one OS.
-            rows.append(("System core", kernel))
+            rows.append((_t("System core"), kernel))
         built = nbapp.os_release_field("BUILD_ID")
         if built:
-            rows.append(("Built", built))
+            rows.append((_t("Built"), built))
         mem = self._about_memory()
         if mem:
-            rows.append(("Memory", mem))
+            rows.append((_t("Memory"), mem))
         for r, (k, v) in enumerate(rows):
             kl = Gtk.Label(label=k, xalign=1)
             kl.get_style_context().add_class("nbabout-key")
@@ -1461,7 +1784,7 @@ class Panel(Gtk.Window):
             grid.attach(vl, 1, r, 1, 1)
         box.pack_start(grid, False, False, 0)
 
-        close = Gtk.Button(label="Close")
+        close = Gtk.Button(label=_t("Close"))
         close.get_style_context().add_class("nbabout-btn")
         close.set_halign(Gtk.Align.CENTER)
         close.set_margin_top(24)
@@ -1471,6 +1794,13 @@ class Panel(Gtk.Window):
         dlg.connect("key-press-event", lambda _w, ev: (
             dlg.destroy() if ev.keyval in (Gdk.KEY_Escape, Gdk.KEY_Return)
             else None))
+        # Focus BEFORE the window is shown. gtk_window_show hands the initial
+        # focus to the first focusable widget, and here that is a selectable
+        # value label — which selects all of its own text on the way in, so the
+        # card opened with the kernel string sitting on a grey selection box
+        # nobody had dragged over. Moving focus afterwards does not clear that
+        # selection; never getting it does.
+        dlg.set_focus(close)
         dlg.show_all()
         close.grab_focus()
 
@@ -1492,14 +1822,14 @@ class Panel(Gtk.Window):
         # UNSAVED WORK, so a single stray click must not trigger them: the
         # ellipsis in the menu promises this confirmation, and now it delivers.
         if mode == "sleep":
-            # blank the display now. "force off" only takes effect when DPMS is
-            # enabled, so enable it first; the single shell keeps the two in
-            # order. Moving the pointer or pressing a key wakes it (standard
-            # DPMS), so Sleep is safe and needs no confirmation.
+            # login owns the order: on a password-protected machine it first
+            # maps the fullscreen lock surface, then blanks.  Blanking here
+            # exposed the live desktop when an immediate wake beat Python/GTK
+            # startup.  Passwordless systems still blank immediately in login.
             try:
                 import subprocess
-                subprocess.Popen(["sh", "-c",
-                                  "xset +dpms; xset dpms force off; python3 /opt/notebook/de/login.py --lock"])
+                subprocess.Popen(["python3", "/opt/notebook/de/login.py",
+                                  "--lock", "--sleep"])
             except OSError:
                 pass
         else:
@@ -1573,7 +1903,47 @@ class Panel(Gtk.Window):
                     pass
         return out or ("Wed 88 Sep",)
 
+    def _sync_timezone(self):
+        """Follow a time-zone change without waiting for a restart.
+
+        With no zoneinfo in the image there is no /etc/localtime to re-point,
+        so the only lever is the TZ environment variable — and that reaches
+        exactly one process. Picking a zone in Settings therefore changed
+        Settings and nothing else: this clock went on showing the old zone
+        until the session was restarted.
+
+        Fixing it HERE fixes more than the clock. Apps are launched from this
+        process with a copy of its environment (see the Popen calls above), so
+        once the panel has the new zone every app opened afterwards starts in
+        it too. Apps ALREADY open keep the zone they started in; no process can
+        reach into another's environment, and that limit is stated on the
+        Settings page rather than papered over.
+
+        A stat per tick, not a read: the same shape as the notification spool
+        above, and settings.json is only opened on a tick where it changed.
+        """
+        try:
+            st = os.stat(SETTINGS_FILE)
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+        if stamp == self._tz_stamp:
+            return
+        self._tz_stamp = stamp
+        was = os.environ.get("TZ")
+        try:
+            nbprefs.apply_timezone()
+        except Exception:                                   # noqa: BLE001
+            return          # a damaged settings.json must not stop the clock
+        if os.environ.get("TZ") != was:
+            # Force the labels below to redraw. They are compared against their
+            # last value to avoid needless repaints, and 10:30 in one zone is
+            # the same STRING as 10:30 in another — so without this the clock
+            # would keep the old text until the minute happened to roll over.
+            self._last_clock = self._last_tip = self._last_date = None
+
     def _tick(self):
+        self._sync_timezone()
         now = time.localtime()
         if self._clock_seconds:
             fmt = "%H:%M:%S" if self._clock_24h else "%-I:%M:%S %p"
@@ -1603,7 +1973,7 @@ class Panel(Gtk.Window):
         # tick that already fires every second (no new wakeup); only relabel when
         # the reading changes, so the software-rendered bar isn't repainted for
         # 59 of every 60 identical ticks.
-        # The notification spool. state_key() is two stats and a listdir — it
+        # The notification spool. state_key() stats both spools and lists them —
         # never opens a record — so the 59 ticks in a minute where nothing was
         # posted cost nothing and touch no widget (Constitution B8). Only a
         # changed key pays for reading the tray.
@@ -1612,6 +1982,11 @@ class Panel(Gtk.Window):
             self._notify_state = state
             self._paint_bell(nbnotify.unread_count())
         bat, bat_tip = self._battery_pct()
+        self._paint_battery(bat, bat_tip)
+        return True
+
+    def _paint_battery(self, bat, bat_tip):
+        """Update battery ink and hover detail on their own change clocks."""
         if bat != self._last_bat:
             self._last_bat = bat
             if bat is None:
@@ -1625,9 +2000,10 @@ class Panel(Gtk.Window):
                 self.batlbl.set_markup(
                     '<span foreground="%s">%s</span>'
                     % ("#C8341E" if low else "#6E695E", bat))
-                self.batlbl.set_tooltip_text(bat_tip or "")
                 self.batlbl.set_visible(True)
-        return True
+        if bat_tip != self._last_bat_tip:
+            self._last_bat_tip = bat_tip
+            self.batlbl.set_tooltip_text(bat_tip or "")
 
     def _battery_pct(self):
         """(text, tooltip) for the bar battery read-out, or (None, None) when
@@ -1646,6 +2022,7 @@ class Panel(Gtk.Window):
             except OSError:
                 return ""
 
+        batteries = []
         for e in entries:
             p = os.path.join(base, e)
             if rd(os.path.join(p, "type")) != "Battery":
@@ -1655,14 +2032,85 @@ class Panel(Gtk.Window):
             # Without this the bar could show the mouse's charge, not the laptop's.
             if rd(os.path.join(p, "scope")) == "Device":
                 continue
-            cap = rd(os.path.join(p, "capacity"))
-            if not cap:
-                continue
             status = rd(os.path.join(p, "status"))
-            txt = cap + "%" + ("+" if status == "Charging" else "")
-            tip = "Battery " + cap + "%" + (("  ·  " + status) if status else "")
-            return txt, tip
-        return None, None
+
+            def number(name):
+                try:
+                    value = float(rd(os.path.join(p, name)))
+                    return value if value >= 0 else None
+                except (TypeError, ValueError):
+                    return None
+
+            batteries.append({
+                "capacity": number("capacity"),
+                "energy": (number("energy_now"), number("energy_full")),
+                "charge": (number("charge_now"), number("charge_full")),
+                "status": status,
+            })
+        if not batteries:
+            return None, None
+
+        def aggregate(field):
+            pairs = [battery[field] for battery in batteries]
+            if not all(now is not None and full is not None and full > 0
+                       for now, full in pairs):
+                return None
+            return 100.0 * sum(now for now, _full in pairs) / sum(
+                full for _now, full in pairs)
+
+        pct = aggregate("energy")
+        if pct is None:
+            pct = aggregate("charge")
+        if pct is None:
+            # Mixed firmware schemas are common (internal energy_* plus a
+            # removable pack exposing only capacity). Derive one percentage
+            # per pack so the fallback never silently drops a battery.
+            capacities = []
+            for battery in batteries:
+                value = battery["capacity"]
+                for field in ("energy", "charge"):
+                    now, full = battery[field]
+                    if value is None and now is not None and full is not None and full > 0:
+                        value = 100.0 * now / full
+                if value is None:
+                    return None, None
+                capacities.append(value)
+            if not capacities:
+                return None, None
+            pct = sum(capacities) / len(capacities)
+        pct = max(0, min(100, int(round(pct))))
+
+        statuses = [battery["status"] for battery in batteries
+                    if battery["status"]]
+        charging = any(status == "Charging" for status in statuses)
+        if charging:
+            status = "Charging"
+        elif statuses and all(value == "Full" for value in statuses):
+            status = "Full"
+        elif "Discharging" in statuses:
+            status = "Discharging"
+        else:
+            status = statuses[0] if statuses else ""
+        cap = str(pct)
+        txt = cap + "%" + ("+" if charging else "")
+        # Assembled from TRANSLATED parts. nbi18n can only look a WHOLE string
+        # up, and no catalog entry can carry "Battery 7%  ·  Discharging" with
+        # a live number inside it — so the one read-out in the right cluster
+        # that was built by concatenation was also the only hover text that
+        # stayed English in all seventeen languages, beside a clock and a bell
+        # that translate. The sysfs status words are catalog keys already
+        # ("Charging", "Discharging", "Full", "Not charging"); a word no
+        # catalog knows is shown as the kernel spells it rather than dropped.
+        #
+        # The multi-pack count is the one part still written in English. No
+        # catalog carries a plural key for it, and a machine with two packs is
+        # rare enough that inventing one here — an English string in seventeen
+        # languages, which i18n_source_coverage rightly fails a module for —
+        # would be a worse trade than leaving these two words as they were.
+        detail = (("  ·  " + _t(status)) if status else "")
+        if len(batteries) > 1:
+            detail += "  ·  %d batteries" % len(batteries)
+        return txt, _t("Battery") + " " + cap + "%" + detail
 
     def _reserve_strut(self, *_):
         # reserve PANEL_H at the top so maximised windows don't cover the bar
@@ -1805,6 +2253,13 @@ menuitem.sysmenu-item:selected { background: #EAE3D2; }
          background: transparent; background-image: none; box-shadow: none; }
 .nbn-x:hover { background: #DED4C2; }
 .nbn-empty { padding: 16px 14px; font-size: 13px; color: #6E695E; }
+/* The tray's own failure line, which shares the empty state's shape. It needs
+   the alert register or it reads as one more quiet sentence of chrome: signage
+   red, the design system's single alert colour, the same one a nearly-flat
+   battery takes. Until this rule was written .warn was a class with no
+   declaration anywhere in the OS, so a Clear All that could not clear looked
+   exactly like body text. */
+.nbn-empty.warn { color: #C8341E; }
 
 /* The desktop shell's dialog card: same paper, rule and type as every app's
    confirm, so a system question does not look like a window from another
@@ -1878,6 +2333,16 @@ def install_css():
         Gdk.Screen.get_default(), provider,
         Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     _CSS_DONE = True
+    # ...and the shared input rules, for the same reason the Finder and the
+    # board now arm them: the panel does not build an nbapp.AppWindow, so it
+    # never reached nbapp.install_css, where the OS-wide GDK dispatcher lives.
+    # The panel declines focus (set_accept_focus(False)), so the click-to-focus
+    # half is a no-op here; the focus-ring modality half is not.
+    try:
+        import nbapp as _nbapp
+        _nbapp.track_input_modality()
+    except Exception:                                             # noqa: BLE001
+        pass
 
 
 def main():

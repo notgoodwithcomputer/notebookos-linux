@@ -14,7 +14,12 @@ THE SAFETY RULES, in the order they matter:
      listed-with-a-warning: absent. `_system_disks()` collects the whole-disk
      parent of every mounted filesystem, of every swap device and of the live
      medium, and `_drives()` drops them. A picker that shows the system disk at
-     all is one mis-click from erasing the computer.
+     all is one mis-click from erasing the computer. The ONE mount that does
+     not make a disk a system disk is a volume under the removable-media root
+     (/media — see automount.sh): this OS mounts every stick the moment it is
+     plugged in, so counting those mounts here hid the very drives this app
+     exists to write, and left rule 4's unmount unreachable. Every other
+     mount still counts, fail-closed.
   2. Only removable, USB-attached block devices are offered, so an internal
      second hard disk cannot be picked either.
   3. The device is named in full — make, model, size and node — in the
@@ -45,6 +50,7 @@ import nbapp                                               # noqa: E402
 import nbicons                                             # noqa: E402
 import nbjobs                                              # noqa: E402
 import nbpicker                                            # noqa: E402
+import nbi18n
 from nbi18n import _t                                      # noqa: E402
 
 SECTOR = 512
@@ -84,6 +90,15 @@ def _fmt_size(n):
     return "%d bytes" % n
 
 
+def _media_root():
+    """Where this OS mounts removable volumes.
+
+    automount.sh reads the same environment variable with the same default, so
+    the two agree about which mounts are "a stick somebody plugged in" rather
+    than "a filesystem this machine runs from"."""
+    return (os.environ.get("NB_MEDIA_ROOT") or "/media").rstrip("/") or "/media"
+
+
 def _disk_of(part):
     """The whole disk a partition node belongs to: 'sda2' -> 'sda'.
 
@@ -110,9 +125,19 @@ def _system_disks():
             return
         out.add(_disk_of(node[5:]))
 
+    media = _media_root() + "/"
     for line in _read("/proc/mounts").splitlines():
         parts = line.split()
         if len(parts) >= 2:
+            if parts[1].startswith(media):
+                # A stick automounted at /media/<label> is not a disk this
+                # machine runs from — and every stick is automounted here the
+                # instant it appears, so counting this mount made the app
+                # answer "No USB drive is plugged in." with the drive in the
+                # person's hand. The write unmounts the target itself before
+                # opening it (rule 4), and _target_still_safe re-checks the
+                # target after that. Any mount ANYWHERE ELSE still counts.
+                continue
             note(parts[0])
     for line in _read("/proc/swaps").splitlines()[1:]:
         note(line.split()[0] if line.split() else "")
@@ -160,11 +185,17 @@ def _is_usb(name):
                for part in path.split("/") if part)
 
 
-def _drives():
+def _drives(skipped=None):
     """Removable USB disks that are safe to offer, largest first.
 
     Returns [{node, name, label, size, bytes}]. Never raises: an unreadable
-    sysfs entry costs that one device its row, not the whole list."""
+    sysfs entry costs that one device its row, not the whole list.
+
+    `skipped`, if given, is a set this fills with the reason a USB disk that
+    IS plugged in was left out ("unidentified"). An empty list on its own
+    cannot tell "nothing is plugged in" from "something is plugged in and this
+    app will not touch it", and only one of those two sentences is true.
+    """
     system = _system_disks()
     found = []
     for name in _listdir("/sys/block"):
@@ -185,12 +216,26 @@ def _drives():
         model = _read("/sys/block/%s/device/model" % name)
         title = (" ".join(x for x in (vendor, model) if x)).strip() \
             or _t("USB drive")
+        identity = ""
+        for field in ("device/wwid", "wwid", "device/serial"):
+            value = _read("/sys/block/%s/%s" % (name, field)).strip()
+            if value:
+                identity = "%s:%s" % (field, value)
+                break
+        # Node names and capacities are reusable. Without a serial/WWID there
+        # is no fail-closed way to prove the confirmed stick is still the one
+        # about to be erased, so do not offer it as a target.
+        if not identity:
+            if isinstance(skipped, set):
+                skipped.add("unidentified")
+            continue
         found.append({
             "node": "/dev/" + name,
             "name": name,
             "label": title,
             "size": _fmt_size(size),
             "bytes": size,
+            "identity": identity,
         })
     found.sort(key=lambda d: -d["bytes"])
     return found
@@ -211,6 +256,8 @@ def _target_still_safe(snapshot):
     return any(d.get("name") == snapshot.get("name")
                and d.get("node") == snapshot.get("node")
                and d.get("bytes") == snapshot.get("bytes")
+               and bool(snapshot.get("identity"))
+               and d.get("identity") == snapshot.get("identity")
                for d in _drives())
 
 
@@ -301,10 +348,19 @@ class UsbWriter(nbapp.AppWindow):
         self.image = None
         self.drives = []
         self.busy = False
+        # What the last write DID, and how it ended. Sticky on purpose: a
+        # write ends by rescanning the drives, and the rescan used to repaint
+        # "Ready to write…" over the outcome inside the same call, so the
+        # screen never said whether anything had been written. Cleared the
+        # moment the person does something new.
+        self._outcome = ""
+        self._outcome_kind = ""
+        self._stop_notified = False
         # One owner, one key ("write"): the owner is what rejects a second
         # write, discards a finished write's callbacks once the window has
         # closed, and gives the worker a cancel token to checkpoint.
         self._jobs = nbjobs.JobOwner(name="usbwriter")
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", lambda *_: self._jobs.close())
         self._install_css()
         self._build()
@@ -321,7 +377,7 @@ class UsbWriter(nbapp.AppWindow):
         .uw-title { font-size: 24px; font-weight: 700; color: #1A1916; }
         .uw-lede { font-size: 14px; color: #6E695E; }
         .uw-step { font-size: 11px; letter-spacing: 0.14em; font-weight: 700;
-                   color: #9A9484; }
+                   color: #6E695E; }
         .uw-rule { background: #D7D2C5; }
         .uw-field { background: #F4F2EC; border: 1px solid #D7D2C5;
                     padding: 12px 14px; }
@@ -357,6 +413,8 @@ class UsbWriter(nbapp.AppWindow):
         .uw-dname { font-size: 15px; color: #1A1916; }
         .uw-dmeta { font-size: 12px; color: #6E695E; }
         .uw-warn { font-size: 13px; color: #C8341E; }
+        .uw-result { font-size: 13px; color: #1A1916; font-weight: 600; }
+        .uw-result-bad { color: #C8341E; }
         .uw-empty { font-size: 14px; color: #6E695E; }
         .uw-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
                      border-top: 1px solid #D7D2C5; background: #F8F7F2; }
@@ -383,6 +441,18 @@ class UsbWriter(nbapp.AppWindow):
         wider than it was set to."""
         label.set_line_wrap(True)
         label.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        label.set_max_width_chars(1)
+        return label
+
+    @staticmethod
+    def _fit(label):
+        """Keep an ellipsizing label from setting the column's width.
+
+        Ellipsizing decides what is DRAWN; it does not change what the label
+        asks for, so a label holding a long path still requests the whole path
+        as its natural width and drags the reading column out to the window
+        edges. Same reason _wrap() caps the wrapping labels."""
+        label.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
         label.set_max_width_chars(1)
         return label
 
@@ -423,11 +493,11 @@ class UsbWriter(nbapp.AppWindow):
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.img_name = Gtk.Label(label=_t("No image chosen"), xalign=0)
         self.img_name.get_style_context().add_class("uw-value")
-        self.img_name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self._fit(self.img_name)
         self.img_meta = Gtk.Label(label=_t("Choose an .iso or .img file"),
                                   xalign=0)
         self.img_meta.get_style_context().add_class("uw-hint")
-        self.img_meta.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self._fit(self.img_meta)
         col.pack_start(self.img_name, False, False, 0)
         col.pack_start(self.img_meta, False, False, 0)
         field.pack_start(col, True, True, 0)
@@ -449,7 +519,7 @@ class UsbWriter(nbapp.AppWindow):
         again.set_margin_top(10)
         self.rescan_btn = Gtk.Button(label=_t("Look again"))
         self.rescan_btn.get_style_context().add_class("uw-btn")
-        self.rescan_btn.connect("clicked", lambda *_: self._rescan())
+        self.rescan_btn.connect("clicked", self._look_again)
         again.pack_start(self.rescan_btn, False, False, 0)
         note = Gtk.Label(
             label=_t("Only removable USB drives are listed. The disk this "
@@ -466,6 +536,15 @@ class UsbWriter(nbapp.AppWindow):
         self.warn.get_style_context().add_class("uw-warn")
         self._wrap(self.warn)
         inner.pack_start(self.warn, False, False, 0)
+
+        # How the last write ended, said where it was started. The status bar
+        # says it too, but that line is one the eye leaves; this is the place
+        # the person was already looking.
+        self.result = Gtk.Label(xalign=0)
+        self.result.get_style_context().add_class("uw-result")
+        self._wrap(self.result)
+        self.result.set_no_show_all(True)
+        inner.pack_start(self.result, False, False, 0)
 
         self.prog = Gtk.ProgressBar()
         self.prog.get_style_context().add_class("uw-prog")
@@ -505,20 +584,35 @@ class UsbWriter(nbapp.AppWindow):
 
     # -- drives ----------------------------------------------------------------
 
-    def _rescan(self):
+    def _look_again(self, *_a):
+        """The "Look again" button and its menu item: a scan the person asked
+        for, which is also them moving on from the last write's outcome."""
+        self._clear_outcome()
+        self._rescan()
+
+    def _rescan(self, focus_node=None):
         if self.busy:
             return
         keep = self.selected["node"] if self.selected else None
-        self.drives = _drives()
+        skipped = set()
+        self.drives = _drives(skipped)
         self.selected = next((d for d in self.drives if d["node"] == keep),
                              None)
         if self.selected is None and len(self.drives) == 1:
             self.selected = self.drives[0]     # one stick: nothing to choose
+        self._drive_buttons = {}
         for ch in self.drive_box.get_children():
             self.drive_box.remove(ch)
         if not self.drives:
-            empty = Gtk.Label(label=_t("No USB drive is plugged in."),
-                              xalign=0)
+            # "No USB drive is plugged in." is only true when nothing USB was
+            # seen at all. With a stick in the port and that sentence on
+            # screen, the person blames the stick, the port or the machine.
+            if "unidentified" in skipped:
+                text = _t("A USB drive is plugged in but cannot be "
+                          "identified, so it is not offered.")
+            else:
+                text = _t("No USB drive is plugged in.")
+            empty = Gtk.Label(label=text, xalign=0)
             empty.get_style_context().add_class("uw-empty")
             self.drive_box.pack_start(empty, False, False, 0)
         else:
@@ -526,6 +620,8 @@ class UsbWriter(nbapp.AppWindow):
                 self.drive_box.pack_start(self._drive_row(d, first=(i == 0)),
                                           False, False, 0)
         self.drive_box.show_all()
+        if focus_node in self._drive_buttons:
+            self._drive_buttons[focus_node].grab_focus()
         self._refresh()
 
     def _drive_row(self, d, first=False):
@@ -565,10 +661,12 @@ class UsbWriter(nbapp.AppWindow):
         tick.set_valign(Gtk.Align.CENTER)
         row.pack_end(tick, False, False, 0)
 
-        hit = Gtk.Button()
+        hit = Gtk.ToggleButton()
         hit.set_relief(Gtk.ReliefStyle.NONE)
         hit.get_style_context().add_class("uw-rowhit")
         hit.add(row)
+        hit.set_active(bool(self.selected and
+                            self.selected["node"] == d["node"]))
         # Name the drive the way the confirmation names it: make, size AND
         # node. GTK would derive this button's accessible name from the first
         # label it finds inside, which is the make alone — and two identically
@@ -582,19 +680,23 @@ class UsbWriter(nbapp.AppWindow):
                              % (_t("Choose the USB stick to write it to"),
                                 ident))
         nbapp.name_control(hit, "%s  %s" % (_t("USB drive"), ident))
-        hit.connect("clicked", lambda _w, dd=d: self._choose(dd))
+        hit.connect("clicked", lambda _w, dd=d: self._choose(dd, _w))
+        self._drive_buttons[d["node"]] = hit
         return hit
 
-    def _choose(self, d):
+    def _choose(self, d, _button=None):
         if self.busy:
             return True
+        self._clear_outcome()
         self.selected = d
-        self._rescan()
+        self._rescan(focus_node=d["node"])
         return True
 
     # -- image -----------------------------------------------------------------
 
-    def _on_pick(self, _btn):
+    def _on_pick(self, _btn=None):
+        # The default matters: menu_items() hands this same handler to nbapp,
+        # which calls its callbacks with no arguments at all.
         if self.busy:
             return
         path = nbpicker.open_file(self, title=_t("Choose a disk image"),
@@ -609,9 +711,12 @@ class UsbWriter(nbapp.AppWindow):
         if size <= 0:
             self._say(_t("That file is empty."))
             return
+        self._clear_outcome()
         self.image = {"path": path, "bytes": size,
                       "note": image_boot_note(path)}
-        self.img_name.set_text(os.path.basename(path))
+        # The image file the user picked. A basename normally carries an
+        # extension and misses the catalog, which is luck, not protection.
+        nbi18n.set_verbatim(self.img_name, os.path.basename(path))
         meta = "%s  ·  %s" % (_fmt_size(size), path)
         self.img_meta.set_text(meta)
         self._refresh()
@@ -631,7 +736,13 @@ class UsbWriter(nbapp.AppWindow):
             self.go_btn.set_tooltip_text(_t("Write to the stick"))
         if self.busy:
             return
-        if self.image and self.selected:
+        if self._outcome:
+            # The last write's outcome is the state of this screen until the
+            # person moves on. Repainting "Everything on … will be erased."
+            # here is what made a finished, stopped or failed write look
+            # exactly like one that had not started.
+            self.warn.set_text("")
+        elif self.image and self.selected:
             if not _image_fits(self.image["bytes"], self.selected["bytes"]):
                 self.warn.set_text(
                     _t("This image is %s and the stick holds %s. Choose a "
@@ -647,19 +758,50 @@ class UsbWriter(nbapp.AppWindow):
                 if note:
                     msg = "%s\n%s" % (note, msg)
                 self.warn.set_text(msg)
-        elif not self.image:
-            self.warn.set_text("")
         else:
             self.warn.set_text("")
+        self._show_result()
         self._say(self._summary())
 
     def _summary(self):
+        if self._outcome:
+            return self._outcome
         if not self.image:
             return _t("Choose an image to write")
         if self.selected is None:
             return _t("Choose the USB stick to write it to")
+        if not _image_fits(self.image["bytes"], self.selected["bytes"]):
+            # The same test the Write button's own sensitivity uses, so this
+            # line can never say "Ready to write" beside a warning saying the
+            # image does not fit and a button that refuses to.
+            return _t("The image is too large for this stick.")
         return _t("Ready to write %s to %s") % (
             os.path.basename(self.image["path"]), self.selected["node"])
+
+    def _show_result(self):
+        ctx = self.result.get_style_context()
+        if not self._outcome:
+            self.result.set_text("")
+            ctx.remove_class("uw-result-bad")
+            self.result.hide()
+            return
+        self.result.set_text(self._outcome)
+        if self._outcome_kind == "done":
+            ctx.remove_class("uw-result-bad")
+        else:
+            ctx.add_class("uw-result-bad")
+        self.result.show()
+
+    def _clear_outcome(self):
+        """The person has moved on: the last write stops being what this
+        screen is about, and its finished bar goes with it."""
+        if not self._outcome:
+            return
+        self._outcome = ""
+        self._outcome_kind = ""
+        self.prog.set_fraction(0.0)
+        self.prog.hide()
+        self._show_result()
 
     def _say(self, text):
         self.status.set_text(text)
@@ -726,6 +868,8 @@ class UsbWriter(nbapp.AppWindow):
             _t("Stop writing"))
 
     def _start(self):
+        self._clear_outcome()
+        self._stop_notified = False
         self.busy = True
         self._refresh()
         self.pick_btn.set_sensitive(False)
@@ -763,8 +907,12 @@ class UsbWriter(nbapp.AppWindow):
             # old filesystem nor the new image.
             for node, mnt in _mounted_parts(d["name"]):
                 job.checkpoint()
-                subprocess.run(["umount", node], capture_output=True,
-                               timeout=30)
+                result = subprocess.run(["umount", node], capture_output=True,
+                                        timeout=30)
+                if result.returncode != 0:
+                    raise OSError("Could not release the USB stick")
+            if _mounted_parts(d["name"]):
+                raise OSError("The selected USB target is still mounted")
             total = img["bytes"]
             done = 0
             started = time.time()
@@ -787,7 +935,9 @@ class UsbWriter(nbapp.AppWindow):
                 os.fsync(dst.fileno())
             # The stick is only safe to pull once the kernel's own queues are
             # empty too, not just our file's.
-            subprocess.run(["sync"], capture_output=True, timeout=120)
+            synced = subprocess.run(["sync"], capture_output=True, timeout=120)
+            if synced.returncode != 0:
+                raise OSError("Could not finish writing the USB stick")
         except PermissionError as exc:
             raise _NotPermitted(_t("This computer would not allow writing to that "
                              "drive.")) from exc
@@ -845,7 +995,11 @@ class UsbWriter(nbapp.AppWindow):
     def _mins(secs):
         secs = int(secs)
         if secs < 60:
-            return _t("%d seconds") % max(1, secs)
+            secs = max(1, secs)
+            # The minute and hour branches below have carried a singular form
+            # from the start; the seconds branch is the one on screen at the
+            # end of every write.
+            return _t("1 second") if secs == 1 else _t("%d seconds") % secs
         m = secs // 60
         if m < 60:
             return _t("%d minutes") % m if m != 1 else _t("1 minute")
@@ -864,20 +1018,27 @@ class UsbWriter(nbapp.AppWindow):
         wrote = os.path.basename((self.image or {}).get("path") or "")
         if how == "done":
             self.prog.set_fraction(1.0)
-            self._say(_t("Finished. The stick can be unplugged."))
-            self.warn.set_text("")
+            self._outcome = _t("Finished. The stick can be unplugged.")
             self.notify(_t("Finished writing the stick"), wrote)
         elif how == "stopped":
             self.prog.hide()
-            self._say(_t("Stopped. The stick is not usable until it is "
-                         "written again."))
-            self.notify(_t("The write was stopped"),
-                        _t("The stick is not usable until it is written "
-                           "again."))
+            self._outcome = _t("Stopped. The stick is not usable until it is "
+                               "written again.")
+            if not self._stop_notified:
+                self.notify(_t("The write was stopped"),
+                            _t("The stick is not usable until it is written "
+                               "again."))
         else:
             self.prog.hide()
-            self._say(message or _t("The write did not finish."))
+            self._outcome = message or _t("The write did not finish.")
             self.notify(_t("The write did not finish."), message or "")
+        self._outcome_kind = how
+        self.warn.set_text("")
+        self._say(self._outcome)
+        # The rescan below repaints the whole screen. It leaves the outcome
+        # alone because _summary() returns it and _refresh() keeps the erase
+        # warning empty while it is set — this line used to be overwritten by
+        # "Ready to write…" inside this very call, before it was ever painted.
         self._rescan()
         return False
 
@@ -889,21 +1050,38 @@ class UsbWriter(nbapp.AppWindow):
                 ("Choose an Image…",
                  self._on_pick if not self.busy else None),
                 ("Look for Drives Again",
-                 self._rescan if not self.busy else None),
+                 self._look_again if not self.busy else None),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
             ]
         return super().menu_items(name)
 
     def close(self, *a):
-        # Esc while a write is running would leave a half-written stick with
-        # nothing on screen to say so. Ask first; the write itself is stopped
-        # cleanly by the worker's own cancel flag.
+        # Gtk.Window.close emits delete-event, so menu, Escape and the window
+        # manager all pass through the same active-write guard below.
+        return super().close(*a)
+
+    def _on_delete(self, *_):
+        # Closing while a write is running leaves a half-written stick. This
+        # signal also catches window-manager close, which does not call our
+        # Python close() override.
         if self.busy:
             if not self._confirm_stop():
                 return True
-            self._jobs.cancel("write")
-        return super().close(*a)
+            stopped = self._jobs.cancel("write")
+            # The window is going, and the destroy handler closes the JobOwner
+            # with it — so the on_cancel that would have reported this write
+            # is dropped by the owner's closed gate and the outcome is lost in
+            # the one case where the notification centre is the ONLY place
+            # left to report it. Say it here, while there is still something
+            # to say it with. (_finished skips its own post if this one ran,
+            # so the write is announced exactly once.)
+            if stopped:
+                self._stop_notified = True
+                self.notify(_t("The write was stopped"),
+                            _t("The stick is not usable until it is written "
+                               "again."))
+        return False
 
 
 if __name__ == "__main__":

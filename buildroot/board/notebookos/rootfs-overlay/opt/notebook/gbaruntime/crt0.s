@@ -22,11 +22,11 @@ rom_header_end:
 	@ IRQ mode stack
 	mov	r0, #0x12
 	msr	cpsr_c, r0
-	ldr	sp, =0x03007FA0
+	ldr	sp, =__sp_irq
 	@ system mode stack
 	mov	r0, #0x1F
 	msr	cpsr_c, r0
-	ldr	sp, =0x03007F00
+	ldr	sp, =__sp_sys
 
 	@ copy .data (ROM load addr -> RAM)
 	ldr	r0, =__data_lma

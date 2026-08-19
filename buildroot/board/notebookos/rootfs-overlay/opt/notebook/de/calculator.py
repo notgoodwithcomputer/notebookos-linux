@@ -21,6 +21,7 @@ import os
 import random
 
 import nbapp
+import nbcommands
 import nbtransitions
 import nbicons  # pictographic backspace glyph on the ⌫ key
 from nbi18n import _t  # noqa: E402
@@ -33,6 +34,21 @@ from nbi18n import _t  # noqa: E402
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 STATE_FILE = os.path.join(CFG_DIR, "calculator.json")
+MAX_STATE_BYTES = 8 * 1024 * 1024
+
+
+class CalculatorStoreTooLarge(ValueError):
+    pass
+
+
+def _read_state_json(path=None, limit=MAX_STATE_BYTES):
+    if path is None:
+        path = STATE_FILE
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise CalculatorStoreTooLarge("calculator state is too large")
+    return json.loads(raw)
 
 # What the display says when "=" cannot be answered. The old display read
 # "Error", which tells someone who has just mistyped a bracket nothing at all
@@ -58,6 +74,109 @@ CATALOG = {
     "Probability": (("factorial(", "fact("), ("nCr(", "nCr("),
                     ("nPr(", "nPr("), ("random", "random()")),
 }
+
+# The names a person can TYPE, keyed by their lower-case spelling. The keypad
+# and the catalog insert these in their own case ("sin(", "nCr(", "Ans"); the
+# key ladder makes every letter an uppercase VARIABLE, so a keyboard produced
+# "SIN(30)" and evaluate() knew no such name -- the one path a laptop user has
+# to a function was the paste path. A run of two or more letters is matched
+# here without regard to case (a single letter stays a variable, so A..Z and
+# the graph's X are untouched), and press() spells a typed name the keypad's
+# way the moment its "(" arrives, so the display reads sin(30) too.
+_NAME_BY_LOWER = {}
+for _items in CATALOG.values():
+    for _label, _value in _items:
+        _name = _value.rstrip("()")
+        _NAME_BY_LOWER[_name.lower()] = _name
+_NAME_BY_LOWER.update({"ans": "Ans", "pi": "PI"})
+_TYPED_NAME = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
+# The three things this keypad can write that take TWO arguments. Every one of
+# them is reachable only through the MATH catalog, and every one of them was
+# impossible to finish: the comma key inserts a DECIMAL POINT (see the key
+# table in _on_key_calc -- on the French, German, Spanish, Italian, Russian,
+# Polish, Portuguese and Turkish layouts this OS ships, comma is the decimal
+# key and without that mapping the main-row decimal point is dead). So
+# nCr( from the catalog, 5, comma, 2, ")" produced "nCr(5.2)" and "="
+# answered "There is no answer to that" -- blaming the person for a separator
+# the calculator gave them no way to type. Inside one of these three calls,
+# and only there, the comma key is the ARGUMENT SEPARATOR it has to be.
+TWO_ARGUMENT = ("nCr", "nPr", "root")
+
+
+def wants_argument(expr):
+    """Is `expr` inside an unclosed two-argument call still missing its comma?
+
+    Written as what the separator case IS, so an expression that is not one
+    (2.5, sin(30, an already-separated nCr(5,2) keeps its decimal point."""
+    if not expr:
+        return False
+    depth, i = 0, len(expr)
+    while i > 0:
+        c = expr[i - 1]
+        if c == ")":
+            depth += 1
+        elif c == "(":
+            if depth == 0:
+                break
+            depth -= 1
+        i -= 1
+    if i == 0:
+        return False                       # nothing is open
+    j = i - 1                              # the name in front of that "("
+    while j > 0 and (expr[j - 1].isalnum() or expr[j - 1] == "_"):
+        j -= 1
+    if expr[j:i - 1] not in TWO_ARGUMENT:
+        return False
+    level = 0                              # a comma of its OWN, not a nested one
+    for c in expr[i:]:
+        if c == "(":
+            level += 1
+        elif c == ")":
+            level -= 1
+        elif c == "," and level == 0:
+            return False
+    return True
+
+
+def canonical_names(text):
+    """Spell every multi-letter function/constant name in `text` the way
+    evaluate() knows it (SIN( -> sin(, ANS -> Ans). Single letters and unknown
+    words are left exactly as they are."""
+    def fix(m):
+        word = m.group(0)
+        if len(word) < 2:
+            return word
+        return _NAME_BY_LOWER.get(word.lower(), word)
+    return _TYPED_NAME.sub(fix, text)
+
+
+# Below this fraction of its larger operand, a sum or difference is float
+# noise, not an answer: 0.1+0.2-0.3 came back 5.55111512313e-17 because
+# 0.1+0.2 is 0.30000000000000004 in binary, and a calculator that says so
+# reads as broken. Twelve significant figures is what the display shows, so
+# a difference smaller than a thirteenth figure of the operands is one the
+# operands themselves could not carry. Applied to + and - ONLY (see _OpGuard):
+# 1e-20 is a real answer to 1÷10^20, and stays one.
+_SUM_NOISE = 1e-13
+
+
+def _snap_sum(r, a, b):
+    try:
+        if r and abs(r) < _SUM_NOISE * max(abs(a), abs(b)):
+            return 0.0
+    except TypeError:
+        pass
+    return r
+
+
+def _add(a, b):
+    return _snap_sum(a + b, a, b)
+
+
+def _sub(a, b):
+    return _snap_sum(a - b, a, b)
 
 
 def format_number(value, fix=None):
@@ -139,6 +258,16 @@ def tape_window(tape, tape_results, offset=None, count=3):
 # How many worked-out calculations the tape keeps (mirrored by the class as
 # _TAPE_MAX; sanitize_state trims a loaded file to the same window).
 TAPE_MAX = 30
+MAX_EXPRESSION_CHARS = 256
+# The widest answer this calculator prints: a 20-digit exact integer (_MAX_DIGITS)
+# and its sign, or a Fix 9 rendering, whichever is longer. What a tape row's
+# result column may ask the card for.
+_TAPE_RESULT_CHARS = 22
+
+
+def append_expression(expr, value, limit=MAX_EXPRESSION_CHARS):
+    """Append one keypad token only when the expression stays bounded."""
+    return expr + value if len(expr) + len(value) <= limit else expr
 
 _WINDOW_DEFAULT = {"xmin": -10.0, "xmax": 10.0, "ymin": -10.0, "ymax": 10.0,
                    "xscl": 1.0, "yscl": 1.0}
@@ -217,10 +346,14 @@ def sanitize_state(state):
     extra = dict(state.get("_extra")) if isinstance(state.get("_extra"), dict) else {}
     extra.update((k, v) for k, v in state.items() if k not in known)
 
+    # ...and bounded, the same screen the graph's ys gets: a hand-edited or
+    # older store must not be able to hand the display a string longer than
+    # anything the keypad can produce.
     raw = state.get("tape")
-    tape = [str(x) for x in raw] if isinstance(raw, list) else []
+    tape = ([str(x)[:MAX_EXPRESSION_CHARS] for x in raw]
+            if isinstance(raw, list) else [])
     raw = state.get("tape_results")
-    results = ([None if x is None else str(x) for x in raw]
+    results = ([None if x is None else str(x)[:MAX_EXPRESSION_CHARS] for x in raw]
                if isinstance(raw, list) else [])
     # Older files hold one result per SUCCESS, not per attempt: pair those
     # from the end, the way that build painted them, and pad the front with
@@ -261,8 +394,14 @@ def sanitize_state(state):
     window = dict(_WINDOW_DEFAULT)
     raw = state.get("window")
     if isinstance(raw, dict):
+        # Window metadata owned by a newer graphing build must ride through an
+        # older one. Current geometry keys below remain authoritative and are
+        # still forced finite/ordered, so preservation cannot bypass safety.
+        window.update((k, v) for k, v in raw.items()
+                      if k not in _WINDOW_DEFAULT)
         for key in window:
-            window[key] = _finite(raw.get(key), window[key])
+            if key in _WINDOW_DEFAULT:
+                window[key] = _finite(raw.get(key), window[key])
     if window["xmin"] >= window["xmax"]:
         window["xmin"], window["xmax"] = _WINDOW_DEFAULT["xmin"], _WINDOW_DEFAULT["xmax"]
     if window["ymin"] >= window["ymax"]:
@@ -401,8 +540,9 @@ def _guarded_pow(base, exp):
     return base ** exp
 
 
-_PCT_REL = re.compile(r"([+\-])(\d+(?:\.\d+)?)%")
-_PCT_ANY = re.compile(r"(\d+(?:\.\d+)?)%")
+_PCT_NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)"
+_PCT_REL = re.compile(r"([+\-])(" + _PCT_NUMBER + r")%")
+_PCT_ANY = re.compile(r"(" + _PCT_NUMBER + r")%")
 
 
 def _operand_start(s, i):
@@ -540,18 +680,67 @@ _CODE_CACHE = {}
 _CODE_CACHE_MAX = 256
 
 
-class _PowGuard(ast.NodeTransformer):
+class _OpGuard(ast.NodeTransformer):
     # Rewrite every  a ** b  into  _pow(a, b)  so nested/oversized powers are
     # bounded at runtime. A purely static exponent cap can't see that 9**9**9
     # actually means 9**(9**9) (each literal exponent is just 9).
+    # ...and every  a + b  /  a - b  into _add / _sub, which snap a result
+    # that is only float noise of its operands to 0 (see _SUM_NOISE).
+    _CALLS = {ast.Pow: "_pow", ast.Add: "_add", ast.Sub: "_sub"}
+
     def visit_BinOp(self, node):
         self.generic_visit(node)
-        if isinstance(node.op, ast.Pow):
+        name = self._CALLS.get(type(node.op))
+        if name is not None:
             return ast.copy_location(
-                ast.Call(func=ast.Name(id="_pow", ctx=ast.Load()),
+                ast.Call(func=ast.Name(id=name, ctx=ast.Load()),
                          args=[node.left, node.right], keywords=[]),
                 node)
         return node
+
+
+class _ArithmeticGuard(ast.NodeVisitor):
+    """Accept calculator arithmetic, never general Python expressions."""
+    _BIN = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)
+    _UNARY = (ast.UAdd, ast.USub)
+
+    def __init__(self, names):
+        self.names = set(names)
+
+    def reject(self):
+        raise SyntaxError("not calculator arithmetic")
+
+    def generic_visit(self, _node):
+        self.reject()
+
+    def visit_Expression(self, node):
+        self.visit(node.body)
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            self.reject()
+
+    def visit_Name(self, node):
+        if node.id not in self.names:
+            self.reject()
+
+    def visit_BinOp(self, node):
+        if not isinstance(node.op, self._BIN):
+            self.reject()
+        self.visit(node.left)
+        self.visit(node.right)
+
+    def visit_UnaryOp(self, node):
+        if not isinstance(node.op, self._UNARY):
+            self.reject()
+        self.visit(node.operand)
+
+    def visit_Call(self, node):
+        if (not isinstance(node.func, ast.Name)
+                or node.func.id not in self.names or node.keywords):
+            self.reject()
+        for arg in node.args:
+            self.visit(arg)
 
 
 class Calculator(nbapp.AppWindow):
@@ -590,7 +779,9 @@ class Calculator(nbapp.AppWindow):
         self.just_evaled = False
         self.second = False
         self.error = False   # last "=" failed; the display says why, in red
+        self._closed = False  # async clipboard replies must stop at destroy
         self._err_why = None  # which _WHY_* sentence to show while error
+        self._value = None    # the NUMBER the last answer is (see _answer)
         self._buttons = []   # (keydef, button, label_widget)
 
         # Only a HANDFUL of keys ever change their face/tooltip (the DEG/RAD
@@ -693,12 +884,21 @@ class Calculator(nbapp.AppWindow):
             nbtransitions.reveal(self.damage_rev, True)
 
     def _switch_view(self, name):
+        # Leaving the Table page is leaving its two fields: a number typed into
+        # Table Start / Table Step and not yet entered is taken here, the same
+        # way it is taken when the field loses focus. Without this the field
+        # kept the typed value, the table kept the old one, and coming back
+        # re-synced the field -- throwing the typed number away in silence.
+        if getattr(self, "current_view", None) == "table" and name != "table":
+            for attr, entry in getattr(self, "tbl_entries", {}).items():
+                self._table_setting(entry, attr)
         self.current_view = name
         self.stack.set_visible_child_name(name)
         for key, button in self._views.items():
             ctx = button.get_style_context()
             (ctx.add_class if key == name else ctx.remove_class)("active")
         if name == "table":
+            self._sync_table_entries()
             self._refresh_table()
         if name == "graph":
             self.graph.queue_draw()
@@ -710,9 +910,13 @@ class Calculator(nbapp.AppWindow):
         self.y_entries = []
         self.y_checks = []
         for i in range(4):
+            # Preferences are external to this process too: keep an older or
+            # hand-edited oversized curve out of the first graph redraw.
+            self.ys[i] = self.ys[i][:MAX_EXPRESSION_CHARS]
             check = Gtk.CheckButton(label="Y%d" % (i + 1))
             check.set_active(bool(self.y_enabled[i]))
             entry = Gtk.Entry()
+            entry.set_max_length(MAX_EXPRESSION_CHARS)
             entry.set_text(self.ys[i])
             entry.connect("changed", self._on_y_changed, i)
             check.connect("toggled", self._on_y_toggle, i)
@@ -733,7 +937,14 @@ class Calculator(nbapp.AppWindow):
         self.graph = Gtk.DrawingArea()
         self.graph.set_size_request(320, 240)
         self.graph.set_can_focus(True)
+        self.graph.set_tooltip_text(_t("Graph"))
+        try:
+            self.graph.get_accessible().set_name(_t("Graph"))
+        except Exception:
+            pass
+        self.graph.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.graph.connect("draw", self._draw_graph)
+        self.graph.connect("button-press-event", self._on_graph_press)
         self.graph.connect("key-press-event", self._on_graph_key)
         page.pack_start(self.graph, True, True, 0)
         self.trace_label = Gtk.Label(label="", xalign=0)
@@ -744,12 +955,20 @@ class Calculator(nbapp.AppWindow):
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         page.get_style_context().add_class("tablepage")
         settings = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.tbl_entries = {}
         for label, value, attr in (("Table Start", self.tbl_start, "tbl_start"),
                                    ("Table Step", self.tbl_step, "tbl_step")):
             settings.pack_start(Gtk.Label(label=_t(label)), False, False, 0)
-            ent = Gtk.Entry(); ent.set_width_chars(8); ent.set_text(str(value))
+            ent = Gtk.Entry(); ent.set_width_chars(8)
+            ent.set_text(format_number(value))
             ent.connect("activate", self._table_setting, attr)
+            # A value typed and then left -- the person clicked into the
+            # table, or went to the Graph page -- is taken (or put back) the
+            # moment the field loses focus, so the field never keeps showing
+            # a number the table is not using.
+            ent.connect("focus-out-event", self._table_setting_left, attr)
             settings.pack_start(ent, False, False, 0)
+            self.tbl_entries[attr] = ent
         page.pack_start(settings, False, False, 0)
         self.table_grid = Gtk.Grid(column_spacing=20, row_spacing=4)
         scroll = Gtk.ScrolledWindow(); scroll.add(self.table_grid)
@@ -782,16 +1001,32 @@ class Calculator(nbapp.AppWindow):
         try:
             value = float(entry.get_text())
         except ValueError:
-            return
-        if not math.isfinite(value):
-            return
-        if attr == "tbl_start":
+            value = None
+        if value is not None and not math.isfinite(value):
+            value = None
+        if value is not None and attr == "tbl_start":
             self.tbl_start = value
-        elif value != 0:                 # a step of 0 is 40 copies of one row
+        elif value is not None and value != 0:  # a step of 0 is 40 copies of one row
             self.tbl_step = value
         else:
+            # Refused -- and SAID so, by putting the value the table is really
+            # using back into the field. Left as typed, the field read "0" or
+            # "abc" over a table plainly stepping by 0.5, contradicting itself
+            # in silence.
+            entry.set_text(format_number(getattr(self, attr)))
             return
         self._refresh_table()
+
+    def _table_setting_left(self, entry, _event, attr):
+        self._table_setting(entry, attr)
+        return False
+
+    def _sync_table_entries(self):
+        """Show in the two fields the values the table is built from."""
+        for attr, entry in getattr(self, "tbl_entries", {}).items():
+            live = format_number(getattr(self, attr))
+            if entry.get_text() != live:
+                entry.set_text(live)
 
     def _eval_x(self, expression, x):
         """Evaluate a graph function at one x.
@@ -820,15 +1055,30 @@ class Calculator(nbapp.AppWindow):
         stored variable called X is shadowed by the sample either way."""
         old_expr = self.expr
         old_bind = getattr(self, "_x_bind", None)
+        # ...and the two fields evaluate() writes about the LAST answer. A
+        # sample is not an answer: without this, drawing the graph rewrote the
+        # sentence a failed "=" had left on the home display, so 10/0 said
+        # "Cannot divide by zero", a look at the graph went by, and the next
+        # repaint said "That is not a calculation this can work out" instead.
+        old_why = getattr(self, "_err_why", None)
+        old_value = getattr(self, "_value", None)
         self.expr = expression
         self._x_bind = x
         try:
             result = self.evaluate()
+            value, why = self._value, self._err_why
         finally:
             self.expr = old_expr
             self._x_bind = old_bind
-        if result == "Error": raise ValueError(self._err_why)
-        return float(result)
+            self._err_why = old_why
+            self._value = old_value
+        if result == "Error": raise ValueError(why)
+        # The NUMBER, not the text: under Fix 2 every sample of a curve came
+        # back rounded to two decimals and X^2/10 was drawn as a staircase.
+        try:
+            return float(result if value is None else value)
+        except OverflowError:
+            return float("inf")        # too big to plot; the sampler drops it
 
     def _draw_graph(self, area, cr):
         w, h = area.get_allocated_width(), area.get_allocated_height()
@@ -854,6 +1104,7 @@ class Calculator(nbapp.AppWindow):
         cr.stroke(); cr.set_source_rgb(0.1, 0.1, 0.09)
         ox, oy = graph_to_pixel(0, 0, win, w, h)
         cr.move_to(0, oy); cr.line_to(w, oy); cr.move_to(ox, 0); cr.line_to(ox, h); cr.stroke()
+        self._draw_axis_numbers(cr, win, w, h)
         colors = ((0.78, .2, .12), (.1, .35, .55), (.3, .5, .2), (.45, .25, .5))
         for i, expression in enumerate(self.ys):
             if not self.y_enabled[i] or not expression.strip(): continue
@@ -864,8 +1115,128 @@ class Calculator(nbapp.AppWindow):
                     px, py = graph_to_pixel(x, y, win, w, h)
                     (cr.move_to if j == 0 else cr.line_to)(px, py)
                 cr.stroke()
+        # The trace CURSOR. Left/Right moved a point the readout described and
+        # nothing showed: "Y1 X=1 Y=0.017" under a graph with no mark on it.
+        # A ring in the curve's own colour, hollow so the curve stays legible
+        # through it, sits at the traced point when it is on screen; the label
+        # below still says where when it is not.
+        marker = self.trace_point()
+        if marker is not None:
+            px, py = graph_to_pixel(marker[0], marker[1], win, w, h)
+            if -8 <= px <= w + 8 and -8 <= py <= h + 8:
+                cr.set_source_rgb(*colors[self.trace_curve % 4])
+                cr.set_line_width(2)
+                cr.arc(px, py, 5, 0, 2 * math.pi)
+                cr.stroke()
+                cr.set_line_width(1)
         self._update_trace()
         return False
+
+    def _clamp_trace(self):
+        """Keep the trace inside the window it is drawn in.
+
+        _on_graph_key clamps each arrow press for exactly this reason -- "a
+        trace that cannot leave the graph cannot get lost on it" -- but the
+        window moves too, and zooming it out from under the trace strands it
+        just as thoroughly. MEASURED: click near the right edge of a standard
+        window (X=8.07), press Zoom In, and the graph now runs -5..5 while the
+        readout goes on saying "Y1 X=8.07228915663 Y=6.51618522282" for a point
+        off the edge with no ring anywhere. trace_x is persisted, so it reopens
+        just as lost. One rule, called from every place the window changes."""
+        self.trace_x = min(self.window["xmax"],
+                           max(self.window["xmin"], self.trace_x))
+
+    def trace_point(self):
+        """(x, y) of the trace on its curve, or None when the curve is off,
+        empty, or has no value there. The same evaluation the readout uses."""
+        i = self.trace_curve
+        if not (0 <= i < len(self.ys)) or not self.y_enabled[i] \
+                or not self.ys[i].strip():
+            return None
+        try:
+            y = self._eval_x(self.ys[i], self.trace_x)
+        except Exception:
+            return None
+        return (self.trace_x, y) if math.isfinite(y) else None
+
+    @staticmethod
+    def axis_number_step(lo, hi, scale, pixels, min_gap=44):
+        """The gridline multiple that gets a number beside it: every `scale`
+        when there is room, else every 2nd, 5th, 10th... so labels never
+        crowd. Numbers went missing altogether: the grid was ruled at xscl and
+        the axes drawn, and nothing said what a square was worth."""
+        span = hi - lo
+        if scale <= 0 or span <= 0 or pixels <= 0:
+            return None
+        per_line = pixels * scale / span
+        if per_line >= min_gap:
+            return scale
+        need = min_gap / per_line
+        for mult in (2, 5, 10, 20, 50, 100, 200, 500, 1000):
+            if mult >= need:
+                return scale * mult
+        return None
+
+    def _draw_axis_numbers(self, cr, win, w, h):
+        cr.save()
+        cr.set_source_rgb(0.42, 0.40, 0.36)
+        cr.set_font_size(10)
+        ox, oy = graph_to_pixel(0, 0, win, w, h)
+        # keep the numbers on the canvas when the axis itself is off it
+        ax_y = min(max(oy, 12), h - 4)
+        ax_x = min(max(ox, 4), w - 30)
+        for axis in ("x", "y"):
+            lo, hi = win[axis + "min"], win[axis + "max"]
+            step = self.axis_number_step(lo, hi, win[axis + "scl"],
+                                         w if axis == "x" else h)
+            if step is None:
+                continue
+            n = math.ceil(lo / step) * step
+            guard = 0
+            while n <= hi and guard < 400:
+                guard += 1
+                if abs(n) > step / 2:            # the origin is unlabelled
+                    text = format_number(n)
+                    ext = cr.text_extents(text)
+                    # Kept WHOLE inside the canvas: centred on its gridline,
+                    # the first and last numbers of a window ran off the edge
+                    # and "-10" was drawn as "0" -- a label saying the wrong
+                    # number is worse than one nudged a few pixels along.
+                    if axis == "x":
+                        px, _py = graph_to_pixel(n, 0, win, w, h)
+                        tx = min(max(px - ext.width / 2, 2.0),
+                                 max(2.0, w - ext.width - 2))
+                        cr.move_to(tx, ax_y - 3)
+                    else:
+                        _px, py = graph_to_pixel(0, n, win, w, h)
+                        ty = min(max(py + ext.height / 2, ext.height + 2.0),
+                                 max(ext.height + 2.0, h - 2))
+                        cr.move_to(ax_x + 4, ty)
+                    cr.show_text(text)
+                n += step
+        cr.restore()
+
+    def _on_graph_press(self, area, event):
+        """A click on the canvas traces where it was clicked -- and, first,
+        gives the canvas the keyboard.
+
+        The canvas could take focus (set_can_focus) and answered arrow keys
+        (_on_graph_key), but nothing ever gave it focus except a walk through
+        thirteen Tab stops: it listened for no button at all. Measured on the
+        module as it stood -- click the graph, press Right three times,
+        trace_x is still 0.0 and the readout still says X=0. The trace, its
+        readout and the ring drawn at the traced point were unreachable with a
+        mouse. A canvas that answers keys has to take the click that aims
+        them."""
+        area.grab_focus()
+        w = max(1, area.get_allocated_width())
+        h = max(1, area.get_allocated_height())
+        x, _y = pixel_to_graph(event.x, event.y, self.window, w, h)
+        self.trace_x = x
+        self._clamp_trace()
+        self._update_trace()
+        area.queue_draw()
+        return True
 
     def _on_graph_key(self, _area, event):
         name = Gdk.keyval_name(event.keyval)
@@ -879,9 +1250,8 @@ class Calculator(nbapp.AppWindow):
             # for a point nobody could see. trace_x is persisted, so closing
             # the app did not recover it either -- it reopened just as lost.
             # A trace that cannot leave the graph cannot get lost on it.
-            self.trace_x = min(self.window["xmax"],
-                               max(self.window["xmin"],
-                                   self.trace_x + (-1 if name == "Left" else 1) * step))
+            self.trace_x += (-1 if name == "Left" else 1) * step
+            self._clamp_trace()
         elif name in ("Up", "Down") and enabled:
             try: p = enabled.index(self.trace_curve)
             except ValueError: p = 0
@@ -890,10 +1260,40 @@ class Calculator(nbapp.AppWindow):
         self._update_trace(); self.graph.queue_draw(); return True
 
     def _update_trace(self):
-        try: y = self._eval_x(self.ys[self.trace_curve], self.trace_x); sy = format_number(y, self.fix)
-        except Exception: sy = _t("Undefined")
-        self.trace_label.set_text("Y%d  X=%s  Y=%s" % (self.trace_curve + 1,
-            format_number(self.trace_x, self.fix), sy))
+        # The SAME point the ring is drawn at, which is what makes the caption
+        # and the picture one statement. Read straight from ys[] instead, the
+        # readout described a curve that was not on the graph: untick every
+        # function and the canvas is empty, no ring is drawn -- and the line
+        # under it still read "Y1  X=8.07228915663  Y=6.51618522282", a value
+        # for something nobody could see and nothing had plotted. trace_point()
+        # already knows the rule ("None when the curve is off, empty, or has no
+        # value there"); this is its other reader.
+        point = self.trace_point()
+        sy = (_t("Undefined") if point is None
+              else format_number(point[1], self.fix))
+        trace = _t("Y%d  X=%s  Y=%s") % (self.trace_curve + 1,
+            format_number(self.trace_x, self.fix), sy)
+        # Skipped when the readout already says this, the same way _apply_face
+        # skips a key whose face is unchanged -- and here it matters more,
+        # because this runs from inside _draw_graph. gtk_label_set_text queues
+        # a resize whether or not the text differs, and a paint that writes to
+        # a widget asks for the next paint. In a mapped toplevel the frame
+        # clock absorbs that; in an offscreen holder (tools/appdrive.py, the
+        # OS's own real-use driver) it does not, and the Graph page repainted
+        # 601 times for one still picture -- 25s of CPU for a readout that
+        # said "Y1  X=0  Y=0" every single time. Measured: with this write
+        # suppressed the same drive takes ONE draw. A screenful of numbers
+        # that has not changed should cost nothing to keep on screen.
+        if trace == getattr(self, "_trace_txt", None):
+            return
+        self._trace_txt = trace
+        self.trace_label.set_text(trace)
+        try:
+            acc = self.graph.get_accessible()
+            acc.set_description(trace)
+            acc.notify_visible_data_changed()
+        except Exception:
+            pass
 
     @staticmethod
     def _table_cell(text, header=False):
@@ -951,6 +1351,8 @@ class Calculator(nbapp.AppWindow):
                 for a, b in (("xmin", "xmax"), ("ymin", "ymax")):
                     mid = (self.window[a] + self.window[b]) / 2; half = (self.window[b] - self.window[a]) * factor / 2
                     self.window[a], self.window[b] = mid - half, mid + half
+        self._clamp_trace()
+        self._update_trace()
         self.graph.queue_draw()
 
     def _window_dialog(self, *_):
@@ -963,17 +1365,57 @@ class Calculator(nbapp.AppWindow):
             # sin/cos/log key faces: they are mathematical notation, not prose.
             grid.attach(Gtk.Label(label=key.capitalize()), 0, row, 1, 1)
             ent = Gtk.Entry(); ent.set_text(format_number(self.window[key], self.fix))
+            ent.get_style_context().add_class("winfield")
             grid.attach(ent, 1, row, 1, 1); entries[key] = ent
+        # What the dialog says when Apply cannot be honoured. Hidden until it
+        # is needed; the same sentence sanitize_state's rules amount to.
+        note = Gtk.Label(label=_t("Numbers only. Minimum below maximum, scale above zero."), xalign=0)
+        note.set_line_wrap(True); note.set_max_width_chars(34)
+        note.get_style_context().add_class("winnote")
+        note.set_no_show_all(True)
+        grid.attach(note, 0, 6, 2, 1)
         dialog.get_content_area().add(grid); dialog.show_all()
-        if dialog.run() == Gtk.ResponseType.OK:
-            try:
-                values = {k: float(e.get_text()) for k, e in entries.items()}
-                if not window_is_valid(values): raise ValueError()
-                self.window.update(values); self.graph.queue_draw()
-            except ValueError: pass
+        # Apply used to close the dialog whatever was typed: Xmin 10 / Xmax
+        # -10, or "abc", was read, found invalid and DROPPED, and the person
+        # was left with the old graph and no idea their window was refused.
+        # Now an invalid window keeps the dialog open, marks the fields it
+        # cannot read, and says why; only Cancel or a good Apply closes it.
+        while dialog.run() == Gtk.ResponseType.OK:
+            values, bad = {}, []
+            for k, e in entries.items():
+                try:
+                    values[k] = float(e.get_text())
+                except ValueError:
+                    bad.append(k)
+            if not bad and window_is_valid(values):
+                self._apply_window(values)
+                break
+            if not bad:
+                # Every field reads as a number and they still do not make a
+                # window: the pair (or scale) that is out of order.
+                if not values["xmin"] < values["xmax"]: bad += ["xmin", "xmax"]
+                if not values["ymin"] < values["ymax"]: bad += ["ymin", "ymax"]
+                if not values["xscl"] > 0: bad.append("xscl")
+                if not values["yscl"] > 0: bad.append("yscl")
+                if not bad: bad = list(entries)       # nan/inf: nothing orders
+            for k, e in entries.items():
+                ctx = e.get_style_context()
+                (ctx.add_class if k in bad else ctx.remove_class)("error")
+            note.show()
         dialog.destroy()
 
     # ---- display ----
+    def _apply_window(self, values):
+        """Take a window the person typed. Lifted out of the dialog so it can
+        be CHECKED: everything else in _window_dialog sits behind a
+        `dialog.run()`, which no test can drive without a modal loop, and what
+        Apply does to the TRACE is exactly the sort of thing that goes missing
+        there (see _clamp_trace)."""
+        self.window.update(values)
+        self._clamp_trace()
+        self._update_trace()
+        self.graph.queue_draw()
+
     def _damage_strip(self):
         """The line above the readout that appears only when the stored
         calculator could not be read. Dismissible, because it is news rather
@@ -998,6 +1440,7 @@ class Calculator(nbapp.AppWindow):
         shut.set_relief(Gtk.ReliefStyle.NONE)
         shut.set_valign(Gtk.Align.START)
         shut.set_tooltip_text(_t("Close"))
+        shut.get_accessible().set_name(_t("Close"))
         shut.get_style_context().add_class("damage-shut")
         shut.connect("clicked", self._dismiss_damage)
         strip.pack_end(shut, False, False, 0)
@@ -1022,6 +1465,13 @@ class Calculator(nbapp.AppWindow):
         box.pack_start(top, False, False, 0)
 
         tape_scroll = Gtk.ScrolledWindow()
+        # ...on the card's own paper. A ScrolledWindow and its viewport paint
+        # the theme's own surface, which on Papertone is the DESK tone: the
+        # running-history strip was a grey slab cut out of the middle of the
+        # paper card, and on an empty calculator -- the first thing anyone
+        # sees -- it was a grey slab with nothing in it. Every other surface
+        # in this file paints its own tone for the same reason.
+        tape_scroll.get_style_context().add_class("tape")
         tape_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         tape_scroll.set_size_request(
             -1, 68 if getattr(self, "_compact", False) else 92)
@@ -1073,6 +1523,43 @@ class Calculator(nbapp.AppWindow):
         self.disp_lbl.get_style_context().add_class("disp-main")
         box.pack_start(self.disp_lbl, False, False, 0)
         return box
+
+    @staticmethod
+    def _tape_label(text, xalign):
+        """One end of a tape row, bounded.
+
+        THE BOUND IS THE POINT, and it was missing. A tape row was a plain
+        Gtk.Label, which asks for the whole string as its natural width -- and
+        the tape sits in a ScrolledWindow whose horizontal policy is NEVER, so
+        that width goes straight into the card. MEASURED at 1024x740, adding up
+        a receipt of 42 items (250 characters, the most the expression bound
+        allows):
+
+            card 640 -> 1690 px wide, on a 1024 px screen
+
+        Everything past the fifth keypad column -- AC, backspace, the closing
+        bracket, and every one of the operator keys including "=" -- was off the
+        right-hand edge of the screen with no way to scroll to it, and it stayed
+        that way, because AC clears the expression and not the tape. The
+        calculator was unusable from then on, from nothing but a long sum.
+
+        Both display labels above already carry the cure (see _display): an
+        ellipsize mode plus a natural width capped to one character, so the
+        label fills what it is given instead of demanding what it holds. A tape
+        row needs exactly the same two lines. The expression ellipsizes at the
+        END, where a row is read as the name of a calculation; the result keeps
+        a real cap, wide enough for the longest answer this calculator can print
+        (a 20-digit exact integer and its sign).
+        """
+        lbl = Gtk.Label(label=text, xalign=xalign)
+        lbl.set_direction(Gtk.TextDirection.LTR)   # expressions, not prose
+        if xalign:
+            lbl.set_ellipsize(Pango.EllipsizeMode.START)
+            lbl.set_max_width_chars(_TAPE_RESULT_CHARS)
+        else:
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(1)
+        return lbl
 
     def _on_history_key(self, _box, event):
         if event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space):
@@ -1184,9 +1671,15 @@ class Calculator(nbapp.AppWindow):
 
     def press(self, kd):
         label, action, value, ktype = kd
-        # Any keypress dismisses a lingering "Error" display; "=" re-raises it
-        # below if the fresh expression is still invalid.
-        self.error = False
+        # A key that EDITS dismisses a lingering error display; "=" re-raises
+        # it below if the fresh expression is still invalid. The two MODE keys
+        # (2nd, DEG) touch no expression, so the sentence stays until something
+        # is typed: clearing it there left the failed "10÷0 =" over a
+        # placeholder 0 -- exactly the false reading the "=" branch below
+        # refuses to paint.
+        was_error = self.error
+        if action not in ("second", "deg"):
+            self.error = False
         # ...and ends any walk back through the history: from here on the
         # display is being typed, not browsed, so the next Up starts again from
         # the most recent calculation.
@@ -1198,8 +1691,10 @@ class Calculator(nbapp.AppWindow):
         elif action == "catalog":
             self._catalog_dialog()
         elif action == "deg":
+            previous = self.deg
             self.deg = not self.deg
-            self._save_prefs()
+            if not self._save_prefs():
+                self.deg = previous
         elif action == "ac":
             self.expr = ""
             self.history = ""
@@ -1208,15 +1703,29 @@ class Calculator(nbapp.AppWindow):
         elif action == "back":
             self.expr = self.expr[:-1]
             self.just_evaled = False
-        elif action == "neg":
-            self.expr = ("−(" + self.expr + ")") if self.expr else "−"
-            self.just_evaled = False
-        elif action == "inv":
-            # Reciprocal wraps the current expression as 1÷(…). With nothing
-            # entered there is nothing to invert, so this is a no-op rather than
-            # leaving a dangling "1÷(" that can only ever evaluate to "Error".
-            if self.expr:
-                self.expr = "1÷(" + self.expr + ")"
+        elif action in ("neg", "inv"):
+            # Both of these WRAP whatever is on the display -- and straight
+            # after "=" what is on the display may not be the answer. Under a
+            # Fix mode it is a ROUNDING of the answer, so wrapping the text is
+            # how a display setting becomes the arithmetic. MEASURED, Fix 2:
+            #
+            #     2÷3 =        0.67        (the answer is 0.666666666667)
+            #     then 1/x =   1.49        (the answer is 1.5)
+            #     then +/- =   -0.67, and Ans is now -0.67 too, so
+            #                  ×3 = came back -2.01 instead of -2
+            #
+            # _continued_answer() is the same token the operator keys already
+            # use for this: it hands back the display text when the display IS
+            # the answer, and "Ans" -- the number itself -- when it is not.
+            inner = (self._continued_answer()
+                     if self.just_evaled and self.expr else self.expr)
+            if action == "neg":
+                self.expr = ("−(" + inner + ")") if inner else "−"
+            elif inner:
+                # Reciprocal wraps as 1÷(…). With nothing entered there is
+                # nothing to invert, so this is a no-op rather than leaving a
+                # dangling "1÷(" that can only ever evaluate to "Error".
+                self.expr = "1÷(" + inner + ")"
             self.just_evaled = False
         elif action == "eq":
             prev = self.expr
@@ -1240,8 +1749,7 @@ class Calculator(nbapp.AppWindow):
                 else:
                     self.history = prev + " ="
                     self.expr = r
-                    try: self.ans = float(r)
-                    except ValueError: self.ans = r
+                    self.ans = self._answer_value(r)
                     if idx is not None:
                         self.tape_results[idx] = r
                     self.just_evaled = True
@@ -1256,9 +1764,27 @@ class Calculator(nbapp.AppWindow):
             if self.just_evaled and not is_op:
                 self.expr = v
             else:
-                self.expr = self.expr + v
+                if self.just_evaled:
+                    # Carrying the answer on: it must be the ANSWER that
+                    # carries on, not the rounding a display mode showed it as.
+                    self.expr = self._continued_answer()
+                if v == "(":
+                    # "(" completes a function name typed letter by letter:
+                    # the key ladder spelled it SIN, the keypad spells it sin(.
+                    # Give the display the keypad's spelling (see
+                    # _NAME_BY_LOWER; evaluate() reads either).
+                    m = re.search(r"[A-Za-z]{2,}[0-9]*$", self.expr)
+                    if m is not None and m.group(0).lower() in _NAME_BY_LOWER:
+                        self.expr = (self.expr[:m.start()]
+                                     + _NAME_BY_LOWER[m.group(0).lower()])
+                self.expr = append_expression(self.expr, v)
             self.just_evaled = False
             self.second = False
+        # Leaving the error state with nothing on the display (⌫ on the empty
+        # display, a cancelled dialog): the failed line goes with it, or
+        # "10÷0 =" sits over the placeholder 0 as though that were the answer.
+        if was_error and not self.error and not self.expr:
+            self.history = ""
         self._refresh()
 
     # How many worked-out calculations are kept for Up / Down. Long enough to
@@ -1313,19 +1839,71 @@ class Calculator(nbapp.AppWindow):
         """Record WHY the calculation failed and return the sentinel the
         caller already tests for, so no call site has to change."""
         self._err_why = why
+        self._value = None
         return "Error"
+
+    def _answer(self, value, text):
+        """Return the TEXT a display shows, remembering the NUMBER it is.
+
+        evaluate() answers with a string, and three callers needed the number:
+        Ans, STO-> and the graph/table sampler all did float() on that string.
+        So the Fix display mode -- a setting about how many decimals to SHOW --
+        became the arithmetic. Measured on the module as it stood:
+
+            Fix 2   2/3 = 0.67, then x3 =        2.01   (the answer is 2)
+            Fix 0   1250/12 = 104, then x12 =    1248   (the answer is 1250)
+            Fix 0   STO-> stored 104             (the value is 104.166666667)
+            Fix 0   Y1=X^2/10 drew a STAIRCASE, every sample rounded to a whole
+
+        The number is kept here beside the text, and every one of those callers
+        reads the number. Float mode is unchanged: its text already IS the
+        twelve-significant-figure value this calculator answers in."""
+        self._value = value
+        return text
+
+    def _answer_value(self, text):
+        """The number the last answer IS, for Ans / STO / a continued sum --
+        never the text a display mode rounded it to. Falls back to reading the
+        text when there is no number (an exact integer past what float can
+        carry still reads as its own magnitude, exactly as it used to)."""
+        for candidate in (getattr(self, "_value", None), text):
+            if candidate is None:
+                continue
+            try:
+                return float(candidate)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        return 0.0
+
+    def _continued_answer(self):
+        """The text that continues the answer on the display without CHANGING
+        it. The display normally holds the answer itself, and then it just
+        carries on. Under a Fix mode it holds a rounded rendering instead, and
+        carrying that on is how 2/3 x3 came back 2.01 -- so the continuation
+        becomes "Ans", which is the number itself and is the same token the
+        empty-display operator rule already writes."""
+        try:
+            if float(self.expr) == float(self.ans):
+                return self.expr
+        except (TypeError, ValueError, OverflowError):
+            pass
+        return "Ans"
 
     def evaluate(self):
         # "Error" stays the sentinel the caller tests for; _err_why carries
         # the sentence the DISPLAY shows, so the person is told what went
         # wrong rather than only that something did. Reset on every attempt.
         self._err_why = None
+        self._value = None
         js = self.expr
         if not js.strip():
-            return "0"
+            return self._answer(0.0, "0")
         js = (js.replace("×", "*").replace("÷", "/")
                 .replace("−", "-").replace("π", "(PI)")
                 .replace("√", "sqrt").replace("^", "**"))
+        # A typed name arrives in whatever case the keyboard gave it (SIN(30),
+        # ANS); read it as the name it spells. See _NAME_BY_LOWER.
+        js = canonical_names(js)
         # Protect digits that are part of function names from the implicit
         # multiplication rule below (which correctly turns ordinary 2e into
         # 2*e, but must not turn log2 into log*2).
@@ -1396,6 +1974,38 @@ class Calculator(nbapp.AppWindow):
                 raise ValueError("tan is undefined here")   # -> "Error"
             return 0.0
 
+        # RADIANS had the same disease from the other side: pi has no exact
+        # binary form, so sin(π) came back 1.22464679915e-16, cos(π÷2) was
+        # 6.12323399574e-17 and tan(π) -1.22464679915e-16 -- on the very key
+        # that inserts π. Reduce to quarter turns the way turn() does to
+        # quarter-circles: an argument within a hair (1e-12, relative) of a
+        # multiple of π/2 IS that multiple, because nothing on this keypad can
+        # name an angle any closer to π than π itself. Everything else is left
+        # to math's own correctly-rounded answer, unchanged.
+        def quarter(x):
+            """(quadrant 0-3, True) at a multiple of π/2 radians."""
+            q = x / (math.pi / 2)
+            k = round(q)
+            if abs(q - k) <= 1e-12 * max(1.0, abs(q)):
+                return int(k) % 4, True
+            return 0, False
+
+        def rsin(x):
+            k, exact = quarter(x)
+            return (0.0, 1.0, 0.0, -1.0)[k] if exact else math.sin(x)
+
+        def rcos(x):
+            k, exact = quarter(x)
+            return (1.0, 0.0, -1.0, 0.0)[k] if exact else math.cos(x)
+
+        def rtan(x):
+            k, exact = quarter(x)
+            if not exact:
+                return math.tan(x)
+            if k in (1, 3):
+                raise ValueError("tan is undefined here")   # -> "Error"
+            return 0.0
+
         def fact(n):
             # Factorial is defined on whole numbers. Rounding 5.5 to 6 and
             # answering 720 would be a quiet lie about what was asked.
@@ -1414,10 +2024,33 @@ class Calculator(nbapp.AppWindow):
                 r *= i
             return r
 
+        def count_args(n, r):
+            """Validated, bounded whole-number arguments for nCr/nPr."""
+            if n != int(n) or r != int(r):
+                raise ValueError("count needs whole numbers")
+            n, r = int(n), int(r)
+            if not 0 <= r <= n:
+                raise ValueError("count outside its domain")
+            # The old formulas built n! before dividing it back down, with no
+            # bound at all. A pasted nCr(100000000,2) therefore attempted a
+            # hundred-million factorial and froze or exhausted the machine.
+            # Match the explicit factorial key's established upper bound.
+            if n > 10000:
+                raise OverflowError("count too large")
+            return n, r
+
+        def ncr(n, r):
+            n, r = count_args(n, r)
+            return math.comb(n, r)
+
+        def npr(n, r):
+            n, r = count_args(n, r)
+            return math.perm(n, r)
+
         env = {
-            "sin": dsin if self.deg else math.sin,
-            "cos": dcos if self.deg else math.cos,
-            "tan": dtan if self.deg else math.tan,
+            "sin": dsin if self.deg else rsin,
+            "cos": dcos if self.deg else rcos,
+            "tan": dtan if self.deg else rtan,
             "asin": lambda x: math.asin(x) / d2r,
             "acos": lambda x: math.acos(x) / d2r,
             "atan": lambda x: math.atan(x) / d2r,
@@ -1430,11 +2063,11 @@ class Calculator(nbapp.AppWindow):
             "root": lambda x, n: math.copysign(abs(x) ** (1.0 / n), x) if int(n) % 2 else x ** (1.0 / n),
             "abs": abs, "floor": math.floor, "ceil": math.ceil, "round": round,
             "frac": lambda x: x - math.trunc(x), "int": math.trunc,
-            "nCr": lambda n, r: math.factorial(int(n)) // (math.factorial(int(r)) * math.factorial(int(n-r))) if n == int(n) and r == int(r) and 0 <= r <= n else (_ for _ in ()).throw(ValueError()),
-            "nPr": lambda n, r: math.factorial(int(n)) // math.factorial(int(n-r)) if n == int(n) and r == int(r) and 0 <= r <= n else (_ for _ in ()).throw(ValueError()),
+            "nCr": ncr,
+            "nPr": npr,
             "random": random.random,
             "fact": fact,
-            "_pow": _guarded_pow,
+            "_pow": _guarded_pow, "_add": _add, "_sub": _sub,
             "PI": math.pi,
             "e": math.e,
             "Ans": getattr(self, "ans", 0),
@@ -1453,7 +2086,8 @@ class Calculator(nbapp.AppWindow):
             code = _CODE_CACHE.get(js)
             if code is None:
                 tree = ast.parse(js, mode="eval")
-                _PowGuard().visit(tree)
+                _ArithmeticGuard(env).visit(tree)
+                _OpGuard().visit(tree)
                 ast.fix_missing_locations(tree)
                 code = compile(tree, "<calc>", "eval")
                 if len(_CODE_CACHE) >= _CODE_CACHE_MAX:
@@ -1478,13 +2112,22 @@ class Calculator(nbapp.AppWindow):
         # throws away an answer the calculator already had in full. Past what
         # one line holds (200! is 375 digits, 10^400 is 401) the magnitude is
         # the readable answer instead — see _sci.
+        fix = getattr(self, "fix", None)
         if isinstance(r, int) and not isinstance(r, bool):
+            # ...unless a Fix mode is on: then 2+2 must read 4.00 beside the
+            # 5.00 that 10÷2 already gave, or the chosen display mode is
+            # applied to half the answers. Only an integer a float carries
+            # exactly is handed to format_number; past that the digits ARE
+            # the answer and stay whole.
+            if fix is not None and abs(r) < 2 ** 53:
+                return self._answer(r, format_number(r, fix))
             try:
                 s = str(r)
             except (ValueError, MemoryError):
                 # str() of an int with > 4300 digits raises on Python 3.11+
                 return self._fail(_WHY_TOOBIG)
-            return s if len(s.lstrip("-")) <= _MAX_DIGITS else _sci(s)
+            return self._answer(
+                r, s if len(s.lstrip("-")) <= _MAX_DIGITS else _sci(s))
         try:
             if math.isinf(r):
                 return self._fail(_WHY_TOOBIG)
@@ -1492,9 +2135,13 @@ class Calculator(nbapp.AppWindow):
                 return self._fail(_WHY_NOANSWER)
             # match toPrecision(12) then trim
             r = float("%.12g" % r)
+            if r == 0:
+                r = 0.0          # never a "-0" / "-0.00" (0×−1, −sin(π))
             if r == int(r) and abs(r) < 1e16:
-                return format_number(r, getattr(self, "fix", None)) if getattr(self, "fix", None) is not None else str(int(r))
-            return format_number(r, getattr(self, "fix", None)) if getattr(self, "fix", None) is not None else repr(r)
+                return self._answer(
+                    r, format_number(r, fix) if fix is not None else str(int(r)))
+            return self._answer(
+                r, format_number(r, fix) if fix is not None else repr(r))
         except OverflowError:
             return self._fail(_WHY_TOOBIG)
         except (TypeError, ValueError):
@@ -1509,9 +2156,9 @@ class Calculator(nbapp.AppWindow):
         if hasattr(self, "tape_box"):
             for child in self.tape_box.get_children(): self.tape_box.remove(child)
             for expression, result in tape_window(self.tape, self.tape_results):
-                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-                row.pack_start(Gtk.Label(label=expression, xalign=0), True, True, 0)
-                row.pack_end(Gtk.Label(label=result, xalign=1), False, False, 0)
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                row.pack_start(self._tape_label(expression, 0), True, True, 0)
+                row.pack_end(self._tape_label(result, 1), False, False, 0)
                 self.tape_box.pack_start(row, False, False, 0)
             self.tape_box.show_all()
         disp_ctx = self.disp_lbl.get_style_context()
@@ -1529,10 +2176,18 @@ class Calculator(nbapp.AppWindow):
         if self.history != self._hist_txt:
             self._hist_txt = self.history
             self.hist_lbl.set_text(self.history)
-            # only offer the hint while there is actually something to click
-            self._histbox.set_tooltip_text(
-                _t("Click to use this calculation again")
-                if self.history else None)
+            available = bool(self.history)
+            action = (_t("Click to use this calculation again")
+                      if available else None)
+            self._histbox.set_tooltip_text(action)
+            self._histbox.set_can_focus(available)
+            self._histbox.set_sensitive(available)
+            self._histbox.get_accessible().set_name(action or "")
+            if not available and self._histbox.has_focus():
+                for _keydef, button, _label in self._buttons:
+                    if button.get_sensitive():
+                        button.grab_focus()
+                        break
         mode = "DEGREES" if self.deg else "RADIANS"
         if mode != self._mode_txt:
             self._mode_txt = mode
@@ -1592,8 +2247,16 @@ class Calculator(nbapp.AppWindow):
         # is never a permanently-greyed menu entry.
         if name == "Edit":
             return [
-                (_t("Copy Result"), self._copy_result
+                # Both clipboard actions SHOW their key: Ctrl+C and Ctrl+V are
+                # bound in _on_key_calc, and a shortcut nobody can discover is
+                # not a feature (MENU-CONVENTIONS rule 3). Paste had no menu
+                # entry at all, so the one way to bring an expression in was
+                # a key the app never mentioned. Composed the way contacts.py
+                # composes "Undo Delete Contact": the catalog carries the
+                # words, the key is added after.
+                (_t("Copy Result") + "    Ctrl+C", self._copy_result
                  if not getattr(self, "error", False) else None),
+                nbcommands.item("edit.paste", self._paste_expression),
                 # Up AND Down both walk the history (see _on_key_calc); only
                 # one of them was on the menu, so half the feature had no way
                 # to be discovered.
@@ -1621,11 +2284,23 @@ class Calculator(nbapp.AppWindow):
                 (_t("Graph    Ctrl+2"), lambda: self._switch_view("graph")),
                 (_t("Table    Ctrl+3"), lambda: self._switch_view("table")),
                 (_t("Function Catalog…"), self._catalog_dialog),
-                (_t("Variables…"), self._variables_dialog),
+                # NO ELLIPSIS, and it is the same distinction the About box
+                # makes. Function Catalog… offers a list to pick from and an
+                # Insert button, so it asks before anything happens and earns
+                # its ellipsis (rule 1). This one shows what is stored and
+                # closes: one Close button, nothing to answer, nothing pending
+                # on the answer. An ellipsis here promised a question the
+                # dialog never puts, which is the promise rule 1 exists to
+                # keep. Store Variable… is where a variable is actually named.
+                (_t("Variables"), self._variables_dialog),
                 nbapp.SEP,
                 (deg_mark + _t("Degrees"), lambda: self._set_deg(True)),
                 (rad_mark + _t("Radians"), lambda: self._set_deg(False)),
-                ((_t("Float") if self.fix is None else _t("Fix %d") % self.fix), self._display_mode_dialog),
+                # Named for what it DOES, with the ellipsis a dialog earns
+                # (rule 1). Labelled with the current mode -- "Float", "Fix 2"
+                # -- it read as a state, not an action, and promised nothing;
+                # the current mode is already preselected inside the dialog.
+                (_t("Display Mode") + "…", self._display_mode_dialog),
             ]
         return super().menu_items(name)
 
@@ -1653,18 +2328,28 @@ class Calculator(nbapp.AppWindow):
         calculator state.  Names are limited to the vocabulary the keypad can
         produce (functions/constants plus the single-letter variable slots).
         """
-        if not isinstance(text, str) or not text or len(text) > 256:
+        if not isinstance(text, str):
             return None
-        if text != text.strip() or any(ord(ch) < 32 or ord(ch) == 127
-                                      for ch in text):
+        # A number copied out of a document arrives with the space or the
+        # newline that ended its line. Whitespace at the ends carries nothing
+        # dangerous and the size cap is applied to what is left, so trim it
+        # rather than refusing the paste in silence.
+        text = text.strip()
+        if not text or len(text) > MAX_EXPRESSION_CHARS:
+            return None
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
             return None
         if not re.fullmatch(r"[0-9A-Za-z_+\-*/^().,!% ×÷π√]+", text):
             return None
+        # The vocabulary is exactly the one the keypad and the catalog write
+        # (_NAME_BY_LOWER, matched without regard to case the same way
+        # canonical_names reads a typed name) plus the A-Z variable slots. The
+        # hand-written list this replaces held thirteen names and the catalog
+        # offers twenty-eight, so "floor(2.5)", "nCr(5,2)" and "log(100)*2"
+        # were refused in silence -- expressions this calculator computes.
         names = re.findall(r"[A-Za-z_]+", text)
-        allowed = {"sin", "cos", "tan", "asin", "acos", "atan", "sqrt",
-                   "log", "ln", "abs", "pi", "e", "ANS"}
-        if any(name not in allowed and not re.fullmatch(r"[A-Z]", name)
-               for name in names):
+        if any(name.lower() not in _NAME_BY_LOWER
+               and not re.fullmatch(r"[A-Za-z]", name) for name in names):
             return None
         return text
 
@@ -1674,11 +2359,25 @@ class Calculator(nbapp.AppWindow):
             clip = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
 
             def received(_clipboard, text, *_unused):
+                if self._closed:
+                    return
                 value = self._clipboard_expression(text)
                 if value is None:
                     return
-                self.expr = value.replace("×", "*").replace("÷", "/")
+                # Spelled the way the keypad spells it, so a pasted "2*3" reads
+                # 2×3 on a display whose own × key writes that character;
+                # evaluate() reads either.
+                self.expr = value.replace("*", "×").replace("/", "÷")
                 self.error = False
+                # ...and the display is now being TYPED, not carried on from
+                # the last answer. Without this the paste landed on a display
+                # still marked just_evaled, and the very next key threw it
+                # away: after 7×7=, pasting "12" and pressing 5 left "5", and
+                # pressing + left "Ans+" -- the pasted number gone, replaced by
+                # the answer it was pasted over. Same two lines the keypad's own
+                # press() sets for exactly the same reason.
+                self.just_evaled = False
+                self._tape_i = None
                 self._refresh()
 
             clip.request_text(received)
@@ -1688,8 +2387,10 @@ class Calculator(nbapp.AppWindow):
     def _set_deg(self, value):
         """Set degrees (True) / radians (False) explicitly from the View menu,
         persist it, and repaint the DEG key + mode line to match."""
+        previous = self.deg
         self.deg = value
-        self._save_prefs()
+        if not self._save_prefs():
+            self.deg = previous
         self._refresh()
 
     def _clear_all(self):
@@ -1716,26 +2417,80 @@ class Calculator(nbapp.AppWindow):
         Evaluated through the app's own evaluator now — the same one "=" uses,
         which is what every one of those cases needed. A genuinely unreadable
         expression still returns None, and evaluate() has already put the reason
-        on the display by then."""
+        on the display by then.
+
+        ...and evaluating the DISPLAY is exactly wrong for the one case the
+        docstring above already names as fixed. Straight after "=" the display
+        holds the answer as a display mode renders it, and re-reading that text
+        stores the rendering. MEASURED, on the module as it stood:
+
+            Fix 0   1250÷12 =  shows 104   STO-> B stored 104.0
+                                           (the answer is 104.166666667)
+            Fix 2   2÷3 =      shows 0.67  STO-> A stored 0.67
+                                           (the answer is 0.666666666667)
+
+        A memory register is a NUMBER, not a rendering of one, and the number
+        is already kept beside the text (see _answer). Any edit at all clears
+        just_evaled, so an expression the person is part-way through is still
+        evaluated, exactly as before."""
+        if self.just_evaled:
+            value = _finite(getattr(self, "ans", 0), None)
+            if value is not None:
+                return value
         result = self.evaluate()
         if result == "Error":
             return None
-        try:
-            value = float(result)
-        except (TypeError, ValueError):
-            return None
+        value = self._answer_value(result)
         return value if math.isfinite(value) else None
 
     def _store_dialog(self):
         dialog = Gtk.Dialog(title=_t("Store Variable"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
         dialog.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL); dialog.add_button(_t("Store"), Gtk.ResponseType.OK)
-        entry = Gtk.Entry(); entry.set_max_length(1); entry.set_placeholder_text(_t("Letter A-Z")); dialog.get_content_area().add(entry); dialog.show_all()
-        if dialog.run() == Gtk.ResponseType.OK and re.match(r"^[A-Za-z]$", entry.get_text()):
-            value = self._store_value()
-            if value is not None:
-                self.variables[entry.get_text().upper()] = value
-                self._save_prefs()
+        entry = Gtk.Entry(); entry.set_max_length(1); entry.set_placeholder_text(_t("Letter A-Z"))
+        # Store stays off until the field holds the letter the placeholder asks
+        # for, rather than accepting the press and doing nothing with it.
+        dialog.set_response_sensitive(Gtk.ResponseType.OK, False)
+        entry.connect("changed", lambda e: dialog.set_response_sensitive(
+            Gtk.ResponseType.OK, bool(re.match(r"^[A-Za-z]$", e.get_text()))))
+        dialog.get_content_area().add(entry); dialog.show_all()
+        name = entry.get_text() if dialog.run() == Gtk.ResponseType.OK else ""
         dialog.destroy()
+        if name:
+            self.store_from_display(name)
+
+    def store_from_display(self, name):
+        """STO-> the display into variable `name`. True when one was written.
+
+        The failure used to be SILENT, and its docstring said otherwise: with
+        "5+" on the display -- or "sqrt(" , or anything half-typed -- the
+        dialog took the letter, _store_value() came back None, and the app did
+        nothing and said nothing. The variable kept whatever it held. The
+        reason evaluate() found is already the sentence the display shows a
+        failed "=", so a refused store says the same thing in the same red."""
+        if not re.match(r"^[A-Za-z]$", name):
+            return False
+        value = self._store_value()
+        if value is None:
+            self.error = True
+            self._err_why = self._err_why or _WHY_UNREADABLE
+            self._refresh()
+            return False
+        stored = self._store_variable(name.upper(), value)
+        self._refresh()
+        return stored
+
+    def _store_variable(self, name, value):
+        """Persist one memory register, rolling it back on write failure."""
+        missing = object()
+        previous = self.variables.get(name, missing)
+        self.variables[name] = value
+        if self._save_prefs():
+            return True
+        if previous is missing:
+            self.variables.pop(name, None)
+        else:
+            self.variables[name] = previous
+        return False
 
     def _variables_dialog(self):
         dialog = Gtk.Dialog(title=_t("Variables"), transient_for=self, flags=Gtk.DialogFlags.MODAL)
@@ -1771,8 +2526,21 @@ class Calculator(nbapp.AppWindow):
         combo = Gtk.ComboBoxText(); combo.append_text(_t("Float"))
         for i in range(10): combo.append_text(_t("Fix %d") % i)
         combo.set_active(0 if self.fix is None else self.fix + 1); dialog.get_content_area().add(combo); dialog.show_all()
-        if dialog.run() == Gtk.ResponseType.OK: self.fix = None if combo.get_active() == 0 else combo.get_active() - 1; self._save_prefs()
+        if dialog.run() == Gtk.ResponseType.OK:
+            value = None if combo.get_active() == 0 else combo.get_active() - 1
+            self._set_fix(value)
         dialog.destroy()
+
+    def _set_fix(self, value):
+        """Persist the display precision, restoring it on write failure."""
+        previous = self.fix
+        self.fix = value
+        if self._save_prefs():
+            self._refresh()
+            return True
+        self.fix = previous
+        self._refresh()
+        return False
 
     # ---- persistence ----
     # _load_prefs used to live here: a SECOND reader of calculator.json that
@@ -1815,10 +2583,13 @@ class Calculator(nbapp.AppWindow):
         self._damaged = False        # did we fail to read what was there
         self._damaged_path = None    # where the bytes went, if we could move them
         try:
-            with open(STATE_FILE) as fh:
-                data = json.load(fh)
+            data = _read_state_json()
         except FileNotFoundError:
             return {}
+        except CalculatorStoreTooLarge:
+            # Valid oversized JSON is not parse damage, so use the app-aware
+            # mover; saving resumes only when the original is safely aside.
+            self._damaged_path = nbapp.quarantine_unrecognized(STATE_FILE)
         except Exception:
             self._damaged_path = nbapp.preserve_damaged(STATE_FILE)
         else:
@@ -1846,7 +2617,24 @@ class Calculator(nbapp.AppWindow):
             # journal shipping: the file survived and everything the person did
             # afterwards was silently thrown away at close.
             if not self._store_readable:
-                return
+                # ...and SAY so, once. Returning False here in silence made the
+                # one state where NOTHING can be saved the one state that told
+                # nobody: note_save_failure lives in the except branch below,
+                # and this returns before it, so the notification centre was
+                # never told either. Meanwhile the strip above the readout says
+                # "A new one was started. The damaged file was kept." -- which
+                # reads as "carry on" -- and everything the person works out
+                # from then on is discarded at close with nothing anywhere
+                # having said a word. MEASURED, with the config directory
+                # unwritable and a damaged calculator.json inside it: the
+                # original could not be moved aside, _store_readable went
+                # False, _save_error stayed None and the tray stayed empty.
+                # note_save_failure is once-per-owner, so a session's worth of
+                # refused saves still leaves exactly one message.
+                nbapp.note_save_failure(
+                    self, OSError("the damaged store could not be moved aside"),
+                    STATE_FILE)
+                return False
             payload = dict(getattr(self, "_extra", {}) or {})
             payload.update({
                 "deg": bool(self.deg), "fix": self.fix, "ans": self.ans,
@@ -1856,23 +2644,49 @@ class Calculator(nbapp.AppWindow):
                 "tbl_start": self.tbl_start, "tbl_step": self.tbl_step,
                 "trace_x": self.trace_x, "_extra": getattr(self, "_extra", {})})
             nbapp.atomic_write_json(STATE_FILE, payload)
+            return True
         except Exception as exc:
             nbapp.note_save_failure(self, exc, STATE_FILE)
+            return False
 
     def _on_destroy(self, *_):
+        self._closed = True
         self._save_prefs()
         return False
 
     # ---- keyboard ----
+    def _on_key(self, w, ev):
+        # Esc LEAVES the page it is on before it leaves the window: on the
+        # Graph or Table page it goes Home, and only from Home does it fall
+        # through to the base handler and close the app. This has to be done
+        # HERE, in the base's own hook: nbapp connects AppWindow._on_key before
+        # __init__ can connect _on_key_calc, and the base returns True after
+        # close(), so an Escape branch in _on_key_calc was never reached and
+        # Esc on the graph quit the whole calculator (contacts.py takes Esc
+        # the same way). An open menu / About card is dismissed by the base
+        # first.
+        if (ev.keyval == Gdk.KEY_Escape
+                and getattr(self, "current_view", "home") != "home"
+                and self._menu_open is None
+                and getattr(self, "_about_layer", None) is None):
+            self._switch_view("home")
+            return True
+        return super()._on_key(w, ev)
+
     def _on_key_calc(self, _w, ev):
         kv = ev.keyval
         name = Gdk.keyval_name(kv)
+        editing_text = isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView))
         # Ctrl+C copies the current result — the same action as Edit ▸ Copy
-        # Result, so the usual keyboard reflex just works.
+        # Result, except while a real formula field owns normal text editing.
         if (ev.state & Gdk.ModifierType.CONTROL_MASK) and name in ("c", "C"):
+            if editing_text:
+                return False
             self._copy_result()
             return True
         if (ev.state & Gdk.ModifierType.CONTROL_MASK) and name in ("v", "V"):
+            if editing_text:
+                return False
             self._paste_expression()
             return True
         if ev.state & Gdk.ModifierType.CONTROL_MASK:
@@ -1883,9 +2697,17 @@ class Calculator(nbapp.AppWindow):
                 self._catalog_dialog(); return True
             if name in ("s", "S"):
                 self._store_dialog(); return True
-        if name == "Escape":
-            if getattr(self, "current_view", "home") != "home":
-                self._switch_view("home"); return True
+        # An unowned shortcut belongs to GTK/the desktop, not to the
+        # expression editor.  Without this boundary Ctrl+A and Ctrl+Z fell
+        # through to the single-letter variable rule below and silently typed
+        # A or Z; Alt+letter did the same while a menu mnemonic was being used.
+        # Leave these chords unclaimed so their normal window-wide action can
+        # run.  Shift is deliberately not included: it is how symbols such as
+        # +, %, ^ and parentheses reach the key-name table below.
+        shortcut_mods = (Gdk.ModifierType.CONTROL_MASK
+                         | Gdk.ModifierType.MOD1_MASK
+                         | Gdk.ModifierType.SUPER_MASK)
+        if ev.state & shortcut_mods:
             return False
         # Typing belongs to a focused text field. The graph view's Y1-Y4
         # expression boxes are real entries in this same toplevel, and this
@@ -1895,7 +2717,16 @@ class Calculator(nbapp.AppWindow):
         # while the user was correcting a typo in a formula box. Ctrl
         # chords and Escape stay above: their meanings are window-wide
         # (copy result, switch view, leave).
-        if isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView)):
+        if editing_text:
+            return False
+        # ...and on the Graph and Table pages the keypad is not on screen at
+        # all. This handler runs at the WINDOW, before the focused widget sees
+        # the key, so on the graph it swallowed Up/Down for the tape recall
+        # (and Return, Delete, every digit for a display nobody could see):
+        # the traced curve never changed and the Home display did. Decline
+        # everything below so the arrows reach _on_graph_key; the Ctrl chords
+        # above keep their window-wide meaning.
+        if getattr(self, "current_view", "home") != "home":
             return False
         table = {
             "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
@@ -1909,7 +2740,10 @@ class Calculator(nbapp.AppWindow):
             # It inserts "." because that is what the display shows and what
             # the parser reads; the point is that the key does something and
             # what it does is visible, not that the separator is localised.
-            "comma": ".", "KP_Separator": ".",
+            # The one place it stays a comma is inside nCr( / nPr( / nthRoot(,
+            # which have two arguments and no other way to separate them --
+            # see wants_argument, applied where this table is read.
+            "comma": ",", "KP_Separator": ",",
             "parenleft": "(", "parenright": ")",
             "plus": "+", "KP_Add": "+",
             "minus": "−", "KP_Subtract": "−",
@@ -1920,7 +2754,11 @@ class Calculator(nbapp.AppWindow):
         for i in range(10):
             table["KP_" + str(i)] = str(i)
         if name in table:
-            self._press_value(table[name])
+            value = table[name]
+            if value == ",":
+                # ...unless a two-argument call is waiting for its separator.
+                value = "," if wants_argument(self.expr) else "."
+            self._press_value(value)
             return True
         if name and len(name) == 1 and name.isalpha():
             self._press_value(name.upper()); return True
@@ -1946,8 +2784,17 @@ class Calculator(nbapp.AppWindow):
         return False
 
     def _press_value(self, v):
-        ktype = "num" if (v.isdigit() or v == ".") else "op"
-        if v in ("%", "^", "(", ")"):
+        """A keyboard key or a catalog pick, given the SAME key type its
+        keypad twin has, because press() reads the type: after "=" a value
+        that is not an operator starts a new expression, an operator continues
+        the answer. Every non-digit used to be classed an operator, so typing
+        A after 7×7= gave "49A" -- and, with A and B stored, A+B came back
+        245 -- while the pad's own π key correctly began afresh."""
+        if v.isdigit() or v == ".":
+            ktype = "num"
+        elif v in ("+", "−", "×", "÷"):
+            ktype = "op"
+        else:
             ktype = "fn"
         self.press((v, "app", v, ktype))
 
@@ -1967,8 +2814,17 @@ class Calculator(nbapp.AppWindow):
         .calcnav button { border-radius: 0; min-height: 34px; }
         .calcnav button.active { background: #C8341E; color: #FCFBF8; }
         .graphpage, .tablepage { background: #F8F7F2; padding: 14px; }
+        /* The Window dialog's refused fields and its one-line note, in the
+           signage red the display's own error state uses. */
+        entry.winfield.error { border-color: #C8341E; color: #C8341E; }
+        .winnote { color: #C8341E; font-size: 12px; margin-top: 6px; }
         /* A column of numbers is read DOWN, so the header carries the weight
            and the rule, and the values line up under it. */
+        /* ...and every column is the same width, so the rule under a header
+           spans its whole column instead of stopping at the width of the word
+           "X", and a one-character column is not a quarter the width of the
+           numbers under it. */
+        .tblhead, .tblcell { min-width: 108px; padding-right: 14px; }
         .tblhead { font-weight: 600; color: #6E695E; font-size: 12px;
                    letter-spacing: 0.06em; padding-bottom: 4px;
                    border-bottom: 1px solid #C9C4B6; }
@@ -2006,11 +2862,13 @@ class Calculator(nbapp.AppWindow):
         .compact .keystrip .key { min-height: 44px; }
         .compact .damage-note { padding: 9px 12px 9px 10px; }
         .disp-kicker { font-size: 11px; letter-spacing: 0.16em;
-                       color: #9A9484; font-weight: 600; }
-        .disp-mode { font-size: 12px; letter-spacing: 0.08em; color: #8A857A;
+                       color: #6E695E; font-weight: 600; }
+        .disp-mode { font-size: 12px; letter-spacing: 0.08em; color: #6E695E;
                      font-weight: 600; }
-        /* the history line's click target paints the card's own paper: never
-           leave a bare EventBox transparent on the no-compositor stack */
+        /* the tape strip and the history line's click target both paint the
+           card's own paper: never leave a bare EventBox (or a ScrolledWindow,
+           which paints the theme's desk tone) showing through the sheet */
+        .tape, .tape viewport { background: #F8F7F2; }
         .hist-box { background: #F8F7F2; }
         .hist-box:focus { outline: 2px solid #1A1916; outline-offset: -2px; }
         .disp-hist { font-size: 15px; color: #9A9484; margin-top: 14px;

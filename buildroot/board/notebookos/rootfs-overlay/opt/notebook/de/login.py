@@ -64,6 +64,7 @@ something a person could type?" — see `_can_verify`.
 """
 import os
 import sys
+import subprocess
 import time
 
 SHADOW = "/etc/shadow"
@@ -72,12 +73,6 @@ PASSWD = "/etc/passwd"
 INK = "#1A1916"
 MUTED = "#6E695E"
 PAPER = "#FCFBF8"
-
-DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-             "Saturday", "Sunday")
-MONTHS = ("January", "February", "March", "April", "May", "June", "July",
-          "August", "September", "October", "November", "December")
-
 
 USER_NAME_FILE = "/etc/notebookos-user"
 
@@ -96,7 +91,13 @@ def display_name(user):
         with open(USER_NAME_FILE) as fh:
             got = fh.read().strip()
         if got:
-            return got[:40]
+            # Cut only what could not be a name at all -- a binary file, a
+            # runaway one -- and never at a tidy-looking length: a 49-character
+            # name came out as "Maximilian Bartholomew Fitzgerald-Worthi", a
+            # hard stop mid-word with nothing to say it was a stop. The
+            # greeting label ellipsizes instead (see _build), which is what a
+            # cut is supposed to look like.
+            return got[:120]
     except OSError:
         pass
     return user
@@ -222,12 +223,22 @@ def has_password(user=None):
     one of those means "do not show a sign-in screen", because none of them can
     ever be satisfied by typing, and a screen that cannot be satisfied is a
     brick, not security."""
-    h = _shadow_hash(user or desktop_user())
-    if h is None or h == "":
-        return False
-    if h.startswith("!") or h.startswith("*"):
-        return False
-    return _can_verify(h)
+    return _password_state(user or desktop_user()) == "password"
+
+
+def _password_state(user):
+    """Distinguish intentional passwordless state from credential failure."""
+    h = _shadow_hash(user)
+    if h is None:
+        return "error"
+    if h == "" or h.startswith("!") or h.startswith("*"):
+        return "none"
+    return "password" if _can_verify(h) else "error"
+
+
+def _may_skip_login(user, lock=False, state=None):
+    state = _password_state(user) if state is None else state
+    return state == "none" or (state == "error" and not lock)
 
 
 def verify(user, password):
@@ -258,7 +269,8 @@ import gi                                                      # noqa: E402
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Pango", "1.0")
-from gi.repository import Gtk, Gdk, GLib, Pango                # noqa: E402
+gi.require_version("Atk", "1.0")
+from gi.repository import Gtk, Gdk, GLib, Pango, Atk           # noqa: E402
 
 DE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, DE_DIR)
@@ -300,6 +312,8 @@ class Login(Gtk.Window):
         # missing cannot clear it, and a handler that has to ask whether the
         # window is gone must never be the thing that decides it is not.
         self._wait_id = 0       # the pause after repeated failures, if pending
+        self._count_id = 0      # the 1s tick that counts that pause down
+        self._wait_left = 0     # seconds of that pause still to run
         self._clock_id = 0      # the every-30s clock tick, once armed
         self._closed = False    # this window is being torn down
         self.ok = False
@@ -353,6 +367,10 @@ class Login(Gtk.Window):
         # NOT Gtk.main_quit directly: the timers this window arms outlive the
         # widgets they touch. See _on_destroy.
         self.connect("destroy", self._on_destroy)
+        # A window-manager close (Alt+F4 / _NET_CLOSE_WINDOW) is not a sign-in.
+        # Escape is handled below, but without a delete-event veto the WM could
+        # destroy this window, end Gtk.main(), and reveal the running desktop.
+        self.connect("delete-event", self._on_delete)
         # Escape must NOT dismiss a lock screen; that would make it decorative.
         self.connect("key-press-event", self._on_key)
         # matchbox honours EWMH state requests only AFTER a window is mapped
@@ -394,6 +412,15 @@ class Login(Gtk.Window):
         /* The one accent on this screen means exactly one thing: that did not
            work. Nothing else here is red. */
         .lg-field.wrong { border-color: #C8341E; }
+        /* Held: after repeated failures this field stops accepting keys for a
+           few seconds, and it used to look EXACTLY like a field that accepts
+           them -- measured, the two crops were the same bytes -- so every
+           keystroke vanished with nothing on screen to explain it. Last of the
+           field rules on purpose: at equal specificity this wins over .wrong,
+           because while the pause runs "not listening" is the more useful
+           fact and the red sentence below still says why. */
+        .lg-field:disabled { color: #9A9484; background: #F5F2EA;
+                             border-color: #DEDACC; }
         .lg-error { font-size: 13px; color: #C8341E; }
         .lg-hint { font-size: 12px; color: #9A9484; }
         .lg-recall { font-size: 12px; color: #6E695E; }
@@ -401,7 +428,7 @@ class Login(Gtk.Window):
            same ink-on-paper pair the Sign In button uses, at half the weight,
            because this is a fact about the field above and not a second
            thing to press. (ASCII only in here, as the note above says.) */
-        .lg-kbdcap { font-size: 12px; color: #9A9484; }
+        .lg-kbdcap { font-size: 12px; color: #6E695E; }
         .lg-kbd button { padding: 3px 12px; font-size: 12px;
                          background: #FCFBF8; border: 1px solid #C9C4B6;
                          border-radius: 8px; box-shadow: none; }
@@ -419,6 +446,29 @@ class Login(Gtk.Window):
            Save button. Here it rendered ink-on-ink and the word vanished. */
         .lg-go label { color: #FCFBF8; }
         .lg-go:disabled label { color: #9A9484; }
+        /* The way out, at the foot of the screen and deliberately quiet: it is
+           not what this screen is for. Without it somebody who cannot remember
+           the password -- or who meets the lock screen on a machine whose
+           credential file cannot be read, where nothing typed can ever be
+           accepted -- has no way to stop this computer but the mains.
+           The class goes on each BUTTON rather than on a box around them:
+           the one button down there that is NOT quiet is the confirm, which
+           carries .lg-go, and a `.lg-pwr button` descendant rule outranks a
+           plain class and would paint it quiet too. */
+        .lg-pwr { background: transparent; background-image: none;
+                  border: 1px solid transparent; border-radius: 8px;
+                  padding: 6px 12px; font-size: 12px; box-shadow: none; }
+        .lg-pwr label { color: #6E695E; }
+        .lg-pwr:hover { border-color: #C9C4B6; }
+        /* ...and the question those buttons ask before they act. */
+        .lg-ask { font-size: 12px; color: #6E695E; }
+        /* The confirm in that strip: the Sign In weight (.lg-go, listed
+           above) at the foot's own size, so the strip is exactly as tall
+           with the question in it as with the two buttons, and the column
+           above it does not move when the question opens. Padding, not a
+           size group -- a GtkSizeGroup ignores the strip that is hidden,
+           which is always one of these two. */
+        .lg-pwrgo { padding: 6px 16px; font-size: 12px; }
         """
         try:
             prov = Gtk.CssProvider()
@@ -430,7 +480,7 @@ class Login(Gtk.Window):
             pass          # styling is cosmetic; never block sign-in
 
     def _build(self):
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root = self._root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         root.get_style_context().add_class("lg-root")
         self.add(root)
 
@@ -442,6 +492,23 @@ class Login(Gtk.Window):
         centre.set_margin_start(24)
         centre.set_margin_end(24)
         root.pack_start(centre, True, True, 0)
+        self._build_power(root)
+
+        # NOTHING ABOVE THE FIELD MAY MOVE.
+        #
+        # Everything this screen says back to a wrong password appears BELOW
+        # the field, and this column is centred on the glass, so every one of
+        # those lines used to lift the clock, the name and the field itself:
+        # measured at 44px up on the first failure, and 11px back down on the
+        # next keystroke, i.e. the screen reflowing under the caret at the
+        # moment somebody is being told they were wrong.
+        #
+        # This empty box carries the same height as that answer block, above
+        # the clock, so the two cancel exactly: the block grows downward, the
+        # button below it steps down, and the top of the column stays where it
+        # was. See _balance_answer.
+        self._ballast = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        centre.pack_start(self._ballast, False, False, 0)
 
         # The clock is the anchor: on a machine with no network it is also the
         # quickest way to see the time is wrong before you trust anything else.
@@ -470,9 +537,19 @@ class Login(Gtk.Window):
         logo.set_margin_top(46)
         centre.pack_start(logo, False, False, 0)
 
-        who = Gtk.Label(label=display_name(self.user), xalign=0.5)
+        # The person's OWN name, out of /etc/notebookos-user. This screen
+        # already refuses to translate the keyboard-layout buttons for the
+        # same reason; a greeting that renames somebody called May, Grace or
+        # Sunny is the first thing they see every morning.
+        who = Gtk.Label(xalign=0.5)
+        self._set_verbatim(who, display_name(self.user))
         who.get_style_context().add_class("lg-who")
         who.set_margin_top(12)
+        # A name too long for the column ends in an ellipsis rather than
+        # stopping mid-word, and -- with the field pinned below -- it no longer
+        # drags the password field out to its own width on the way.
+        who.set_ellipsize(Pango.EllipsizeMode.END)
+        who.set_max_width_chars(30)
         centre.pack_start(who, False, False, 0)
 
         prompt = Gtk.Label(
@@ -483,10 +560,22 @@ class Login(Gtk.Window):
         centre.pack_start(prompt, False, False, 0)
 
         self.entry = Gtk.Entry()
+        # The lock heading says "Locked", which describes the screen rather
+        # than the field.  Give the authentication control its own stable name
+        # so assistive technology never has to infer it from visual proximity.
+        self.entry.get_accessible().set_name(_t("Password"))
         self.entry.set_visibility(False)
         self.entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
         self.entry.set_width_chars(24)
         self.entry.set_alignment(0.5)
+        # ITS OWN WIDTH, not the column's. Every child of this box is stretched
+        # to the box by default, so the field took the width of whatever the
+        # widest line under it happened to be: 222px at launch, 303px the
+        # moment the reminder appeared beneath it, 370px beside a long name,
+        # and a different number again in every language. A password field
+        # that changes size while somebody is typing into it is the machine
+        # flinching.
+        self.entry.set_halign(Gtk.Align.CENTER)
         # NOT set_activates_default(True). With it, ONE Enter submitted TWICE:
         # the "activate" handler below runs first, and GtkEntry's own default
         # handler for that same signal then activates the default widget --
@@ -515,11 +604,33 @@ class Login(Gtk.Window):
         # read back what you typed is the difference between getting in and
         # not, and the reminder names no secret, only where the secret came
         # from. The installer's own password page offers the same tick.
+        #
+        # EVERYTHING THIS SCREEN SAYS BACK GOES IN HERE, so that its height
+        # is one number the ballast at the top of the column can carry. The
+        # ballast above the clock is set to whatever this box grows to, the
+        # column grows by twice that, and — being centred — its top ends up
+        # exactly where it started. Nothing above the field moves. See
+        # _balance_answer, which is called wherever this box changes.
+        self._answer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        centre.pack_start(self._answer, False, False, 0)
+
         self.error = Gtk.Label(xalign=0.5)
         self.error.get_style_context().add_class("lg-error")
         self.error.set_margin_top(8)
         self.error.set_no_show_all(True)
-        centre.pack_start(self.error, False, False, 0)
+        self.error.get_accessible().set_role(Atk.Role.ALERT)
+        self._answer.pack_start(self.error, False, False, 0)
+
+        # While the field is held after repeated failures it is not accepting
+        # keys, and a held field that says nothing is a keyboard that appears
+        # to have died: measured, every keystroke during the pause vanished
+        # with nothing on screen about where it went. The greyed field says
+        # "not now" (see .lg-field:disabled); this says how long for.
+        self._wait = Gtk.Label(xalign=0.5)
+        self._wait.get_style_context().add_class("lg-hint")
+        self._wait.set_margin_top(6)
+        self._wait.set_no_show_all(True)
+        self._answer.pack_start(self._wait, False, False, 0)
 
         self._show = Gtk.CheckButton(label=_t("Show password"))
         self._show.get_style_context().add_class("lg-show")
@@ -527,20 +638,20 @@ class Login(Gtk.Window):
         self._show.set_margin_top(10)
         self._show.set_no_show_all(True)
         self._show.connect("toggled", self._on_show_toggle)
-        centre.pack_start(self._show, False, False, 0)
+        self._answer.pack_start(self._show, False, False, 0)
 
-        self._recall = Gtk.Label(xalign=0.5)
-        self._recall.get_style_context().add_class("lg-recall")
-        self._recall.set_margin_top(10)
-        self._recall.set_line_wrap(True)
-        self._recall.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        self._recall.set_max_width_chars(46)
-        # xalign centres the BLOCK; justify centres the lines within it. Every
-        # other line on this screen is centred, and translated this one wraps
-        # to two or three lines in most languages.
-        self._recall.set_justify(Gtk.Justification.CENTER)
-        self._recall.set_no_show_all(True)
-        centre.pack_start(self._recall, False, False, 0)
+        # TWO ANSWERS, TWO LABELS. The alphabet sentence and the reminder are
+        # answers to two different questions ("why did that fail" and "what
+        # was the password"), and joined with a single newline inside ONE
+        # centred label they rendered as a single run-on block — four centred
+        # lines in ru/ja/pl/de with nothing to mark where the subject changes.
+        # Separate labels put a paragraph's worth of space between them, and
+        # let the alphabet sentence appear on its own when it is the only one
+        # that applies.
+        self._kbdnote = self._make_recall_label()
+        self._answer.pack_start(self._kbdnote, False, False, 0)
+        self._recall = self._make_recall_label()
+        self._answer.pack_start(self._recall, False, False, 0)
 
         go = Gtk.Button(label=_t("Unlock") if self.lock else _t("Sign In"))
         go.get_style_context().add_class("lg-go")
@@ -551,12 +662,178 @@ class Login(Gtk.Window):
         centre.pack_start(go, False, False, 0)
         self._go = go
 
-        # No standing footer here. It read "This computer is not connected
-        # to anything. Your password never leaves it." -- a reassurance nobody
-        # asked for, about a fact the sign-in screen is not the place to argue,
-        # sitting under the one control the screen exists for. The recall hint
-        # that appears AFTER a wrong password is kept: that one is asked for,
-        # by getting it wrong.
+        # No standing footer of REASSURANCE here. It read "This computer is
+        # not connected to anything. Your password never leaves it." -- a
+        # reassurance nobody asked for, about a fact the sign-in screen is not
+        # the place to argue, sitting under the one control the screen exists
+        # for. The recall hint that appears AFTER a wrong password is kept:
+        # that one is asked for, by getting it wrong. So is the power row at
+        # the foot, which is a control and not a claim.
+
+    def _balance_answer(self):
+        """Carry the answer block's height above the clock as well.
+
+        The block grows downward from the field; the ballast at the top of the
+        column grows by the same amount; the column is centred, so it now
+        grows by twice as much and its top stays exactly where it was. That is
+        the whole trick, and it is why this is called from every place the
+        block changes -- the failure, the countdown ending, the error clearing
+        on the next keystroke (which is the 11px the column used to drop back
+        while somebody was already typing).
+
+        AS MUCH OF IT AS THE SCREEN CAN AFFORD. Doubled, a tall answer in a
+        wordy language ran the Sign In button into the power row at the foot:
+        Japanese, one failure, 1024x740, measured. A collision is worse than a
+        shift, so the ballast is capped at the space actually left and the
+        column gives up whatever it must -- from the top, evenly, rather than
+        by overlapping anything. Measured per language and per screen, because
+        no constant is right for both.
+        """
+        try:
+            self._ballast.set_size_request(-1, 0)
+            want = self._answer.get_preferred_height()[1]
+            avail = self._root.get_allocated_height()
+            if avail < 2:
+                avail = self._fit_screen()[1]
+            used = self._root.get_preferred_height()[1]
+            self._ballast.set_size_request(-1, max(0, min(want, avail - used)))
+        except Exception:                                      # noqa: BLE001
+            pass                    # unmeasurable: the column moves as before
+
+    @staticmethod
+    def _set_paragraph(lbl, text):
+        """Put `text` on `lbl`, wrapped into even lines.
+
+        Pango wraps greedily: it fills each line to the width it is given and
+        leaves whatever is left over on the last one. For the English
+        reminder that last one was the single word "installed." — under a
+        centred block a one-word line reads as something gone wrong rather
+        than the end of a sentence, and ja left "です。" the same way.
+
+        So the width is MEASURED rather than picked: how many lines does this
+        text need at the widest this screen allows, and what is the narrowest
+        wrap that still needs no more than that many? That width is the one
+        where the lines come out even, and it is a different number in every
+        language — which is exactly why it cannot be a constant. Nothing is
+        hidden and no line is added; the block just comes out square.
+        """
+        lbl.set_text(text)
+        try:
+            ctx = lbl.get_pango_context()
+            # NOT None: the shipped Pango (1.50) has no (nullable) annotation
+            # on this argument and dereferences the NULL. A segfault HERE is
+            # the login screen, i.e. an unusable machine. See novel.py's
+            # _sync_placeholder_position for the measurement.
+            _lang = ctx.get_language() or Pango.Language.get_default()
+            char = (ctx.get_metrics(ctx.get_font_description(), _lang)
+                    .get_approximate_char_width() / Pango.SCALE)
+            cap = int(lbl.get_max_width_chars() * char)
+            lay = lbl.create_pango_layout(text)
+            lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+            lay.set_width(-1)
+            if cap <= 0 or lay.get_pixel_size()[0] <= cap:
+                return                     # one line: nothing to even out
+            lay.set_width(cap * Pango.SCALE)
+            want = lay.get_line_count()
+            lo, hi, best = 1, cap, cap
+            while lo <= hi:                # the narrowest wrap of `want` lines
+                mid = (lo + hi) // 2
+                lay.set_width(mid * Pango.SCALE)
+                if lay.get_line_count() <= want:
+                    best, hi = mid, mid - 1
+                else:
+                    lo = mid + 1
+            lay.set_width(best * Pango.SCALE)
+            raw = text.encode("utf-8")
+            out = []
+            for i in range(lay.get_line_count()):
+                ln = lay.get_line(i)
+                out.append(raw[ln.start_index:ln.start_index + ln.length]
+                           .decode("utf-8", "replace").strip())
+            # The breaks are made HERE because they were measured here: the
+            # label is laid out at whatever width the column turns out to be,
+            # and that width is a different one in every language.
+            lbl.set_text("\n".join(out))
+        except Exception:                                      # noqa: BLE001
+            pass          # unmeasurable: the label wraps as it always did
+
+    @staticmethod
+    def _make_recall_label():
+        """One paragraph of the answer under a wrong password."""
+        lbl = Gtk.Label(xalign=0.5)
+        lbl.get_style_context().add_class("lg-recall")
+        lbl.set_margin_top(10)
+        lbl.set_line_wrap(True)
+        lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        # Wide enough that the English reminder does not leave its last word
+        # alone on a line, narrow enough that the block stays a column rather
+        # than a banner. Measured at this size in en/de/ru/ja.
+        lbl.set_max_width_chars(46)
+        # xalign centres the BLOCK; justify centres the lines within it. Every
+        # other line on this screen is centred, and translated this one wraps
+        # to two or three lines in most languages.
+        lbl.set_justify(Gtk.Justification.CENTER)
+        lbl.set_no_show_all(True)
+        return lbl
+
+    def _build_power(self, root):
+        """Restart and Shut Down, quietly, at the foot of the screen.
+
+        Until now there were none, on either surface. Somebody who cannot
+        produce the password — forgotten it, or met the lock screen on a
+        machine whose credential file cannot be read, where NOTHING typed can
+        ever be accepted — had no way to stop this computer but holding the
+        mains button in; the image ships no acpid, so even a tap of the power
+        key does nothing. main()'s own comment already promised these ("offers
+        its normal power controls") and _build never made them.
+
+        Both ask first, exactly as the desktop's menu does: on the lock screen
+        there is a session underneath this one with unsaved work in it. The
+        question REPLACES the two buttons in the same strip rather than
+        opening under them — this screen's rule is that nothing above the
+        field may move, and a taller foot moves the column with it.
+        """
+        foot = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        foot.set_halign(Gtk.Align.CENTER)
+        foot.set_margin_bottom(28)
+        foot.set_margin_start(24)
+        foot.set_margin_end(24)
+
+        self._pwr_mode = ""
+        self._pwr_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                                spacing=6)
+        for verb, mode in (("Restart", "reboot"), ("Shut Down", "poweroff")):
+            b = Gtk.Button(label=_t(verb + "\u2026"))
+            b.get_style_context().add_class("lg-pwr")
+            b.connect("clicked", self._ask_power, mode, verb)
+            self._pwr_row.pack_start(b, False, False, 0)
+        foot.pack_start(self._pwr_row, False, False, 0)
+
+        self._pwr_ask = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
+                                spacing=8)
+        self._pwr_ask.set_no_show_all(True)
+        self._pwr_q = Gtk.Label(xalign=0.5)
+        self._pwr_q.get_style_context().add_class("lg-ask")
+        # One line, whatever the language: wrapping it would make this strip
+        # taller than the one it replaces, which is the movement above the
+        # field this screen does not allow.
+        self._pwr_q.set_ellipsize(Pango.EllipsizeMode.END)
+        self._pwr_q.set_max_width_chars(72)
+        self._pwr_ask.pack_start(self._pwr_q, False, False, 0)
+        no = Gtk.Button(label=_t("Cancel"))
+        no.get_style_context().add_class("lg-pwr")
+        no.connect("clicked", self._cancel_power)
+        self._pwr_ask.pack_start(no, False, False, 0)
+        self._pwr_yes = Gtk.Button()
+        self._pwr_yes.get_style_context().add_class("lg-go")
+        # ...at the foot's size, so this strip is exactly as tall as the two
+        # buttons it replaces: the column above is centred in what is left of
+        # the screen, and four pixels of foot moved the clock four pixels.
+        self._pwr_yes.get_style_context().add_class("lg-pwrgo")
+        self._pwr_yes.connect("clicked", self._confirm_power)
+        self._pwr_ask.pack_start(self._pwr_yes, False, False, 0)
+        foot.pack_start(self._pwr_ask, False, False, 0)
+        root.pack_end(foot, False, False, 0)
 
     # -- keyboard ------------------------------------------------------------
     #
@@ -625,6 +902,12 @@ class Login(Gtk.Window):
                 # put there. Describe THAT, so the chip and the warning are
                 # about the keys somebody is actually pressing.
                 code = nbkeyboard.join(nbkeyboard.parse(saved))
+            elif code == saved:
+                # session.sh may have fallen back to US after a failed saved
+                # keymap load. Describe the server, not the desired JSON.
+                live = nbkeyboard.live_code()
+                if live:
+                    code = live
             self._kb_code = self._kb_loaded = code
             self._kb_groups = nbkeyboard.parse(code)
             self._kb_order = list(range(len(self._kb_groups)))
@@ -669,10 +952,11 @@ class Login(Gtk.Window):
             # have, on the one screen where getting it wrong strands somebody.
             self._set_verbatim(b, nbkeyboard.group_name(lay, var))
             b.set_active(i == self._kb_active)
-            # The password field must keep the caret: a switch is something
-            # you do in the middle of typing, and a button that took focus
-            # would send the next keystroke nowhere.
-            b.set_can_focus(False)
+            # Keep these in the focus chain: a person may need to switch
+            # alphabets before the password can be entered at all.  The
+            # activation handler returns focus to the password field once the
+            # live layout (or its failure rollback) is known.
+            b.set_can_focus(True)
             b.connect("toggled", self._on_kbd_pick, i)
             row.pack_start(b, False, False, 0)
             self._kb_btns.append(b)
@@ -705,6 +989,10 @@ class Login(Gtk.Window):
             # Pressing the live one again would otherwise leave every button
             # off, i.e. a keyboard in no alphabet at all.
             self._sync_kbd()
+            # ...and the button now holds focus (it is in the focus chain so
+            # a keyboard-only person can reach it): hand the caret back, or
+            # the next keystroke lands on the button.
+            self._caret_back()
             return
         self._set_kbd_group(index)
 
@@ -727,7 +1015,9 @@ class Login(Gtk.Window):
         # On failure this puts the buttons back to what is still true, rather
         # than leaving one lit for a layout that never loaded.
         self._sync_kbd()
-        self.entry.grab_focus()
+        # The caret goes back exactly where it was -- see _caret_back, which
+        # is where the rule this switch was the first to need now lives.
+        self._caret_back()
 
     def _track_group(self, ev):
         """Follow a switch made with Alt+Shift, from the key events.
@@ -875,7 +1165,7 @@ class Login(Gtk.Window):
         if self._closed:
             return False
         self._closed = True
-        for attr in ("_clock_id", "_wait_id"):
+        for attr in ("_clock_id", "_wait_id", "_count_id"):
             sid = getattr(self, attr, 0)
             setattr(self, attr, 0)
             if sid:
@@ -886,6 +1176,10 @@ class Login(Gtk.Window):
         Gtk.main_quit()
         return False
 
+    def _on_delete(self, *_a):
+        """Veto every window-manager close until authentication succeeds."""
+        return not self.ok
+
     def _tick_clock(self, *_a):
         # Nothing here may touch a widget once the window is gone -- see
         # _on_destroy. Returning False also drops the source, so a tick that
@@ -895,25 +1189,65 @@ class Login(Gtk.Window):
             return False
         now = time.localtime()
         self.clock.set_text(time.strftime("%H:%M", now))
-        self.date.set_text("%s %d %s" % (_t(DAY_NAMES[now.tm_wday]),
-                                         now.tm_mday,
-                                         _t(MONTHS[now.tm_mon - 1])))
+        # ONE STRING, TRANSLATED WHOLE — never word by word into a pattern.
+        # Built piecewise the words were right and the ORDER was not: a
+        # positional catalog pattern cannot move the month in front of the
+        # day, so a Japanese machine's first screen read "月曜日、17日 8月"
+        # where its own panel clock, two seconds later, reads "8月17日 月曜日".
+        # nbi18n's date route (_date_lookup/_zh_date) takes a whole
+        # strftime-shaped string apart and lays it out per language — CJK
+        # big-endian, ru/pl lower-cased, es with its "de" — and it only ever
+        # sees one if it is handed one. shell.py's clock and workout.py both
+        # go this way already; this screen was the outlier.
+        self.date.set_text(_t("%s %d %s" % (time.strftime("%A", now),
+                                            now.tm_mday,
+                                            time.strftime("%B", now))))
         return True
 
     # -- actions -------------------------------------------------------------
 
     def _clear_error(self, *_a):
         self.entry.get_style_context().remove_class("wrong")
+        was = self.error.get_visible()
         self.error.hide()
+        if was:
+            self._balance_answer()
+        if hasattr(self.entry, "get_accessible"):
+            acc = self.entry.get_accessible()
+            acc.set_description("")
+            acc.notify_state_change(Atk.StateType.INVALID_ENTRY, False)
+
+    def _caret_back(self):
+        """Put the caret back in the password field, where it was.
+
+        WITHOUT SELECTING. Gtk.Entry.grab_focus() selects the entry's whole
+        contents -- even when that entry already held the caret -- so every
+        handler here that "returns focus to the field" was arming the next
+        keystroke to replace the password typed so far. Measured on this
+        widget: "secret", tick Show password, "X" gave "X", and on the untick
+        the field is masked again so nothing on screen showed what was lost.
+        _set_kbd_group had already been through this; this is the same rule in
+        one place, for every control on the screen that takes the caret away.
+
+        Nothing happens while the field is held after repeated failures: it
+        cannot take the caret then, and this is called from controls that are
+        still live while it is (the tick, the alphabet chips, the power row).
+        """
+        if self.entry.get_sensitive():
+            self.entry.grab_focus_without_selecting()
 
     def _on_show_toggle(self, btn):
         self.entry.set_visibility(btn.get_active())
-        self.entry.grab_focus()
+        self._caret_back()
 
     def _on_key(self, _w, ev):
         self._track_group(ev)
         # Escape is swallowed: a lock screen you can dismiss is decoration.
+        # It does back out of the power question, which is the only thing on
+        # this screen it can honestly mean — and the screen still stands.
         if ev.keyval in (Gdk.KEY_Escape,):
+            if getattr(self, "_pwr_mode", ""):
+                self._cancel_power()
             return True
         return False
 
@@ -945,8 +1279,15 @@ class Login(Gtk.Window):
         self._tries += 1
         self.entry.set_text("")
         self.entry.get_style_context().add_class("wrong")
-        self.error.set_text(_t("That password did not work."))
+        message = _t("That password did not work.")
+        self.error.set_text(message)
+        if hasattr(self.error, "get_accessible"):
+            self.error.get_accessible().set_name(message)
         self.error.show()
+        if hasattr(self.entry, "get_accessible"):
+            entry_acc = self.entry.get_accessible()
+            entry_acc.set_description(message)
+            entry_acc.notify_state_change(Atk.StateType.INVALID_ENTRY, True)
         # First failure: offer to show what is being typed, and say where the
         # password came from. Somebody who has forgotten it has no other route
         # back into this machine, so the one true reminder we have is worth
@@ -963,10 +1304,17 @@ class Login(Gtk.Window):
         kbd = self._kbd_warning()
         # Two paragraphs, not one run-on: they are answers to two different
         # questions ("why did that fail" and "what was the password"), and run
-        # together they read as one long apology nobody finishes.
-        self._recall.set_text(("%s\n%s" % (kbd, recall)) if kbd else recall)
+        # together they read as one long apology nobody finishes. Two labels,
+        # so the break between them is a paragraph's worth of space and not
+        # one more wrapped line (see _make_recall_label).
+        if kbd:
+            self._set_paragraph(self._kbdnote, kbd)
+            self._kbdnote.set_no_show_all(False)
+            self._kbdnote.show()
+        self._set_paragraph(self._recall, recall)
         self._recall.set_no_show_all(False)
         self._recall.show()
+        self._balance_answer()
         self.entry.grab_focus()
         # A short, growing pause after repeated failures. Not a lockout — being
         # locked out of your own offline computer is a worse outcome than a
@@ -974,33 +1322,162 @@ class Login(Gtk.Window):
         if self._tries >= 3:
             self.entry.set_sensitive(False)
             self._go.set_sensitive(False)
-            self._wait_id = GLib.timeout_add_seconds(
-                min(5, self._tries), self._re_enable)
+            secs = min(5, self._tries)
+            self._wait_id = GLib.timeout_add_seconds(secs, self._re_enable)
+            # ...and SAY SO. The field goes grey, but nothing said that the
+            # keys were going nowhere or for how long, so the pause read as a
+            # dead keyboard on the one screen with no other way forward.
+            self._wait_left = secs
+            self._say_wait()
+            self._balance_answer()
+            self._count_id = GLib.timeout_add_seconds(1, self._tick_wait)
+
+    def _say_wait(self):
+        """State the pause, in the seconds still to run."""
+        n = self._wait_left
+        self._wait.set_text(_t("Try again in %d second%s.")
+                            % (n, "" if n == 1 else "s"))
+        self._wait.set_no_show_all(False)
+        self._wait.show()
+
+    def _tick_wait(self):
+        """Count that pause down once a second. Nothing here may touch a
+        widget once the window is gone -- see _on_destroy, which cancels this
+        source with the others."""
+        if self._closed:
+            self._count_id = 0
+            return False
+        self._wait_left -= 1
+        if self._wait_left <= 0:
+            self._count_id = 0
+            return False
+        self._say_wait()
+        return True
+
+    def _drop_countdown(self):
+        """Stop the countdown source, from either end. Touches no widget, so
+        it is safe on the way out as well."""
+        self._wait_left = 0
+        sid = self._count_id
+        self._count_id = 0
+        if sid:
+            try:
+                GLib.source_remove(sid)
+            except Exception:                                  # noqa: BLE001
+                pass
 
     def _re_enable(self):
         # Ownership is released FIRST, whichever way this returns: the id is
         # this source's own, it is about to be gone either way, and leaving it
         # set would have _on_destroy try to remove a source that has already
-        # returned False.
+        # returned False. The countdown is dropped here for the same reason:
+        # the pause it was counting is over.
         self._wait_id = 0
+        self._drop_countdown()
         if self._closed:
             return False
+        self._wait.hide()
+        self._balance_answer()
         self.entry.set_sensitive(True)
         self._go.set_sensitive(True)
         self.entry.grab_focus()
         return False
 
+    def state_unverifiable(self):
+        """Nothing typed here can be accepted: say so, and stop taking it.
+
+        main() puts the lock screen into this state when the credential file
+        cannot be READ at all -- a running desktop must not be revealed
+        because /etc/shadow was briefly unreadable. It used to read "Password:
+        That file could not be read.", which names a file nobody can see and
+        asks for a password the machine has already decided it cannot check,
+        on a screen that (until the row below existed) had no way off it.
+        """
+        self.error.set_text(_t("The password file on this computer could not "
+                               "be read, so nothing typed here can be "
+                               "accepted."))
+        self.error.show()
+        self._balance_answer()
+        self.entry.set_sensitive(False)
+        self._go.set_sensitive(False)
+
+    # -- the way out ---------------------------------------------------------
+
+    def _ask_power(self, _btn, mode, verb):
+        """Put the question in place of the two buttons, in the same strip."""
+        self._pwr_mode = mode
+        ask = _t("%s?") % _t(verb)
+        if self.lock:
+            # There is a session under a lock screen, with open apps in it.
+            # At sign-in there is nothing yet, and saying otherwise would be
+            # a warning about something that cannot happen.
+            ask += "  " + _t("Unsaved work in open apps will be lost.")
+        self._pwr_q.set_text(ask)
+        self._pwr_yes.set_label(_t(verb))
+        self._pwr_row.hide()
+        self._pwr_ask.set_no_show_all(False)
+        self._pwr_ask.show_all()
+        # The safe half is the one that gets the keyboard.
+        for w in self._pwr_ask.get_children():
+            if isinstance(w, Gtk.Button) and w is not self._pwr_yes:
+                w.grab_focus()
+                break
+
+    def _cancel_power(self, *_a):
+        self._pwr_mode = ""
+        self._pwr_ask.hide()
+        self._pwr_ask.set_no_show_all(True)
+        self._pwr_row.show()
+        self._caret_back()
+
+    def _confirm_power(self, *_a):
+        mode = self._pwr_mode
+        self._pwr_mode = ""
+        if mode:
+            self._do_power(mode)
+
+    @staticmethod
+    def _do_power(mode):
+        """busybox provides poweroff and reboot; the desktop's own menu goes
+        the same way (shell.py _do_power). Only ever reached through the
+        confirmation above."""
+        try:
+            subprocess.Popen([mode])
+        except OSError:
+            pass
+
 
 def main():
     lock = "--lock" in sys.argv
+    sleep = "--sleep" in sys.argv
     user = desktop_user()
     # Nothing to ask for: no password set, account locked, or shadow unreadable.
     # Start the desktop rather than stranding somebody at a prompt that cannot
     # be satisfied.
-    if not has_password(user):
+    password_state = _password_state(user)
+    if _may_skip_login(user, lock=lock, state=password_state):
+        if sleep:
+            _blank_for_sleep()
         return 0
     nbapp.install_css()
     win = Login(lock=lock)
+    if password_state == "error":
+        # A running desktop must never be revealed because its credential file
+        # was briefly unreadable. There is no password we can honestly check,
+        # so keep the lock surface up -- with the power controls _build puts
+        # at the foot of it, which are the only way off this one.
+        win.state_unverifiable()
+    if sleep:
+        blanked = [False]
+
+        def blank_after_map(*_args):
+            if not blanked[0]:
+                blanked[0] = True
+                _blank_for_sleep()
+            return False
+
+        # Run after Login's own map handler has reasserted fullscreen/above.
+        win.connect_after("map-event", blank_after_map)
     win.show_all()
     Gtk.main()
     # Hand the machine's own keyboard layout back before anything else starts,
@@ -1008,7 +1485,22 @@ def main():
     # the layout after this returns as well, so a screen that is killed rather
     # than signed into cannot leave the desktop in the other alphabet.
     win._finish_keyboard(win.ok)
-    return 0
+    # Zero is the authentication grant. An unexpected loop/window exit must
+    # not be indistinguishable from a verified password to session.sh.
+    return 0 if win.ok else 1
+
+
+def _blank_for_sleep():
+    """Enable DPMS and blank only after the lock surface is safe to reveal."""
+    try:
+        subprocess.run(["xset", "+dpms"], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=3)
+        subprocess.run(["xset", "dpms", "force", "off"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       timeout=3)
+        return True
+    except Exception:
+        return False
 
 
 if __name__ == "__main__":

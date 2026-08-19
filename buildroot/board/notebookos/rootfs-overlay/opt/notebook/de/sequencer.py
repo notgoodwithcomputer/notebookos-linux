@@ -74,13 +74,67 @@ import nbicons
 import nbmotion
 import nbsynth
 import nbtransitions
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 TRACKS = 8            # fixed track count
+MAX_PROJECT_BYTES = 64 * 1024 * 1024
+
+
+def _set_user_text(label, text):
+    """A track name typed on the tape head.
+
+    Everything a person calls a track is a catalog word: "Voice", "Bass",
+    "Drums", "Piano", "Guitar", "Lead", "Solo", "Loop", "Kick", "Snare" — and
+    so is the default "Track 1". The head's own Gtk.Entry is not translated, so
+    the head said "Bass" and the mixer strip beside it said "Basse": one screen
+    naming the same track two ways."""
+    nbi18n.set_verbatim(label, str(text or ""))
+
+
+def _set_user_tooltip(widget, text):
+    """Hover text carrying the user's own words. set_tooltip_text is patched
+    by nbi18n; set_tooltip_markup is not and renders the same once escaped."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+def read_project_json(path, limit=MAX_PROJECT_BYTES):
+    """Decode a selected project without unbounded UI-thread allocation."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("sequencer project is too large")
+    return json.loads(raw.decode("utf-8-sig"))
 # How many arrangement steps Undo can walk back. A frame is a small dict of
 # numbers and names (see _arrangement), so the history costs nothing worth
 # measuring even at this depth.
 UNDO_DEPTH = 40
+# How long a transient status message stays up before the project status goes
+# back to naming the open file. A message about something that has already
+# happened must not still be on screen describing the arrangement several
+# edits later ("nothing to export" beside a tape with a clip on it), so every
+# flash restores itself the way File > Save's own chip does.
+FLASH_MS = 6000
+# A RUN OF CHANGES TO ONE CONTROL IS ONE EDIT. A fader dragged across the desk
+# fires value-changed on every frame and a name arrives one letter at a time;
+# banking a snapshot per signal would fill the whole history with one gesture,
+# so only the first of a run banks a step. A different control, or a gap this
+# long, starts a new one.
+COALESCE_GAP = 1.5
 # 32 bars at the default 120 BPM. A song is longer than that and the LENGTH
 # control goes to 128 bars, but a two-minute ruler on an empty first run draws
 # sixty bars across the window, and a four-bar clip on it is a smear.
@@ -137,6 +191,16 @@ LOOKAHEAD_BLOCKS = 96                                # x 512 frames ~= 1.0 s
 # pan / send / tone ranges, stored per track as -100..100 and 0..100
 PAN_MAX = 100
 SEND_MAX = 100
+# The mixer strip's caption column, and the room kept between it and the
+# trough beside it. A Gtk.Scale draws its knob CENTRED on the value, so at the
+# minimum the knob hangs half its own width (slider-width is 14) to the LEFT
+# of the trough: without this clearance the knob at 0 sits on the last letters
+# of the caption, which is where the two longest ones - LO CUT and HI CUT -
+# are read. The clearance comes off the trough rather than out of the strip,
+# so the eight strips and the master still fit the 1024 panel.
+MINICAP_W = 42
+KNOB_CLEAR = 6
+MINI_SCALE_W = MINICAP_W - KNOB_CLEAR
 # Fade lengths the clip editor cycles through, in seconds. A few milliseconds
 # is a de-click; a second is a musical fade.
 FADE_CHOICES = (0.0, 0.005, 0.05, 0.25, 0.5, 1.0, 2.0)
@@ -235,11 +299,16 @@ def clip_norm(c):
         except (TypeError, ValueError):
             return None
         wav = c.get("wav")
-        return {"s": s, "e": e, "wav": wav if isinstance(wav, str) else None,
-                "off": _clampf(c.get("off"), 0.0, 3600.0, 0.0),
-                "gain": _clampf(c.get("gain"), 0.0, 4.0, 1.0),
-                "fin": _clampf(c.get("fin"), 0.0, 30.0, 0.005),
-                "fout": _clampf(c.get("fout"), 0.0, 30.0, 0.005)}
+        known = {"s", "e", "wav", "off", "gain", "fin", "fout", "notes"}
+        out = {k: copy.deepcopy(v) for k, v in c.items() if k not in known}
+        out.update({
+            "s": s, "e": e, "wav": wav if isinstance(wav, str) else None,
+            "off": _clampf(c.get("off"), 0.0, 3600.0, 0.0),
+            "gain": _clampf(c.get("gain"), 0.0, 4.0, 1.0),
+            "fin": _clampf(c.get("fin"), 0.0, 30.0, 0.005),
+            "fout": _clampf(c.get("fout"), 0.0, 30.0, 0.005),
+        })
+        return out
     try:
         s, e = float(c[0]), float(c[1])
     except (TypeError, ValueError, IndexError):
@@ -261,6 +330,21 @@ def clip_parts(c):
         return 0.0, 0.0, None
 
 
+def first_free_clip_span(clips, start, span, limit, step):
+    """First grid-aligned half-open span not occupied by another clip."""
+    if span <= 0 or step <= 0:
+        return None
+    at = float(start)
+    while at + span <= limit + 1e-6:
+        end = at + span
+        occupied = any(s < end - 1e-6 and e > at + 1e-6
+                       for s, e, _wav in map(clip_parts, clips))
+        if not occupied:
+            return at
+        at += step
+    return None
+
+
 def clip_offset(c):
     """How far into its WAV a clip starts, in seconds. Only a take has one."""
     try:
@@ -275,9 +359,7 @@ def clip_copy(c):
     Undo banks whole arrangements, and a snapshot that shared a dict with the
     live clip would be edited along with it: stepping back would then restore
     the edit it was supposed to undo."""
-    return {"s": c["s"], "e": c["e"], "wav": c.get("wav"),
-            "off": c.get("off", 0.0), "gain": c.get("gain", 1.0),
-            "fin": c.get("fin", 0.005), "fout": c.get("fout", 0.005)}
+    return copy.deepcopy(c)
 
 
 def _have(cmd):
@@ -609,6 +691,8 @@ class Recorder:
         self._stop = threading.Event()
         self._peak = 0.0             # loudest sample of the last chunk, 0..1
         self._frames = 0
+        self._error_lock = threading.Lock()
+        self._write_error = None
 
     def start(self, device, path, monitor=False):
         """Begin capturing to `path`. Returns (ok, plain-English message).
@@ -624,6 +708,8 @@ class Recorder:
         self._peak = 0.0
         self._frames = 0
         self._mon_buf = b""
+        with self._error_lock:
+            self._write_error = None
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
         except OSError:
@@ -717,7 +803,10 @@ class Recorder:
         if proc is None or proc.stdout is None:
             return
         fd = proc.stdout.fileno()
-        while not self._stop.is_set():
+        # Normal Stop terminates arecord and then lets this loop drain stdout
+        # to EOF. Consulting the stop event here abandoned PCM already queued
+        # in the pipe, silently clipping the end of otherwise valid takes.
+        while True:
             try:
                 chunk = os.read(fd, self.CHUNK)
             except (OSError, ValueError):
@@ -729,8 +818,18 @@ class Recorder:
                 try:
                     wav.writeframes(chunk)
                     self._frames += len(chunk) // 2
-                except Exception:           # noqa: BLE001
-                    break                   # a full disk: stop, keep what landed
+                except Exception as exc:    # noqa: BLE001
+                    # A partial WAV is not a successful take.  Remember the
+                    # storage failure for the UI and stop the producer now;
+                    # otherwise arecord can block forever on its full stdout
+                    # pipe while the transport continues to say Recording.
+                    with self._error_lock:
+                        self._write_error = exc
+                    try:
+                        proc.terminate()
+                    except Exception:       # noqa: BLE001
+                        pass
+                    break
             self._peak = _chunk_peak(chunk)
             if self._mon is not None:
                 self._feed_monitor(chunk)
@@ -764,13 +863,12 @@ class Recorder:
         """End the take. Returns the WAV path if one was actually written."""
         p, path, wav = self.proc, self.path, self._wav
         thread, mon = self._thread, self._mon
-        self.proc, self.path, self._wav = None, None, None
-        self._thread, self._mon = None, None
+        self.proc, self.path = None, None
+        self._mon = None
         self.monitoring = False
         self._peak = 0.0
         if p is None:
             return None
-        self._stop.set()
         try:
             p.terminate()
             try:
@@ -785,6 +883,18 @@ class Recorder:
         # written over a WAV nothing is still appending to.
         if thread is not None:
             thread.join(timeout=3)
+            if thread.is_alive():
+                # Exceptional teardown only: a broken producer did not close
+                # its pipe even after kill. Closing our read end releases the
+                # pump without making the normal path discard buffered PCM.
+                self._stop.set()
+                try:
+                    p.stdout.close()
+                except Exception:
+                    pass
+                thread.join(timeout=1)
+        self._thread = None
+        self._wav = None
         if wav is not None:
             try:
                 wav.close()
@@ -800,6 +910,17 @@ class Recorder:
                 mon.wait(timeout=2)
             except Exception:               # noqa: BLE001
                 pass
+        with self._error_lock:
+            write_failed = self._write_error is not None
+        # A storage failure may have left a perfectly parseable prefix, but it
+        # must not become a clip spanning the full on-screen recording time.
+        if write_failed:
+            try:
+                if path and os.path.exists(path):
+                    os.unlink(path)
+            except OSError:
+                pass
+            return None
         # A WAV with only a header (44 bytes) captured nothing — report it as
         # no take rather than leaving a silent clip the user cannot explain.
         try:
@@ -816,6 +937,9 @@ class Recorder:
         rather than being stopped by us. The recorder's raw error text is
         deliberately NOT surfaced — it is program output, not something to show
         someone who just wanted to record a take."""
+        with self._error_lock:
+            if self._write_error is not None:
+                return True
         p = self.proc
         if p is None or p.poll() is None:
             return False
@@ -835,6 +959,11 @@ class Recorder:
             except Exception:       # noqa: BLE001
                 pass
         return True
+
+    def write_failed(self):
+        """Whether this take stopped because its WAV could not be written."""
+        with self._error_lock:
+            return self._write_error is not None
 
 
 def _chunk_peak(chunk):
@@ -1066,6 +1195,12 @@ class Lane(Gtk.DrawingArea):
 
     # -- gestures --------------------------------------------------------
     def _click(self, w, ev):
+        # A PRESS ON THE TIMELINE IS LEAVING THE NAME BOX. A DrawingArea takes
+        # no focus of its own, so after typing a track name the keyboard stayed
+        # in the entry and S / Delete / Space went on landing in the name
+        # instead of splitting, removing and playing (_on_space rightly gives a
+        # focused text field every plain key to itself).
+        self.app._leave_text_entry()
         # A seek while recording would move the playhead mid-take and
         # corrupt/silently discard the in-progress take — ignore playhead
         # moves during recording so an accidental click can't ruin a take.
@@ -1475,17 +1610,26 @@ class Lane(Gtk.DrawingArea):
             cr.stroke()
         cr.set_line_width(1)
 
+    def _clip_label(self, c):
+        """How long this clip is, in bars and in seconds — the words on the
+        plate. Its own method so what the plate says can be read back."""
+        span = c["e"] - c["s"]
+        bars = span / max(1e-9, self.app.sec_per_bar())
+        if abs(bars - round(bars)) > 0.02:
+            txt = "%.2f %s" % (bars, _t("bars"))
+        else:
+            # "1 bars" on the plate over a take is the app miscounting aloud
+            n = int(round(bars))
+            txt = "%d %s" % (n, _t("bar") if n == 1 else _t("bars"))
+        return "%s · %s" % (txt, _fmt_dur(span))
+
     def _paint_label(self, cr, c, x, cw, top):
         """How long the selected clip is, on the clip.
 
         Only the selected one: eight lanes of labelled blocks is a wall of
         numbers, but "is this take the same length as that one" is the question
         every loop turns on, and it should not need a calculator."""
-        span = c["e"] - c["s"]
-        bars = span / max(1e-9, self.app.sec_per_bar())
-        txt = ("%.2f %s" % (bars, _t("bars")) if abs(bars - round(bars)) > 0.02
-               else "%d %s" % (round(bars), _t("bars")))
-        txt = "%s · %s" % (txt, _fmt_dur(span))
+        txt = self._clip_label(c)
         # on a plate, because it is written OVER the waveform and ink on a
         # dense take is ink on ink
         w = min(cw - 8, 7.0 + 5.4 * len(txt))
@@ -1726,6 +1870,12 @@ class Ruler(Gtk.DrawingArea):
         return x0 + self.app.px_of_time(t, aw)
 
     def _click(self, w, ev):
+        # A PRESS ON THE TIMELINE IS LEAVING THE NAME BOX. A DrawingArea takes
+        # no focus of its own, so after typing a track name the keyboard stayed
+        # in the entry and S / Delete / Space went on landing in the name
+        # instead of splitting, removing and playing (_on_space rightly gives a
+        # focused text field every plain key to itself).
+        self.app._leave_text_entry()
         # A seek while recording would move the playhead mid-take and
         # corrupt/silently discard the in-progress take — ignore playhead
         # moves during recording so an accidental click can't ruin a take.
@@ -2140,6 +2290,21 @@ class AudioOut:
         with self._lock:
             self._pending = song
 
+    def render_position(self):
+        """How far into the song the RENDER thread has got, in song seconds.
+
+        Up to a whole lookahead ahead of what is being heard — which is the
+        point: a change that must not be heard past a given moment has to be
+        made before that moment is RENDERED, not when it is played. None when
+        nothing is being rendered."""
+        mix = self._mix
+        if mix is None:
+            return None
+        try:
+            return mix.frame / float(SR)
+        except Exception:                                         # noqa: BLE001
+            return None
+
     def position(self):
         """Where the sound actually is, in song seconds.
 
@@ -2481,6 +2646,18 @@ class Sequencer(nbapp.AppWindow):
         self._save_timer = None    # pending debounced autosave, or None
         self._extra = {}           # forward-compatible top-level project keys
         self._saved_timer = None   # transient 'Saved HH:MM' restore, or None
+        self._flash_timer = None   # transient status restore, or None
+        # How deep the undo stack was when a message that talks ABOUT a step
+        # ("Undo puts them back") went up, so it can come down again the
+        # moment that stops being the step Undo would take. None = the
+        # message on screen is not about a step (see _flash).
+        self._flash_step = None
+        # (control, when) of the last coalesced edit — see _remember_control
+        self._coalesce = (None, 0.0)
+        # counting a take in: the click is sounding, the tape is not moving yet
+        self._counting = False
+        self._countin_click = False   # the click is on FOR the count-in only
+        self._countin_left = 0.0      # seconds of count-in still to go
         self._prompt_layer = None  # open confirm-card overlay, if any
         self._runner_id = None     # 100ms transport tick source, when engaged
         self._undo_stack = []      # arrangement snapshots, newest last
@@ -2595,7 +2772,14 @@ class Sequencer(nbapp.AppWindow):
                      or re.fullmatch(r"Track \d+", name))):
             name = raw
         clips = []
-        for raw_clip in (t.get("clips") or []):
+        saved_clips = t.get("clips")
+        # _is_project recognises the outer project/track shape. Keep this
+        # inner boundary forgiving too: one damaged scalar clip collection
+        # must cost only that lane's clips, not raise during session restore
+        # and prevent the entire eight-track project from opening.
+        if not isinstance(saved_clips, (list, tuple)):
+            saved_clips = []
+        for raw_clip in saved_clips:
             c = clip_norm(raw_clip)
             if c is None:
                 continue
@@ -2614,7 +2798,10 @@ class Sequencer(nbapp.AppWindow):
             clips.append(c)
         # cap the name so a hand-edited file with a runaway string can't blow
         # out the fixed-width track head; whitespace-only falls back to default
-        return {
+        known = {"name", "armed", "muted", "solo", "gain", "pan", "rev",
+                 "dly", "low", "high", "comp", "clips", "input"}
+        out = {k: copy.deepcopy(v) for k, v in t.items() if k not in known}
+        out.update({
             "name": name,
             "armed": bool(t.get("armed")),
             "muted": bool(t.get("muted")),
@@ -2627,7 +2814,8 @@ class Sequencer(nbapp.AppWindow):
             "high": _clampi(t.get("high"), 0, 100, 0),
             "comp": _clampi(t.get("comp"), 0, 100, 0),
             "clips": clips,
-        }
+        })
+        return out
 
     def _apply(self, data):
         """Load project state from a dict, clamping every field so a hand-edited
@@ -2782,14 +2970,18 @@ class Sequencer(nbapp.AppWindow):
             "tape": self.tape,
             "fx": self.fx,
             "tracks": [
-                {"name": tk["name"],
+                dict({k: copy.deepcopy(v) for k, v in tk.items()
+                      if k not in {"name", "armed", "muted", "solo", "gain",
+                                   "pan", "rev", "dly", "low", "high",
+                                   "comp", "clips"}}, **{
+                 "name": tk["name"],
                  "armed": tk["armed"], "muted": tk["muted"],
                  "solo": tk["solo"], "gain": tk["gain"], "pan": tk["pan"],
                  "rev": tk["rev"], "dly": tk["dly"], "low": tk["low"],
                  "high": tk["high"], "comp": tk["comp"],
                  # A clip is written as the dict it is. Values that are at
                  # their default are left out, so a file stays readable by eye.
-                 "clips": [_clip_json(c) for c in tk["clips"]]}
+                 "clips": [_clip_json(c) for c in tk["clips"]]})
                 for tk in self.tracks
             ],
         })
@@ -2854,8 +3046,10 @@ class Sequencer(nbapp.AppWindow):
             self._save_timer = None
         try:
             nbapp.atomic_write_json(CFG_FILE, self._serialize())
+            return True
         except Exception as exc:
             self._flash(nbapp.save_failure_reason(exc, CFG_FILE))
+            return False
 
     # ================= undo / redo =================
     # A take costs the user real time at the microphone, and until now one click
@@ -2886,7 +3080,28 @@ class Sequencer(nbapp.AppWindow):
         }
 
     def _restore_arrangement(self, snap):
+        # WHAT IS BEING LISTENED THROUGH IS NOT AN EDIT. The click, the
+        # count-in, monitoring and the chosen input are written into the
+        # project file (they belong to the sitting), but nothing banks an undo
+        # step for them, so a step back must leave them exactly as they are
+        # rather than flipping them to whatever they were when the snapshot
+        # was taken — a microphone stops being monitored halfway through a
+        # session for no reason the user did anything to cause.
+        listening = (self.metronome, self.countin, self.monitor,
+                     self._cap_device)
+        view = (getattr(self, "zoom", ZOOM_FIT),
+                getattr(self, "view_start", 0.0))
         self._apply(copy.deepcopy(snap["project"]))
+        (self.metronome, self.countin, self.monitor,
+         self._cap_device) = listening
+        # HOW THE TAPE IS BEING LOOKED AT IS NOT PART OF THE EDIT either.
+        # _apply zooms back out to the whole song, which is right for a
+        # different tape (New / Open) and wrong for a step back on this one:
+        # the edit being undone is somewhere in the window being looked at, and
+        # throwing that window away to show four minutes of tape loses the
+        # place as surely as the edit did. _sync_controls clamps the kept
+        # values to the restored length through _after_view_change.
+        self.zoom, self.view_start = view
         self._path = snap["path"]
         self.pos = min(snap["pos"], self.length)
         rec_start = snap["rec_start"]
@@ -2904,6 +3119,13 @@ class Sequencer(nbapp.AppWindow):
 
         `name` is the menu wording of the edit being made, which the Edit menu
         shows ("Undo Clear All Takes"); None for one that needs no name."""
+        # A message about the step Undo would take is only true while that IS
+        # the step Undo would take (see _clear_flash).
+        if (self._flash_step is not None
+                and len(self._undo_stack) >= self._flash_step):
+            self._clear_flash()
+        # a banked step ends any run of changes to one control (see below)
+        self._coalesce = (None, 0.0)
         self._undo_stack.append(self._arrangement())
         self._undo_names.append(name)
         if len(self._undo_stack) > UNDO_DEPTH:
@@ -2911,6 +3133,25 @@ class Sequencer(nbapp.AppWindow):
             self._undo_names.pop(0)
         self._redo_stack = []
         self._redo_names = []
+
+    def _remember_control(self, control, name=None):
+        """Bank ONE step for a run of changes to `control`.
+
+        EVERY project control has to bank a step, not only the ones that move
+        clips: a snapshot is the WHOLE arrangement, so an edit that banked
+        nothing was not merely un-undoable — the next Undo of anything else
+        silently took it back as well, and a track renamed, muted or faded
+        after a clip was moved snapped back with the clip. The continuous ones
+        (a fader, a name being typed) would bank a step per signal, which is
+        what COALESCE_GAP is for: the first change in a run banks, the rest
+        ride on it."""
+        now = time.monotonic()
+        last, when = self._coalesce
+        if last == control and now - when < COALESCE_GAP:
+            self._coalesce = (control, now)
+            return
+        self._remember(name)          # clears _coalesce, so set it after
+        self._coalesce = (control, now)
 
     def _step_history(self, take, give, take_names, give_names):
         """Move one snapshot from `take` to `give` and adopt it. Undo and Redo
@@ -2922,6 +3163,15 @@ class Sequencer(nbapp.AppWindow):
             self._stop_transport()
         if not take:
             return False
+        # Persistence is part of adopting a history step.  Keep exact copies of
+        # both cursors and the current arrangement so a full/read-only recovery
+        # store cannot leave the UI on the restored project while Undo/Redo has
+        # already advanced past it.
+        current = self._arrangement()
+        old_take = list(take)
+        old_give = list(give)
+        old_take_names = list(take_names)
+        old_give_names = list(give_names)
         give.append(self._arrangement())
         give_names.append(take_names.pop() if take_names else None)
         if len(give) > UNDO_DEPTH:
@@ -2931,7 +3181,17 @@ class Sequencer(nbapp.AppWindow):
         self._sync_controls()       # names and switches back into the heads
         self._update_length_btn()
         self._update_proj()
-        self._save()
+        if not self._save():
+            self._restore_arrangement(current)
+            take[:] = old_take
+            give[:] = old_give
+            take_names[:] = old_take_names
+            give_names[:] = old_give_names
+            self._sync_controls()
+            self._update_length_btn()
+            self._update_proj()
+            self.refresh()
+            return False
         self.refresh()
         return True
 
@@ -2948,6 +3208,20 @@ class Sequencer(nbapp.AppWindow):
         # the sound device past the window
         if self._closed:
             return False
+        # A TAKE IN PROGRESS IS A TAKE, AND CLOSING IS NOT DISCARDING. This
+        # used to stop the recorder below and throw away the path stop()
+        # returns: the WAV was left in the takes folder with nothing on any
+        # lane pointing at it, and the close-time save then wrote the
+        # arrangement without it. Esc is this window's Close key (File ▸
+        # Close), so a performance was one keypress from being unreachable —
+        # nothing in this app opens a loose WAV. End the take the way Stop
+        # does, BEFORE _closed is set, so the clip lands on the armed lanes
+        # and the save below writes it out.
+        if self.transport == "rec":
+            try:
+                self._stop_transport()
+            except Exception:                                     # noqa: BLE001
+                pass
         self._closed = True
         try:
             self.recorder.stop()
@@ -2965,6 +3239,7 @@ class Sequencer(nbapp.AppWindow):
             except Exception:
                 pass
             self._saved_timer = None
+        self._cancel_flash_timer()
         self._save()
         self.engine.shutdown()
         return False
@@ -2984,8 +3259,7 @@ class Sequencer(nbapp.AppWindow):
     def _open_file(self, path):
         """Load a project file, then push it into every control. True on ok."""
         try:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
+            data = read_project_json(path)
         except Exception:
             self._flash(_t("Couldn't open that project"))
             return False
@@ -3004,6 +3278,10 @@ class Sequencer(nbapp.AppWindow):
             return False
         if self.transport == "rec":
             self._stop_transport()
+        # Same reason as New: opening replaces the arrangement AND its recovery
+        # snapshot, so takes that live only here have to survive it — through
+        # the kept file and Undo, not a confirmation card (see _file_new).
+        kept = self._keep_outgoing()
         self._remember("Open")   # opening the wrong project is one step back
         self._apply(data)
         self._path = path
@@ -3011,13 +3289,103 @@ class Sequencer(nbapp.AppWindow):
         self._update_proj()
         self._flash_take_damage()
         self._save()            # snapshot recovery adopts the opened project
+        self._say_kept(kept)
         return True
 
+    def _keep_outgoing(self):
+        """Put takes that only exist in this window somewhere they survive.
+
+        Screenplay's floor (see its _keep_outgoing), in the app with the most
+        to lose: a take costs real time at a microphone, and it cannot be
+        typed again. New and Open replace the arrangement AND sequencer.json —
+        its only copy while no project file has been chosen — and this OS
+        gives destruction undo rather than a question, so a mistaken New
+        followed by closing the window took the takes with it: the WAVs were
+        still on disk with nothing left pointing at them. Write the outgoing
+        arrangement into Documents as a real project first (it names the take
+        files where they already are, so nothing is copied twice) and say
+        where it went. Undo still puts it back on screen; the file is what
+        makes closing survivable.
+
+        Returns the basename kept, or None when there was nothing to keep — an
+        empty tape holds nothing, and neither does an arrangement the project
+        file beside it already holds byte for byte.
+
+        HAVING A FILE IS NOT THE SAME AS BEING IN IT. The first version of
+        this stood down whenever _path was set, on the grounds that "a project
+        already written to a file is safe on disk". Only the takes that were
+        there at Save time are: File ▸ Save is explicit here, nothing writes
+        the named file behind it, so takes recorded AFTER the last Save live
+        only in this window and in the recovery store New is about to
+        overwrite. Save, record two more takes, New — and both were gone the
+        moment the window closed. Ask the file what it actually holds
+        instead."""
+        if not any(tk["clips"] for tk in self.tracks):
+            return None
+        if self._path and self._file_holds_this():
+            return None
+        try:
+            os.makedirs(PROJ_DIR, exist_ok=True)
+            # named after the project when there is one, so the kept copy is
+            # findable beside it rather than under a date alone
+            stem = (os.path.splitext(os.path.basename(self._path))[0]
+                    if self._path else "Sequencer")
+            base = "%s %s" % (stem, time.strftime("%Y-%m-%d %H%M"))
+            path = os.path.join(PROJ_DIR, base + ".json")
+            n = 2
+            while os.path.exists(path):
+                path = os.path.join(PROJ_DIR, "%s (%d).json" % (base, n))
+                n += 1
+            if not self._write_file(path):
+                return None
+            return os.path.basename(path)
+        except Exception:                                         # noqa: BLE001
+            # A floor that cannot be laid must not stop the action asked for.
+            return None
+
+    def _file_holds_this(self):
+        """Whether the project file on disk already holds what is on screen.
+
+        Compared as the dicts they are rather than as text, so indentation or
+        key order can never make an identical project look unsaved. An
+        unreadable or missing file answers False: the safe direction here is
+        to keep one copy too many, never one too few."""
+        try:
+            return read_project_json(self._path) == self._serialize()
+        except Exception:                                         # noqa: BLE001
+            return False
+
+    def _say_kept(self, kept):
+        """Name the file the outgoing takes went into.
+
+        The notification centre, not the status line: the status line
+        describes the project ON SCREEN, which is now the blank one that
+        replaced it (screenplay._say_kept)."""
+        if not kept:
+            return
+        try:
+            import nbnotify                                       # noqa: PLC0415
+            nbnotify.post(_t("Project kept"),
+                          _t("Kept as %s in Documents") % kept,
+                          app="sequencer", app_name=_t("Sequencer"))
+        except Exception:                                         # noqa: BLE001
+            pass
+
     def _file_new(self):
-        """Blank project (empty tape, defaults). Confirms first when there are
-        recorded takes a new project would discard; the file on disk is left
-        alone either way."""
+        """Blank project (empty tape, defaults). The file on disk is left alone,
+        and takes that exist only in this window are written to Documents
+        first (_keep_outgoing) — the campaign retired the "discard?" card in
+        favour of undo, and undo lives only as long as the window does."""
+        # END THE TAKE FIRST. _do_file_new stops the transport itself, but it
+        # does so AFTER the floor has been laid, so a New pressed while the
+        # tape was rolling wrote a kept file with the in-progress take missing
+        # from it — the one take in the window that had never been anywhere
+        # else. _open_file already stops before it keeps; this now matches.
+        if self.transport == "rec":
+            self._stop_transport()
+        kept = self._keep_outgoing()
         self._do_file_new()
+        self._say_kept(kept)
 
     def _do_file_new(self):
         if self.transport == "rec":
@@ -3033,8 +3401,9 @@ class Sequencer(nbapp.AppWindow):
         path = self._choose_file(save=False)
         if not path or not os.path.isfile(path):
             return
-        # opening replaces the in-memory project; confirm when live takes would
-        # be discarded (a project already written to a file is safe on disk).
+        # opening replaces the in-memory project; takes that live only here
+        # are kept in Documents first (_open_file → _keep_outgoing), since a
+        # project already written to a file is safe on disk.
         self._open_file(path)
 
     def _file_save(self):
@@ -3057,12 +3426,32 @@ class Sequencer(nbapp.AppWindow):
         old_path = self._path
         self._path = path
         if self._write_file(path):
+            self._rebase_history(old_path, path)
             self._update_proj()
             self._flash_saved()
         else:
             self._path = old_path
             self._flash(getattr(self, "_last_save_failure", None)
                         or _t("Couldn't save the project"))
+
+    def _rebase_history(self, old_path, new_path):
+        """Tell the banked steps which file this project now lives in.
+
+        A snapshot carries the path the window was attached to when it was
+        taken, because undoing an Open or a New has to put the previous FILE
+        back as well as the previous tape. Saving under a name is not that: it
+        gives the arrangement on screen — and every step of it — a home. Left
+        alone, one Ctrl+Z past a Save As detached the project from the file
+        that had just been written, so the status line read "Not saved to a
+        file" beside a file that plainly existed and the next Ctrl+S asked for
+        a name again. Only the steps that shared the window's OLD file are
+        moved, so a step from before an Open keeps pointing at what it was."""
+        if old_path == new_path:
+            return
+        for stack in (self._undo_stack, self._redo_stack):
+            for snap in stack:
+                if snap.get("path") == old_path:
+                    snap["path"] = new_path
 
     def _choose_file(self, save):
         """Finder-style in-app picker under Documents; return a path or None."""
@@ -3081,14 +3470,59 @@ class Sequencer(nbapp.AppWindow):
         return nbpicker.open_file(self, title="Open Project",
                                   start_dir=start, patterns=("*.json",))
 
-    def _flash(self, text):
-        """Surface a transient file-op error in the project status (crash-safe)."""
+    def _flash(self, text, step=False):
+        """Surface a transient file-op error in the project status (crash-safe).
+
+        `step` marks a message that describes the edit currently at the top of
+        the undo stack — "Undo (Ctrl+Z) puts them back". That sentence stops
+        being true the instant anything else is banked, so such a message is
+        taken down by the next edit rather than only by the clock.
+
+        TRANSIENT MEANS IT GOES AWAY. The red dot reads as a live description
+        of the arrangement, so one left up for the rest of the session ends up
+        contradicting the screen it sits on ("there is nothing to export"
+        beside a tape with a clip on it). It restores the project status after
+        FLASH_MS, exactly as the green Saved chip does after 1600ms."""
         try:
             self.proj_lbl.set_markup(
                 '<span foreground="#C8341E">● </span>%s'
                 % GLib.markup_escape_text(text))
         except Exception:
-            pass
+            return
+        self._cancel_flash_timer()
+        if step:
+            self._flash_step = len(self._undo_stack)
+        if not self._closed:
+            self._flash_timer = GLib.timeout_add(FLASH_MS, self._flash_restore)
+
+    def _cancel_flash_timer(self):
+        self._flash_step = None
+        if self._flash_timer is not None:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:
+                pass
+            self._flash_timer = None
+
+    def _clear_flash(self):
+        """Take a message about a banked step down now.
+
+        Called from _remember, which is where "the step Undo would take" stops
+        being the one the message on screen is describing. Without it, one
+        click too many on LENGTH left "Trims or removes 1 recorded take past
+        the new end. Undo (Ctrl+Z) puts them back." sitting over a tape that
+        had just lost nothing, beside an Undo that would put nothing back."""
+        if self._flash_step is None:
+            return
+        self._cancel_flash_timer()
+        self._update_proj()
+
+    def _flash_restore(self):
+        self._flash_timer = None
+        if self._closed:
+            return False
+        self._update_proj()
+        return False
 
     def _flash_take_damage(self):
         """Tell the user when saved clip geometry outlives its take files."""
@@ -3106,6 +3540,7 @@ class Sequencer(nbapp.AppWindow):
         this reassures the user the named *project file* was actually written."""
         if self._closed:
             return
+        self._cancel_flash_timer()   # the save is the newer news
         try:
             when = GLib.DateTime.new_now_local().format("%H:%M")
             self.proj_lbl.set_markup(
@@ -3129,6 +3564,7 @@ class Sequencer(nbapp.AppWindow):
     def _update_proj(self):
         """Refresh the project status: the open file's path, or the empty-state
         prompt when no project file is loaded."""
+        self._cancel_flash_timer()   # this IS the restore a flash waits for
         try:
             if self._path:
                 p = self._path
@@ -3159,9 +3595,9 @@ class Sequencer(nbapp.AppWindow):
                 tw["gain"].set_value(tk["gain"])
                 if tw["name"].get_text() != tk["name"]:
                     tw["name"].set_text(tk["name"])   # _loading gates the handler
-                tw["name"].set_tooltip_text(tk["name"])
+                _set_user_tooltip(tw["name"], tk["name"])
                 st = self.strips[i]
-                st["name"].set_text(tk["name"])
+                _set_user_text(st["name"], tk["name"])
                 st["gain"].set_value(tk["gain"])
                 st["pan"].set_value(tk["pan"])
                 st["rev"].set_value(tk["rev"])
@@ -3406,14 +3842,15 @@ class Sequencer(nbapp.AppWindow):
         seg = Gtk.Box(spacing=0)
         seg.get_style_context().add_class("seg")
         tips = {"arrange": _t("Clips on the timeline"),
-                "edit": _t("Notes in the selected clip"),
+                "edit": _t("Level, fades and trim for the selected take"),
                 "mix": _t("Levels, pan, sends and the master effects")}
         for key, label in self.VIEWS:
-            b = Gtk.Button(label=_t(label))
+            b = Gtk.ToggleButton(label=_t(label))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("segbtn")
             b.set_tooltip_text(tips[key])
-            b.connect("clicked", lambda _b, k=key: self._set_view(k))
+            b._seg_hid = b.connect(
+                "clicked", lambda _b, k=key: self._set_view(k))
             self.view_btns[key] = b
             seg.pack_start(b, False, False, 0)
         bar.pack_start(seg, False, False, 0)
@@ -3449,7 +3886,7 @@ class Sequencer(nbapp.AppWindow):
         """Show one of the three views. EDIT needs a clip to be about."""
         if name == "edit" and self.sel_clip() is None:
             if not self._select_first_clip():
-                self._flash(_t("Draw a clip on a lane, then open it here"))
+                self._flash(_t("Record a take on a lane, then open it here"))
                 name = "arrange"
         self.view = name
         try:
@@ -3786,6 +4223,15 @@ class Sequencer(nbapp.AppWindow):
         self.clip_lbl.get_style_context().add_class("cliplbl")
         self.clip_lbl.set_xalign(0)
         self.clip_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+        # AN ELLIPSIZING LABEL ASKS FOR NOTHING, so on a narrow panel it gives
+        # everything: this row already scrolls sideways (below), but the label
+        # would shrink to a bare "…" rather than let it, and the only line
+        # saying WHICH take is being edited, on which track, at which bar and
+        # how long it is became three dots — at the full 1024 budget in every
+        # language whose control words are longer than English's. A floor in
+        # characters is what the row's own minimum width is measured from, so
+        # the deck scrolls and the caption stays readable.
+        self.clip_lbl.set_width_chars(20)
         self.clip_lbl.set_max_width_chars(30)
         bar.pack_start(self.clip_lbl, False, False, 0)
         bar.pack_start(self._vsep(), False, False, 0)
@@ -4020,6 +4466,11 @@ class Sequencer(nbapp.AppWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         row.get_style_context().add_class("mixer")
         self.strips = []
+        # ONE HEIGHT FOR EVERY STRIP NAME. A name that falls back to a CJK
+        # face has a taller line than a Latin one, and the strip carrying it
+        # was pushed five pixels down — every row of it, and its fader knob,
+        # out of line with the eight beside it.
+        self._stripname_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.VERTICAL)
         for i in range(len(self.tracks)):
             row.pack_start(self._strip(i), False, False, 0)
         row.pack_start(self._master_strip(), False, False, 0)
@@ -4037,11 +4488,13 @@ class Sequencer(nbapp.AppWindow):
         # whole mix — being the one that scrolls off the edge.
         col.set_size_request(104, -1)
 
-        name = Gtk.Label(label=tk["name"])
+        name = Gtk.Label()
+        _set_user_text(name, tk["name"])
         name.get_style_context().add_class("stripname")
         name.set_ellipsize(Pango.EllipsizeMode.END)
         name.set_max_width_chars(11)
         name.set_xalign(0)
+        self._stripname_group.add_widget(name)
         col.pack_start(name, False, False, 0)
 
         pan = self._mini_scale(-PAN_MAX, PAN_MAX, tk["pan"], 0,
@@ -4121,7 +4574,7 @@ class Sequencer(nbapp.AppWindow):
         lbl = Gtk.Label(label=_t(cap))
         lbl.get_style_context().add_class("minicap")
         lbl.set_xalign(0)
-        lbl.set_size_request(42, -1)
+        lbl.set_size_request(MINICAP_W, -1)
         box.pack_start(lbl, False, False, 0)
         box.pack_start(widget, True, True, 0)
         return box
@@ -4132,7 +4585,11 @@ class Sequencer(nbapp.AppWindow):
         if mark is not None:
             s.add_mark(mark, Gtk.PositionType.BOTTOM, None)
         s.set_value(value)
-        s.set_size_request(42, -1)
+        # narrower by exactly the knob's overhang, which is then given back as
+        # a margin: the strip stays the width it was and the knob at the
+        # bottom of the scale no longer lands on the caption (see KNOB_CLEAR)
+        s.set_size_request(MINI_SCALE_W, -1)
+        s.set_margin_start(KNOB_CLEAR)
         s.set_tooltip_text(tip)
         s.connect("value-changed", cb)
         return s
@@ -4146,6 +4603,7 @@ class Sequencer(nbapp.AppWindow):
         head = Gtk.Label(label=_t("MASTER"))
         head.get_style_context().add_class("stripname")
         head.set_xalign(0)
+        self._stripname_group.add_widget(head)
         col.pack_start(head, False, False, 0)
 
         self.fx_btn = Gtk.Button(label=_t("EFFECTS"))
@@ -4213,6 +4671,7 @@ class Sequencer(nbapp.AppWindow):
     def _on_pan(self, scale, i):
         if self._loading:
             return
+        self._remember_control(("pan", i), "Pan")
         self.tracks[i]["pan"] = int(scale.get_value())
         self._save_soon()
         self._engine_changed()
@@ -4221,6 +4680,9 @@ class Sequencer(nbapp.AppWindow):
     def _on_send(self, scale, i, key):
         if self._loading:
             return
+        # the tone controls and the two sends: one step per run of the same
+        # slider, unnamed (a bare "Undo") like drawing on a lane
+        self._remember_control((key, i))
         self.tracks[i][key] = int(scale.get_value())
         self._save_soon()
         self._engine_changed()
@@ -4229,12 +4691,14 @@ class Sequencer(nbapp.AppWindow):
     def _on_master_fx(self, scale, key):
         if self._loading:
             return
+        self._remember_control(("fx", key), "Effects")
         setattr(self, key, int(scale.get_value()))
         self._save_soon()
         self._engine_changed()
         self.refresh()
 
     def _toggle_fx(self):
+        self._remember("Effects")
         self.fx = not self.fx
         self._save_soon()
         self._engine_changed()
@@ -4249,6 +4713,7 @@ class Sequencer(nbapp.AppWindow):
             i = vals.index(self.dly_time)
         except ValueError:
             i = 1
+        self._remember("Effects")
         self.dly_time = vals[(i + 1) % len(vals)]
         self._save_soon()
         self._engine_changed()
@@ -4362,11 +4827,12 @@ class Sequencer(nbapp.AppWindow):
                 (TOOL_SELECT, "SELECT",
                  _t("Click to select, drag to move, drag an end to trim")),
                 (TOOL_CUT, "CUT", _t("Click a clip to cut it in two"))):
-            b = Gtk.Button(label=_t(label))
+            b = Gtk.ToggleButton(label=_t(label))
             b.set_relief(Gtk.ReliefStyle.NONE)
             b.get_style_context().add_class("segbtn")
             b.set_tooltip_text(tip)
-            b.connect("clicked", lambda _b, k=key: self._set_tool(k))
+            b._seg_hid = b.connect(
+                "clicked", lambda _b, k=key: self._set_tool(k))
             self.tool_btns[key] = b
             seg.pack_start(b, False, False, 0)
         bar.pack_start(seg, False, False, 0)
@@ -4425,8 +4891,7 @@ class Sequencer(nbapp.AppWindow):
 
     def _set_tool(self, key):
         self.tool = key if key in (TOOL_SELECT, TOOL_CUT) else TOOL_SELECT
-        for k, b in self.tool_btns.items():
-            _cls(b, "on", k == self.tool)
+        _seg_choose(self.tool_btns.items(), self.tool)
         for lane in getattr(self, "lanes", []):
             lane.queue_draw()
 
@@ -4436,6 +4901,7 @@ class Sequencer(nbapp.AppWindow):
             i = vals.index(self.snap)
         except ValueError:
             i = 0
+        self._remember("Snap")
         self.snap = vals[(i + 1) % len(vals)]
         self._update_snap_btn()
         self._save_soon()
@@ -4564,6 +5030,9 @@ class Sequencer(nbapp.AppWindow):
         name.set_max_length(48)
         name.set_tooltip_text(_t("Name of this track"))
         name.connect("changed", self._on_track_name, i)
+        # leaving the box is when it goes back to saying the track's own name
+        name.connect("focus-out-event", self._on_name_leave, i)
+        name.connect("activate", lambda *_a: self._leave_text_entry())
         r1.pack_start(name, True, True, 0)
         mbtns = Gtk.Box(spacing=4)
         mute = Gtk.Button(label=_t("M"))
@@ -4681,6 +5150,43 @@ class Sequencer(nbapp.AppWindow):
         return bar
 
     # ================= interaction =================
+    def _leave_text_entry(self):
+        """Take the keyboard off a track-name box, and tidy what it says.
+
+        Called by every gesture that means "I have finished typing here": a
+        press on a lane or the ruler, and Return in the box itself."""
+        try:
+            typing = isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView))
+            if typing:
+                self.set_focus(None)
+        except Exception:                                         # noqa: BLE001
+            return
+        if typing:
+            self._tidy_names()
+
+    def _tidy_names(self):
+        """Show what each track is actually CALLED once its box is left.
+
+        A box emptied with Backspace kept showing nothing while the status
+        line, the mixer strip and the next session all said "Track 3"; and a
+        name longer than the nine-character box stayed scrolled to wherever
+        the cursor stopped, so only its tail was ever on screen."""
+        for i, tw in enumerate(getattr(self, "track_widgets", [])):
+            e = tw.get("name")
+            if e is None or i >= len(self.tracks) or e is self.get_focus():
+                continue
+            if not e.get_text().strip():
+                self._loading = True      # the model already holds the fallback
+                try:
+                    e.set_text(self.tracks[i]["name"])
+                finally:
+                    self._loading = False
+            e.set_position(0)             # the head of the name, not its tail
+
+    def _on_name_leave(self, _entry, _ev, _i):
+        self._tidy_names()
+        return False
+
     def _busy_overlay(self):
         """True when a confirm card, the About card or an open menu owns the
         keyboard. Nothing here may act from behind one of those: the key has to
@@ -4738,7 +5244,7 @@ class Sequencer(nbapp.AppWindow):
             return True
         return False
 
-    def _start_audio(self, at=None):
+    def _start_audio(self, at=None, metronome=None):
         """Start rendering and playing the arrangement from `at` seconds.
 
         Called on every Play and Record rather than once per session: the
@@ -4754,7 +5260,9 @@ class Sequencer(nbapp.AppWindow):
             # and leave one take on top of another with no way to tell them
             # apart. Recording runs straight through.
             song["loop"] = None
-        self.engine.start(song, at, metronome=self.metronome)
+        self.engine.start(song, at, metronome=(self.metronome
+                                              if metronome is None
+                                              else metronome))
         self._update_audio_lbl()
 
     def _engine_changed(self):
@@ -4844,9 +5352,38 @@ class Sequencer(nbapp.AppWindow):
         self.transport = "rec"
         self.rec_start = self.pos
         self._preroll = self.sec_per_bar() if self.countin else 0.0
-        self._start_audio(self.pos - self._preroll)
+        # THE COUNT HAS TO BE HEARD, WHATEVER THE METRONOME IS SET TO. The
+        # click is the only thing that makes a count-in a count-in, and the
+        # renderer only clicks when the project asks it to — so with the
+        # shipped defaults (metronome off, count-in on) the pre-roll bar was a
+        # silent one: Record said "Recording" for two seconds with the counter
+        # frozen, nothing to play to, and the first two seconds of the
+        # performance left out of the clip. Click through the pre-roll, and
+        # take the click off again the moment the take starts (_runner), so
+        # nobody records to a metronome they turned off.
+        self._counting = self._preroll > 0.0
+        self._countin_left = self._preroll
+        self._countin_click = self._counting and not self.metronome
+        self._start_audio(self.pos - self._preroll,
+                          metronome=self.metronome or self._counting)
         self._start_capture()
         self._ensure_runner()
+
+    def _stop_countin_click(self):
+        """Take the count-in click off as the take begins.
+
+        The render thread works about a second ahead of what is being heard,
+        so the moment to stop clicking is when the RENDERER reaches the
+        punch-in point — waiting for the playhead would leave the click
+        running over the first second of the take."""
+        if not self._countin_click:
+            return
+        at = self.engine.render_position()
+        if (at is not None and self.rec_start is not None
+                and at < self.rec_start - 0.001):
+            return
+        self._countin_click = False
+        self.engine.update(self._song())   # back to the project's own setting
 
     def _set_capture_device(self, dev):
         self._cap_device = dev
@@ -4892,13 +5429,30 @@ class Sequencer(nbapp.AppWindow):
                            "so there is nothing to monitor through"))
 
     def _finish_capture(self):
-        """End the take and return its WAV path, or None if nothing was
-        captured (nothing armed, no recorder, or a dead/busy input)."""
+        """End the take. Returns (WAV path or None, whether the status line has
+        already been told why there is none).
+
+        The second half matters because the caller has a fallback sentence of
+        its own — "try another input" — and that sentence is only true when
+        the input is what went wrong. A full disk is not."""
         died = self.recorder.failed_early()
+        write_failed = self.recorder.write_failed()
         path = self.recorder.stop()
+        # ASK AGAIN AFTER THE DRAIN. stop() terminates the input and then
+        # reads what is still in the pipe, so a disk that fills on the last
+        # chunk of a take is a failure that did not exist when the line above
+        # ran — and the take, correctly, comes back as no take at all. Read
+        # only beforehand, that landed in the branch below and told someone
+        # whose microphone was working perfectly to try another input.
+        write_failed = write_failed or self.recorder.write_failed()
+        if write_failed:
+            self._flash(_t("There is no room left for new files, so this "
+                           "could not be saved."))
+            return None, True
         if died and path is None:
             self._flash(_t("Nothing was recorded — try another input"))
-        elif path is not None and wav_peak(path) == 0:
+            return None, True
+        if path is not None and wav_peak(path) == 0:
             # A take of pure digital silence is the signature of an input that
             # opened but is muted or turned all the way down. The file is a
             # valid WAV of the right length, so every other check passes and
@@ -4906,10 +5460,12 @@ class Sequencer(nbapp.AppWindow):
             # rather than leaving a clip that plays nothing.
             self._flash(_t("The input recorded silence — check the "
                            "microphone level"))
-        return path
+            return path, True
+        return path, False
 
     def _stop_transport(self, seek_to=None):
-        wav = self._finish_capture() if self.transport == "rec" else None
+        wav, explained = (self._finish_capture() if self.transport == "rec"
+                          else (None, False))
         self.engine.stop()
         armed = self._armed_tracks()
         committing = (self.transport == "rec" and self.rec_start is not None
@@ -4922,22 +5478,33 @@ class Sequencer(nbapp.AppWindow):
                     self.tracks[i]["clips"].append(
                         clip_make(self.rec_start, self.pos, wav,
                                   getattr(self, "_preroll", 0.0)))
-            else:
+            elif not explained:
                 # A clip with no take behind it can never make a sound.
                 # Committing one leaves the tape LOOKING recorded on a machine
                 # with no working input, with nothing to explain the silence.
+                # Only when nothing better has been said: a take lost to a full
+                # disk has already been named, and writing this over it sends
+                # someone off to test a microphone that is working.
                 self._flash(_t("Nothing was recorded — try another input"))
         self.transport = "stop"
         self.rec_start = None
         self._preroll = 0.0
+        self._counting = False
+        self._countin_click = False
+        self._countin_left = 0.0
         if seek_to is not None:
             self.pos = seek_to
         self._save()
         self.refresh()
 
+    # what a step back on each of these switches is called in the Edit menu
+    TOGGLE_NAMES = {"muted": "Mute", "solo": "Solo",
+                    "armed": "Arm for recording"}
+
     def _toggle(self, _b, i, key):
         if self._loading:
             return
+        self._remember(self.TOGGLE_NAMES.get(key))
         self.tracks[i][key] = not self.tracks[i][key]
         self._save()
         self._engine_changed()
@@ -4974,6 +5541,7 @@ class Sequencer(nbapp.AppWindow):
         """Off, or back on at bars — the two ends of the grid control, for
         when the answer is "stop rounding my edits" rather than "round them
         differently"."""
+        self._remember("Snap")
         self.snap = DEFAULT_SNAP if self.snap == SNAP_FREE else SNAP_FREE
         self._update_snap_btn()
         self._save_soon()
@@ -5034,11 +5602,23 @@ class Sequencer(nbapp.AppWindow):
         if c is None:
             return
         ti = self.sel[0]
+        before_clips = list(self.tracks[ti]["clips"])
+        before_sel = self.sel
+        before_redo = list(self._redo_stack)
+        before_redo_names = list(self._redo_names)
         self._remember(name)
         self.tracks[ti]["clips"] = [x for x in self.tracks[ti]["clips"]
                                     if x is not c]
         self._validate_sel()
-        self._save()
+        if not self._save():
+            self.tracks[ti]["clips"] = before_clips
+            self.sel = before_sel
+            if self._undo_stack:
+                self._undo_stack.pop()
+            if self._undo_names:
+                self._undo_names.pop()
+            self._redo_stack = before_redo
+            self._redo_names = before_redo_names
         self._engine_changed()
         self._sync_editor()
         self.refresh()
@@ -5199,7 +5779,7 @@ class Sequencer(nbapp.AppWindow):
             self._flash(_t("Move the playhead over a clip to loop it"))
             return
         made = 0
-        self._remember("Loop")
+        self._remember("Repeat Clip to the End")
         for i, j in hits:
             tk = self.tracks[i]
             src = tk["clips"][j]
@@ -5232,25 +5812,44 @@ class Sequencer(nbapp.AppWindow):
         """Rename a track from what is typed on its head."""
         if self._loading or not (0 <= i < len(self.tracks)):
             return
+        self._remember_control(("name", i), "Rename Track")
         name = entry.get_text().strip()[:48]
         self.tracks[i]["name"] = name or ("Track %d" % (i + 1))
         try:
-            entry.set_tooltip_text(self.tracks[i]["name"])
-            self.strips[i]["name"].set_text(self.tracks[i]["name"])
+            _set_user_tooltip(entry, self.tracks[i]["name"])
+            _set_user_text(self.strips[i]["name"], self.tracks[i]["name"])
         except Exception:
             pass
         self._save_soon()
 
     def _clear_track(self, _b, i):
-        """Confirm before deleting just this one track's takes (destructive, no
-        undo — mirrors 'Clear All Takes'). Leaves the other tracks alone."""
+        """Empty just this one track, and say what went.
+
+        UNDO REPLACES CONFIRMATION — the OS-wide decision, and this bin is one
+        of the actions it was decided for. A card asking "Clear this track's
+        takes?" whose own second sentence read "Undo (Ctrl+Z) puts them back"
+        was answering its own question: it cost a second click on every
+        deliberate use to protect against an accidental one that Ctrl+Z
+        already covers. What it must not be is silent, so the sentence that
+        was on the card is on the status line instead, over a step the Edit
+        menu names — and it comes down again as soon as anything else is
+        banked, because that is when "Undo puts them back" stops being true
+        (see _flash's `step`)."""
+        if not (0 <= i < len(self.tracks)):
+            return
         n = len(self.tracks[i]["clips"])
         if n == 0:
             return
+        name = self.tracks[i]["name"]
         self._do_clear_track(i)
+        # "Removes ALL 1 clip" is the app miscounting aloud (the same fault as
+        # "1 bars" on a clip plate); the count says all by itself.
+        self._flash(_t("Removes %d clip%s from %s. Undo (Ctrl+Z) puts "
+                       "them back.") % (n, "" if n == 1 else "s", name),
+                    step=True)
 
     def _do_clear_track(self, i):
-        """Wipe one track's takes — runs only after the confirm is accepted."""
+        """Wipe one track's takes, as one named step back."""
         if not self.tracks[i]["clips"]:
             return
         self._remember("Remove Clips")
@@ -5265,6 +5864,7 @@ class Sequencer(nbapp.AppWindow):
     def _on_gain(self, scale, i):
         if self._loading:
             return
+        self._remember_control(("gain", i), "Level")
         self.tracks[i]["gain"] = int(scale.get_value())
         self._save_soon()
         self._engine_changed()
@@ -5273,6 +5873,7 @@ class Sequencer(nbapp.AppWindow):
     def _on_master(self, scale):
         if self._loading:
             return
+        self._remember_control("master", "Master")
         self.master = int(scale.get_value())
         self._save_soon()
         self._engine_changed()
@@ -5285,6 +5886,7 @@ class Sequencer(nbapp.AppWindow):
         # The tape is stored in seconds, so leaving it alone would silently
         # change how much music fits: 32 bars at 120 BPM is 64s, but the same
         # 64s is only 21 bars at 40 BPM. Re-derive the seconds from the bars.
+        self._remember_control("bpm", "Tempo")
         bars = self.bars_total()
         self.bpm = int(scale.get_value())
         self.set_length_bars(bars)
@@ -5395,10 +5997,10 @@ class Sequencer(nbapp.AppWindow):
     def _cycle_length(self, *_):
         """Advance the pattern length to the next step in LEN_CHOICES, wrapping
         back to the shortest after the longest so the control is fully cyclable
-        (never stuck at 04:00 with no way to shorten again). If wrapping to a
-        shorter length would trim or drop recorded takes past the new end,
-        confirm first; Undo restores the prior clip geometry. An empty tape
-        just cycles."""
+        (never stuck at 04:00 with no way to shorten again). Wrapping to a
+        shorter length trims or drops the recorded takes past the new end: it
+        says how many, and Undo (a named step) restores the prior clip
+        geometry. An empty tape just cycles."""
         cur_bars = self.bars_total()
         nxt_bars = next((b for b in BAR_CHOICES if b > cur_bars), BAR_CHOICES[0])
         nxt = nxt_bars * self.sec_per_bar()
@@ -5407,13 +6009,24 @@ class Sequencer(nbapp.AppWindow):
                        for (s, e, _w) in map(clip_parts, tk["clips"])
                        if e > nxt + 0.001)
             if lost:
+                # The wrap is one click from 128 bars back round to 8, and it
+                # takes every take past bar 8 with it. Destruction gets undo
+                # here rather than a question (the campaign retired those
+                # cards), so what it must not do is happen in silence: say how
+                # many takes it trimmed, beside a step the Edit menu names.
                 self._set_length(nxt)
+                self._flash(_t("Trims or removes %d recorded take%s past the "
+                               "new end. Undo (Ctrl+Z) puts them back.")
+                            % (lost, "" if lost == 1 else "s"), step=True)
                 return
         self._set_length(nxt)
 
     def _set_length(self, v):
         """Adopt a new pattern length, clamping takes and the playhead to it."""
-        self._remember()   # shortening trims takes — make that a step back
+        # shortening trims takes — make that a step back, and one the Edit menu
+        # names, since a bare "Undo" beside a tape that just lost a clip says
+        # nothing about what it would bring back
+        self._remember("Set Length")
         self.length = _clampf(v, 10.0, 600.0, DEFAULT_LEN)
         for tk in self.tracks:
             trimmed = []
@@ -5466,11 +6079,16 @@ class Sequencer(nbapp.AppWindow):
         self._save()
         self.refresh()
 
-    def _clear_takes_confirm(self):
-        """Confirm before wiping every recorded take; Undo restores clips."""
-        if not sum(len(tk["clips"]) for tk in self.tracks):
+    def _clear_all_takes(self):
+        """Empty every track, and say what went. See _clear_track: this is the
+        same decision on the whole tape rather than one lane of it."""
+        n = sum(len(tk["clips"]) for tk in self.tracks)
+        if not n:
             return
         self._clear_takes()
+        self._flash(_t("Removes %d clip%s from every track, and the takes "
+                       "in them. Undo (Ctrl+Z) puts them back.")
+                    % (n, "" if n == 1 else "s"), step=True)
 
     def _clear_takes(self):
         if self.transport == "rec":
@@ -5582,7 +6200,9 @@ class Sequencer(nbapp.AppWindow):
                 ("Unmute All Tracks", lambda: self._mute_all(False)),
                 ("Clear Solo", lambda: self._solo_all(False)),
                 nbapp.SEP,
-                ("Remove Every Clip…", self._clear_takes_confirm
+                # no ellipsis: nothing is asked, the clips go and the status
+                # line says how many (MENU-CONVENTIONS §1)
+                ("Remove Every Clip", self._clear_all_takes
                  if sum(len(tk["clips"]) for tk in self.tracks) else None),
             ]
         if name == "Input":
@@ -5611,20 +6231,31 @@ class Sequencer(nbapp.AppWindow):
             mon = "✓ " if self.monitor else "    "
             items.append((mon + _t("Monitor the Input While Recording"),
                           self._toggle_monitor))
-            items.append(("An armed track records from this input", None))
+            items.append((_t("An Armed Track Records From This Input"), None))
             return items
         return super().menu_items(name)
 
     # ================= the loop =================
     def _set_loop(self, start, end, on=True):
-        """Set the stretch of the arrangement to go round and round."""
+        """Set the stretch of the arrangement to go round and round.
+
+        A STEP BACK HAS TO TAKE SOMETHING BACK. The loop belongs to the
+        project, so it banks a step like every other project control — but a
+        drag across empty tape that lands inside one bar of where it started
+        snapped to the same two bars and changed nothing, and banking THAT
+        left a Ctrl+Z that visibly did nothing and pushed the edit the user
+        actually wanted back a second press. Work out the answer first, and
+        bank only when it is a different one."""
         start = max(0.0, min(self.length, min(start, end)))
         end = max(0.0, min(self.length, max(start, end)))
         if end - start < 0.05:
-            self.loop_on = False
+            want = (self.loop_s, self.loop_e, False)
         else:
-            self.loop_s, self.loop_e = start, end
-            self.loop_on = bool(on)
+            want = (start, end, bool(on))
+        if want == (self.loop_s, self.loop_e, self.loop_on):
+            return
+        self._remember("Loop")
+        self.loop_s, self.loop_e, self.loop_on = want
         self._save_soon()
         self._engine_changed()
         self.refresh()
@@ -5638,6 +6269,7 @@ class Sequencer(nbapp.AppWindow):
                 return
             self._flash(_t("Drag across the ruler to choose the bars to loop"))
             return
+        self._remember("Loop")
         self.loop_on = not self.loop_on
         self._save_soon()
         self._engine_changed()
@@ -5668,8 +6300,10 @@ class Sequencer(nbapp.AppWindow):
         ti = self.sel[0]
         tk = self.tracks[ti]
         span = c["e"] - c["s"]
-        at = c["e"]
-        if at + span > self.length + 1e-6:
+        step = self.snap_seconds() or self.sec_per_bar()
+        at = first_free_clip_span(tk["clips"], c["e"], span,
+                                  self.length, step)
+        if at is None:
             self._flash(_t("There is no room left in the pattern to repeat it"))
             return
         self._remember("Duplicate Clip")
@@ -5784,9 +6418,17 @@ class Sequencer(nbapp.AppWindow):
                 # counting in: the click is already sounding a bar ahead of the
                 # punch-in point, but nothing is being recorded yet, so the head
                 # waits where the take will begin instead of running backwards
+                self._counting = True
+                self._countin_left = self.rec_start - self.pos
+                self._stop_countin_click()
                 self.pos = self.rec_start
                 self.refresh()
                 return True
+            if self._counting:
+                # the take has begun: the deck stops counting and says so
+                self._counting = False
+                self._countin_left = 0.0
+            self._stop_countin_click()
             self.pos = max(0.0, min(self.length, self.pos))
             self.tick += 1
             if self.pos >= self.length:
@@ -5941,7 +6583,17 @@ class Sequencer(nbapp.AppWindow):
                               % (bar, beat, mins, secs, tenths))
         # status
         any_armed = any(tk["armed"] for tk in self.tracks)
-        if self.transport == "rec":
+        if self.transport == "rec" and self._counting:
+            # A COUNT-IN THAT SAYS NOTHING IS A FROZEN DECK. Through the
+            # pre-roll bar the playhead is parked at the punch-in point and the
+            # counter cannot move, so the status counts the beats down instead
+            # of claiming a take is already being recorded.
+            beats = max(1, int(math.ceil(self._countin_left
+                                         / max(1e-6, self.sec_per_beat())
+                                         - 0.001)))
+            st = _t("Counting in %d") % beats
+            self.statusdot.set_color(RED)
+        elif self.transport == "rec":
             st = "Recording" if any_armed else "Record — no track armed"
             self.statusdot.set_color(RED)
         elif self.transport == "play":
@@ -6012,8 +6664,8 @@ class Sequencer(nbapp.AppWindow):
         self.dly_time_btn.set_label(
             dict(self.DELAY_TIMES).get(self.dly_time, "1/8"))
         # the three views
-        for key, _label in self.VIEWS:
-            _cls(self.view_btns[key], "on", self.view == key)
+        _seg_choose(((key, self.view_btns[key]) for key, _label in self.VIEWS),
+                    self.view)
         # per-track
         for i, tk in enumerate(self.tracks):
             tw = self.track_widgets[i]
@@ -6429,7 +7081,7 @@ class Sequencer(nbapp.AppWindow):
         .rulerrow { background: #F1EEE6; border-bottom: 1px solid #C9C4B6;
                     min-height: 30px; }
         .headcell { border-right: 1px solid #C9C4B6; padding: 0 14px; }
-        .rulercap { font-size: 10px; color: #9A9484; font-weight: 700;
+        .rulercap { font-size: 10px; color: #6E695E; font-weight: 700;
                     letter-spacing: 0.14em; }
 
         /* ---- track head ---- */
@@ -6477,8 +7129,8 @@ class Sequencer(nbapp.AppWindow):
         .clrbtn:hover { background: #FBEFEC; }
         .clrbtn:disabled { opacity: 0.35; }
         /* the click-to-change caret, quieter than the value it sits beside */
-        .caret { font-size: 10px; color: #9A9484; }
-        .minicap { font-size: 10px; color: #9A9484; font-weight: 700;
+        .caret { font-size: 10px; color: #8A857A; }
+        .minicap { font-size: 10px; color: #6E695E; font-weight: 700;
                    letter-spacing: 0.12em; }
 
         /* ---- sliders ---- */
@@ -6540,9 +7192,41 @@ def _cls(widget, name, on):
         ctx.remove_class(name)
 
 
+def _seg_choose(pairs, chosen):
+    """Show `chosen` as the one that is on, across a row of pick-one buttons.
+
+    The row is toggle buttons rather than plain ones so the chosen segment is
+    readable to someone who cannot see the ink-on-paper fill: a plain button
+    carrying only a CSS class says nothing about which of them is on.
+
+    Gtk.ToggleButton.set_active emits BOTH "toggled" AND "clicked", so a setter
+    that updates its siblings from inside a "clicked" handler calls ITSELF for
+    every button in the row. Blocking each button's own handler while the row
+    is updated is the fix: not a guard that swallows the second call, but no
+    second call at all."""
+    items = list(pairs)
+    for _key, b in items:
+        hid = getattr(b, "_seg_hid", None)
+        if hid is not None:
+            b.handler_block(hid)
+    try:
+        for key, b in items:
+            on = (key == chosen)
+            if b.get_active() != on:
+                b.set_active(on)
+            _cls(b, "on", on)
+    finally:
+        for _key, b in items:
+            hid = getattr(b, "_seg_hid", None)
+            if hid is not None:
+                b.handler_unblock(hid)
+
+
 def _clip_json(c):
     """One clip as the smallest dict that still says everything about it."""
-    out = {"s": round(c["s"], 4), "e": round(c["e"], 4)}
+    known = {"s", "e", "wav", "off", "gain", "fin", "fout"}
+    out = {k: copy.deepcopy(v) for k, v in c.items() if k not in known}
+    out.update({"s": round(c["s"], 4), "e": round(c["e"], 4)})
     if c.get("wav"):
         out["wav"] = c["wav"]
         if c.get("off"):

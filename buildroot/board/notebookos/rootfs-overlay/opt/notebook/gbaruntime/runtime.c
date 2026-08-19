@@ -1527,12 +1527,12 @@ void rt_prof_overlay(void) {
 void rt_glide(Instance *in, s32 x, s32 y, s32 frames) {
     if (!in) return;
     if (frames <= 0) {
-        in->x = (s16)x; in->y = (s16)y;
+        in->x = x; in->y = y;
         in->glide = 0;
         return;
     }
-    in->gx = (s16)x;
-    in->gy = (s16)y;
+    in->gx = x;
+    in->gy = y;
     in->glide = (u16)(frames > 65535 ? 65535 : frames);
     /* A glide overrides speed: two things moving one instance is a fight
        nobody can see the cause of. */
@@ -1553,8 +1553,8 @@ static void glide_step(Instance *in) {
         in->x = in->gx;          /* the last frame lands exactly */
         in->y = in->gy;
     } else {
-        in->x = (s16)(in->x + dx / (s32)in->glide);
-        in->y = (s16)(in->y + dy / (s32)in->glide);
+        in->x += dx / (s32)in->glide;
+        in->y += dy / (s32)in->glide;
     }
     in->glide--;
 }
@@ -2934,6 +2934,8 @@ Instance* rt_create(s16 object, s32 x, s32 y) {
         in->depth = ob->depth & (NB_MAX_DEPTH - 1);
         in->angle = 0; in->scale = 0;
         in->anim_lo = 0; in->anim_hi = 0;
+        in->gx = 0; in->gy = 0; in->glide = 0;
+        in->inv = 0; in->objwin = 0; in->palbank = 0;
         in->image_speed = (in->sprite >= 0 && in->sprite < nb_sprite_count)
                           ? (s16)nb_sprites[in->sprite].anim_speed : 0;
         in->image_accum = 0;

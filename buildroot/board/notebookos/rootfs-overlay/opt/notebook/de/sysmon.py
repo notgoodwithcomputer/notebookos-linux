@@ -12,7 +12,7 @@ papertone-styled.
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, GObject  # noqa: E402
+from gi.repository import Gtk, Gdk, GLib, GObject, Pango  # noqa: E402
 
 import errno
 import os
@@ -55,8 +55,25 @@ def cpu_times():
 # `python3 /opt/notebook/de/<app>.py`, so without this the process table is a
 # dozen identical "python3" rows with no way to tell Writer from the desktop.
 INTERPRETERS = ("python3", "python", "sh", "bash", "ash", "busybox")
+MAX_CMDLINE_BYTES = 64 * 1024
+# The kernel keeps only 15 characters of a program's name (TASK_COMM_LEN - 1),
+# so a name exactly this long is a name that was probably cut in half.
+COMM_MAX = 15
+# PF_KTHREAD, the flags bit (/proc/<pid>/stat field 9) the kernel sets on its
+# own threads.
+PF_KTHREAD = 0x00200000
+# The header sort arrow's box, reserved whether or not the arrow is showing.
+ARROW_PX = 11
+# The header's own ink, so the arrow matches the column titles beside it.
+HEADER_INK = "#6E695E"
 
 _APP_DISPLAY = None
+
+
+def _read_cmdline(path, limit=MAX_CMDLINE_BYTES):
+    """Read enough argv data for a display name without ingesting huge args."""
+    with open(path, "rb") as fh:
+        return fh.read(limit)
 
 
 def _app_display(mod):
@@ -94,6 +111,24 @@ def proc_start_time(pid):
         return None
 
 
+def actionable_proc_state(state):
+    """Whether a /proc stat state represents a signalable live task."""
+    return state not in ("Z", "X", "x")
+
+
+def script_module(pid):
+    """Notebook Python module for *pid*, or ``""`` for another program."""
+    try:
+        args = [a for a in _read_cmdline("/proc/%s/cmdline" % pid).split(b"\0")
+                if a]
+        script = next((a for a in args if a.endswith(b".py")), None)
+        if script:
+            return os.path.basename(script.decode("utf-8", "replace"))[:-3]
+    except (OSError, ValueError, IndexError):
+        pass
+    return ""
+
+
 def human_kb(kb):
     n = kb * 1024.0
     for u in ("B", "KB", "MB", "GB", "TB"):
@@ -120,9 +155,10 @@ class SystemMonitor(nbapp.AppWindow):
         self.connect("destroy", self._on_destroy)
         self._last_cpu = cpu_times()
         self._last_sample = time.monotonic()   # wall time of that CPU sample
-        self._proc_prev = {}    # pid -> (utime+stime) last sample
-        self._proc_cpu = {}     # pid -> last computed CPU% (reused when a
-        #                         manual refresh lands inside the sample window)
+        # Key CPU history by both ID and start time. Linux can reuse a dead
+        # program's ID, and the replacement must not inherit its CPU baseline.
+        self._proc_prev = {}    # (pid, start-time) -> utime+stime
+        self._proc_cpu = {}     # (pid, start-time) -> last computed CPU%
         # (pid, start-time) -> display name, so a process's command line is
         # read once rather than on every 2s tick. Keying on the start time as
         # well as the pid means a recycled pid can never inherit the dead
@@ -144,6 +180,13 @@ class SystemMonitor(nbapp.AppWindow):
         stage.pack_start(res_lbl, False, False, 0)
 
         gauges = Gtk.Box(spacing=20)
+        # One row, three equal cards. Packed expand-but-not-homogeneous, each
+        # card kept its own natural width plus a share of the slack, so how
+        # long a card's figure happened to be leaked into how wide the card
+        # was: in French the Processor card came out 34px narrower than the
+        # other two, and even in English the three differed once the machine
+        # had a large disk.
+        gauges.set_homogeneous(True)
         stage.pack_start(gauges, False, False, 0)
         self.cpu_bar, cpu_card = self._gauge("Processor")
         self.mem_bar, mem_card = self._gauge("Memory")
@@ -164,7 +207,8 @@ class SystemMonitor(nbapp.AppWindow):
         # PROCESSOR sort by value, not by their formatted text ("100%"
         # mis-sorts vs "9%").
         self.store = Gtk.ListStore(str, int, str, str,
-                                   GObject.TYPE_INT64, GObject.TYPE_DOUBLE)
+                                   GObject.TYPE_INT64, GObject.TYPE_DOUBLE,
+                                   str)  # hidden /proc start token: PID identity
         self.tree = Gtk.TreeView(model=self.store)
         self.tree.get_style_context().add_class("smtree")
         # Click-sortable headers. Each visible column maps to the MODEL column
@@ -175,10 +219,12 @@ class SystemMonitor(nbapp.AppWindow):
         # on the useful order -- busiest first, like any activity monitor -- rather
         # than GTK's fixed ascending, which buries the busy programs under idle 0%
         # ones. Clicking the already-active column flips the direction.
-        self._sort_widgets = {}         # model col -> TreeViewColumn (for indicator)
+        self._sort_widgets = {}         # model col -> the column's arrow image
         self._desc_first = {4, 5}       # MEMORY, PROCESSOR: 1st click -> DESC
         self._sort_col = 4              # current model sort column
         self._sort_order = Gtk.SortType.DESCENDING
+        self._prefs_quarantine_pending = False
+        self._prefs_extra = {}
         self._load_sort_prefs()
         sort_cols = {2: 4, 3: 5}  # MEMORY->rss_kb(4), PROCESSOR->cpu_pct(5) keys
         # "ID", not "PID": the number is only ever used to tell two identically
@@ -204,7 +250,7 @@ class SystemMonitor(nbapp.AppWindow):
             model_col = sort_cols.get(i, i)
             c.set_clickable(True)
             c.connect("clicked", self._on_header_clicked, model_col)
-            self._sort_widgets[model_col] = c
+            self._sort_widgets[model_col] = self._header_widget(c, title)
             self.tree.append_column(c)
         # NAME sorts case-insensitively so names group naturally instead of
         # segregating every capitalised command ahead of the lowercase ones.
@@ -253,28 +299,86 @@ class SystemMonitor(nbapp.AppWindow):
         self.tree.connect("button-press-event", self._on_tree_button)
         self.connect("key-press-event", self._on_key_del)
 
-        self.refresh()
-        GLib.timeout_add_seconds(2, self.refresh)
+        # The CPU baseline was captured only milliseconds ago.  Treat this as
+        # a manual refresh so memory/processes populate immediately without
+        # turning that tiny interval into a noisy first CPU sample.
+        self.refresh(manual=True, seed_cpu=True)
+        self._refresh_source = GLib.timeout_add_seconds(2, self.refresh)
+
+    def _header_widget(self, column, title):
+        """Build the column's header out of our own label + arrow, and return
+        the arrow so _update_sort_arrows can point it at the active column.
+
+        GTK's own sort indicator was wrong here twice over. It is packed at the
+        FAR END of the header button, so on NAME — the column that expands to
+        fill the table — the arrow sat 600px from the word it belonged to,
+        immediately left of ID, and read as ID's arrow (the same stranded wedge
+        the Finder suppresses outright). And it appears and disappears with the
+        sort, which CHANGES the header's width: re-sorting widened the new sort
+        column by the arrow while the expand column kept the width it had grown
+        to, so the four columns briefly added up to more than the table and
+        PROCESSOR's figures were pushed off the right edge until the next 2s
+        tick re-dirtied the layout. An arrow of our own, packed just past the
+        label (as the Packages window does) and given its width whether or not
+        it is showing, cannot do either.
+        """
+        cell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        cell.set_halign(Gtk.Align.START)
+        # No class of its own: a label inside the header button inherits the
+        # .smtree header button type, and the title renders pixel for pixel
+        # what GTK's own drew.
+        lab = Gtk.Label(label=_t(title), xalign=0)
+        cell.pack_start(lab, False, False, 0)
+        # The indicator is a cairo-drawn nbicons arrow, never a font glyph: the
+        # interface face has no ▲/▼ and would render tofu on real hardware. It
+        # keeps its slot when the column is not the sort key (an empty image
+        # holding its size request), so no column ever changes width.
+        arrow = Gtk.Image()
+        arrow.set_size_request(ARROW_PX, ARROW_PX)
+        cell.pack_start(arrow, False, False, 0)
+        cell.show_all()
+        column.set_widget(cell)
+        return arrow
 
     def _gauge(self, title):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         card.get_style_context().add_class("smcard")
-        t = Gtk.Label(label=title.upper(), xalign=0)
+        t = Gtk.Label(label=_t(title).upper(), xalign=0)
         t.get_style_context().add_class("smcardtitle")
         card.pack_start(t, False, False, 0)
         bar = Gtk.ProgressBar()
         bar.get_style_context().add_class("smbar")
+        # The title is a visual sibling, not a Gtk label-for relationship.
+        # Name the value control explicitly so AT can distinguish the three
+        # otherwise anonymous progress bars.
+        bar.get_accessible().set_name(_t(title))
         card.pack_start(bar, False, False, 0)
         return bar, card
 
     def _gauge_value(self, card):
         v = Gtk.Label(xalign=0)
         v.get_style_context().add_class("smcardval")
+        # Equal cards mean a card can now be narrower than the figure it
+        # carries (a 220 GB disk in German), and the one thing that must never
+        # happen to a measurement is losing its last digits off the edge. Wrap
+        # instead: the card grows a line and all three keep the same height.
+        v.set_line_wrap(True)
+        v.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
         card.pack_start(v, False, False, 0)
         return v
 
     def _on_destroy(self, *_):
+        if not getattr(self, "_alive", False):
+            return False
         self._alive = False
+        source = getattr(self, "_refresh_source", 0)
+        self._refresh_source = 0
+        if source:
+            try:
+                GLib.source_remove(source)
+            except Exception:
+                pass
+        return False
 
     def _prefs_path(self):
         home = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -286,7 +390,13 @@ class SystemMonitor(nbapp.AppWindow):
             with open(self._prefs_path(), encoding="utf-8") as fh:
                 data = json.load(fh)
             if not isinstance(data, dict):
+                nbapp.quarantine_unrecognized(self._prefs_path())
+                self._prefs_quarantine_pending = os.path.exists(
+                    self._prefs_path())
                 return
+            self._prefs_extra = {
+                key: value for key, value in data.items()
+                if key not in ("sort_col", "sort_desc")}
             if data.get("sort_col") in (0, 1, 4, 5):
                 self._sort_col = data["sort_col"]
             if data.get("sort_desc") is True:
@@ -298,15 +408,24 @@ class SystemMonitor(nbapp.AppWindow):
 
     def _save_sort_prefs(self):
         try:
-            nbapp.atomic_write_json(self._prefs_path(), {
+            if getattr(self, "_prefs_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(self._prefs_path())
+                if os.path.exists(self._prefs_path()):
+                    raise OSError("could not preserve unrecognized monitor preferences")
+                self._prefs_quarantine_pending = False
+            payload = dict(getattr(self, "_prefs_extra", {}) or {})
+            payload.update({
                 "sort_col": self._sort_col,
                 "sort_desc": self._sort_order == Gtk.SortType.DESCENDING,
             })
+            nbapp.atomic_write_json(self._prefs_path(), payload)
+            return True
         except (OSError, TypeError, ValueError) as exc:
             nbapp.note_save_failure(self, exc, self._prefs_path())
+            return False
 
     # ---- sampling ----
-    def refresh(self, manual=False):
+    def refresh(self, manual=False, seed_cpu=False):
         # Once the window is gone the poll must stop: return False so GLib drops
         # the timeout, and never touch the (destroyed) gauge/tree widgets.
         if not self._alive:
@@ -320,13 +439,30 @@ class SystemMonitor(nbapp.AppWindow):
         # the baseline so the NEXT tick is short too. So recompute the delta (and
         # move the baseline) only once >=0.5s of wall time has accumulated;
         # otherwise keep the last CPU figures and reuse the cached per-process %.
-        recompute = (not manual) or (now - self._last_sample) >= 0.5
+        # The scheduled tick can land immediately after Refresh Now, so caller
+        # type is not evidence of an adequate sampling interval.
+        recompute = (now - self._last_sample) >= 0.5
         if recompute:
             dtot = tot - self._last_cpu[0]
             didle = idle - self._last_cpu[1]
             cpu = 0.0 if dtot <= 0 else max(0.0, min(1.0, (dtot - didle) / dtot))
             self._last_cpu = (tot, idle)
             self._last_sample = now
+            self.cpu_bar.set_fraction(cpu)
+            self.cpu_lbl.set_text(_t("%d%% in use") % round(cpu * 100))
+        elif seed_cpu:
+            # The very first paint: there is no interval to take a delta over
+            # yet, so the Processor card stood empty — no bar and no figure —
+            # beside two cards that already said something, for the whole two
+            # seconds until the first tick. /proc does carry one honest figure
+            # at this moment: the share of the processor used since the machine
+            # started up, which is a total rather than a delta and so needs no
+            # window at all. Show that, and let the first tick replace it with
+            # the live reading. The baseline is NOT advanced here (that is what
+            # the 0.5s guard above protects), so the first tick still measures
+            # a full interval.
+            dtot = tot
+            cpu = 0.0 if tot <= 0 else max(0.0, min(1.0, (tot - idle) / tot))
             self.cpu_bar.set_fraction(cpu)
             self.cpu_lbl.set_text(_t("%d%% in use") % round(cpu * 100))
         else:
@@ -345,7 +481,7 @@ class SystemMonitor(nbapp.AppWindow):
                               % (human_kb(used), human_kb(total)))
         self._refresh_disk()
         # programs — list/memory always rebuild; processor % honours `recompute`
-        self._refresh_procs(dtot, recompute)
+        self._refresh_procs(dtot, recompute, seed_cpu)
         return self._alive
 
     def _script_name(self, pid, started, fallback):
@@ -358,15 +494,38 @@ class SystemMonitor(nbapp.AppWindow):
         if hit is not None:
             return hit
         name = fallback
+        mod = script_module(pid)
+        if mod:
+            name = _app_display(mod)
+        self._name_cache[key] = name
+        return name
+
+    def _full_name(self, pid, started, comm):
+        """The whole name of a program whose /proc name was cut short.
+
+        The kernel stores only the first 15 characters of a program's name, so
+        the table showed words broken mid-syllable — "at-spi-bus-laun",
+        "xdg-permission-", and on this OS "matchbox-window" for the window
+        manager. argv[0] carries the whole thing, so read it once per program
+        (the same cache the interpreter names use, keyed on the start time so a
+        recycled ID cannot inherit it).
+
+        Taken ONLY when it starts with what /proc reported: a program that
+        chose a 15-character name for itself — Firefox's "Isolated Web Co"
+        rows, whose executable is firefox-esr — must keep the name it chose,
+        or a dozen distinct rows collapse onto one word."""
+        key = (pid, started)
+        hit = self._name_cache.get(key)
+        if hit is not None:
+            return hit
+        name = comm
         try:
-            with open("/proc/%s/cmdline" % pid, "rb") as fh:
-                args = [a for a in fh.read().split(b"\0") if a]
-            script = next((a for a in args if a.endswith(b".py")), None)
-            if script:
-                mod = os.path.basename(script.decode("utf-8", "replace"))[:-3]
-                name = _app_display(mod)
+            argv0 = _read_cmdline("/proc/%s/cmdline" % pid).split(b"\0")[0]
+            base = os.path.basename(argv0.decode("utf-8", "replace"))
+            if len(base) > len(comm) and base.startswith(comm):
+                name = base
         except (OSError, ValueError, IndexError):
-            pass    # unreadable command line: keep the interpreter's own name
+            pass
         self._name_cache[key] = name
         return name
 
@@ -398,7 +557,7 @@ class SystemMonitor(nbapp.AppWindow):
                                % (human_kb(free // 1024),
                                   human_kb(total // 1024)))
 
-    def _refresh_procs(self, dtot, recompute):
+    def _refresh_procs(self, dtot, recompute, seed=False):
         rows = []
         seen = {}
         cpu_now = {}   # pid -> CPU% shown this cycle (becomes next call's cache)
@@ -416,14 +575,40 @@ class SystemMonitor(nbapp.AppWindow):
                 rp = data.rfind(")")
                 name = data[data.find("(") + 1:rp]
                 fields = data[rp + 2:].split()
+                # Zombies and dead tasks cannot receive or act on End Program;
+                # their parent must reap them.  Showing one as an ordinary
+                # actionable row leads to a false "Ending" success message.
+                if not actionable_proc_state(fields[0]):
+                    continue
+                # Kernel threads (kthreadd, kworker/*, rcu_*, ksoftirqd/*) are
+                # not programs: nobody started them, they hold no memory of
+                # their own, and End Program cannot end one — the kernel owns
+                # them and, since everything here runs as root, the signal is
+                # accepted and changes nothing, so the footer would report
+                # "Ending kworker/R-netns" for something that never ends. They
+                # were a third of the rows on this machine and would be the
+                # majority on a small one, which made both the list and the
+                # "N programs" count answer the wrong question. The kernel
+                # flags its own threads (PF_KTHREAD) in the stat line already
+                # read, so this costs nothing.
+                if int(fields[6]) & PF_KTHREAD:
+                    continue
                 utime = int(fields[11]); stime = int(fields[12])
                 ptime = utime + stime
                 started = fields[19]        # start time, for the name cache key
             except (OSError, ValueError, IndexError):
                 continue
             if name in INTERPRETERS:
+                # shell.py is the exec'd owner of the whole desktop session.
+                # Presenting it as an ordinary End Program target turns one
+                # row action into an unannounced close of every open app.
+                if script_module(pid) == "shell":
+                    continue
                 name = self._script_name(pid, started, name)
-            names_seen.add((pid, started))
+            elif len(name) == COMM_MAX:
+                name = self._full_name(pid, started, name)
+            proc_key = (pid, started)
+            names_seen.add(proc_key)
             rss_kb = 0
             try:
                 with open("/proc/%s/status" % pid) as fh:
@@ -432,21 +617,29 @@ class SystemMonitor(nbapp.AppWindow):
                             rss_kb = int(ln.split()[1]); break
             except (OSError, ValueError, IndexError):
                 pass  # missing/malformed VmRSS -> leave rss_kb at 0
-            if recompute:
-                prev = self._proc_prev.get(pid)
-                seen[pid] = ptime
-                cpu_pct = 0.0
-                if prev is not None and dtot > 0:
+            if recompute or seed:
+                prev = self._proc_prev.get(proc_key)
+                seen[proc_key] = ptime
+                cpu_pct = self._proc_cpu.get(proc_key, 0.0)
+                if recompute and prev is not None and dtot > 0:
                     cpu_pct = max(0.0, min(100.0, 100.0 * (ptime - prev) / dtot))
+                elif seed and not recompute and dtot > 0:
+                    # first paint: `dtot` is the processor time the machine has
+                    # run since start-up, so a program's whole run measured
+                    # against it is its share since it started — the same
+                    # figure the gauge above is showing, arrived at the same
+                    # way. Otherwise every row would read 0% until the first
+                    # tick.
+                    cpu_pct = max(0.0, min(100.0, 100.0 * ptime / dtot))
             else:
                 # manual refresh inside the sample window: leave the baseline
                 # alone and re-show the last CPU% we computed for this pid
-                cpu_pct = self._proc_cpu.get(pid, 0.0)
-            cpu_now[pid] = cpu_pct
+                cpu_pct = self._proc_cpu.get(proc_key, 0.0)
+            cpu_now[proc_key] = cpu_pct
             # append the raw cpu_pct too (col 5) as the numeric CPU sort key
             rows.append((name, int(pid), human_kb(rss_kb),
-                         "%.0f%%" % cpu_pct, rss_kb, cpu_pct))
-        if recompute:
+                         "%.0f%%" % cpu_pct, rss_kb, cpu_pct, started))
+        if recompute or seed:
             self._proc_prev = seen
         self._proc_cpu = cpu_now
         # forget the names of processes that have gone, so a long session
@@ -476,7 +669,7 @@ class SystemMonitor(nbapp.AppWindow):
         (which nothing captured) was lost outright, so arrow-keying down the
         list dropped you back at the top twice a second.
 
-        Rows are keyed on the program's ID (model col 1): one that is still
+        Rows are keyed on program ID + kernel start token (model cols 1/6): one that is still
         there is updated cell by cell, one that has gone is removed, one that is
         new is appended. Nothing else is touched, so an unchanged program emits
         no change at all, and selection, cursor and scroll simply stay put.
@@ -484,10 +677,12 @@ class SystemMonitor(nbapp.AppWindow):
         Gtk.ListStore iters are persistent, so the iters collected up front stay
         valid across the removals below and across the re-sorting that writing a
         sort-key cell triggers."""
-        fresh = {r[1]: r for r in rows}     # pid -> row tuple
+        fresh = {(r[1], r[6]): r for r in rows}
         gone = []
         for it in [row.iter for row in self.store]:
-            row = fresh.pop(self.store.get_value(it, 1), None)
+            identity = (self.store.get_value(it, 1),
+                        self.store.get_value(it, 6))
+            row = fresh.pop(identity, None)
             if row is None:
                 gone.append(it)
                 continue
@@ -496,8 +691,8 @@ class SystemMonitor(nbapp.AppWindow):
                     self.store.set_value(it, col, val)
         for it in gone:
             self.store.remove(it)
-        for pid in sorted(fresh):
-            self.store.append(list(fresh[pid]))
+        for identity in sorted(fresh):
+            self.store.append(list(fresh[identity]))
 
     def _end_process(self, _b=None):
         # End Program signals the program to stop — destructive, so confirm
@@ -513,7 +708,11 @@ class SystemMonitor(nbapp.AppWindow):
         # 'Writer' to close?" — a different verb from the button that had just
         # been pressed, which reads as a different action.
         # Pin WHICH program this is, not just its number — see _do_end.
-        started = proc_start_time(pid)
+        started = model.get_value(it, 6)
+        current = proc_start_time(pid)
+        if not started or current != started:
+            self._flash(_t("%s had already finished") % name)
+            return
         self._confirm(
             _t("End Program"),
             _t("End “%s”? Anything it has not saved will be lost.") % name,
@@ -527,6 +726,13 @@ class SystemMonitor(nbapp.AppWindow):
         # never picked, quietly and with its unsaved work. So re-read the start
         # time and only signal if this is still the same program; if it is not,
         # the one the user chose is already gone, which is what we say.
+        # None is not an identity. If /proc was unreadable both before and
+        # after the dialog, `None == None` must never authorize a signal to a
+        # PID that could now name any process.
+        if started is None:
+            self._flash(_t("%s could not be ended, and is still running")
+                        % name)
+            return
         if proc_start_time(pid) != started:
             self._flash(_t("%s had already finished") % name)
             return
@@ -557,6 +763,8 @@ class SystemMonitor(nbapp.AppWindow):
         # primary — red is reserved for alerts and the active selection.
         dlg = Gtk.Dialog(transient_for=self, modal=True)
         dlg.set_decorated(False)
+        dlg.set_title(title)
+        dlg.get_accessible().set_name(title)
         dlg.get_style_context().add_class("smdlg")
         area = dlg.get_content_area()
         area.set_spacing(0)
@@ -584,6 +792,7 @@ class SystemMonitor(nbapp.AppWindow):
         area.add(box)
         dlg.connect("key-press-event", self._dlg_key)   # Esc cancels
         dlg.show_all()
+        cancel.grab_focus()
 
     def _dlg_key(self, dlg, ev):
         if ev.keyval == Gdk.KEY_Escape:
@@ -676,15 +885,35 @@ class SystemMonitor(nbapp.AppWindow):
     def _apply_sort(self, model_col, order):
         # Single sort path shared by header clicks and the View menu: set the
         # model's sort key and move the header arrow onto the active column.
+        previous_col, previous_order = self._sort_col, self._sort_order
         self._sort_col = model_col
         self._sort_order = order
         self.store.set_sort_column_id(model_col, order)
-        self._save_sort_prefs()
-        for mc, c in self._sort_widgets.items():
-            active = (mc == model_col)
-            c.set_sort_indicator(active)
-            if active:
-                c.set_sort_order(order)
+        if not self._save_sort_prefs():
+            # Keep the table and its arrow aligned with the preference that
+            # will actually load on the next launch.
+            self._sort_col, self._sort_order = previous_col, previous_order
+            self.store.set_sort_column_id(previous_col, previous_order)
+        self._update_sort_arrows()
+
+    def _update_sort_arrows(self):
+        """Show the direction arrow on the active sort column and nowhere else.
+
+        A vertical flip of the "up" glyph gives the down arrow without a second
+        icon, done on the SURFACE so the arrow stays sharp on a HiDPI panel —
+        the same call the Packages window's sort header makes. Clearing an
+        inactive arrow empties the image but keeps its slot, so the columns
+        never move."""
+        for mc, arrow in self._sort_widgets.items():
+            try:
+                if mc == self._sort_col:
+                    down = self._sort_order == Gtk.SortType.DESCENDING
+                    arrow.set_from_surface(nbicons.surface(
+                        "up", ARROW_PX, HEADER_INK, flip_v=down))
+                else:
+                    arrow.clear()
+            except Exception:
+                pass    # an arrow is a hint; never let it break the sort
 
     def _cmp_name(self, model, a, b, *_data):
         na = (model.get_value(a, 0) or "").lower()
@@ -716,23 +945,44 @@ class SystemMonitor(nbapp.AppWindow):
             # inline conditional: tools/i18n_check's chrome scan only sees a
             # constant in the label slot, so a computed label drops out of the
             # translation audit entirely.
+            # A leading tick says which sort is in force, per
+            # docs/MENU-CONVENTIONS.md: the four entries were written
+            # identically whichever one the table was actually using, so the
+            # menu that sets the order could not say what the order was. The
+            # label is translated BEFORE the mark is glued on — the menu
+            # builder looks the WHOLE label up, and "✓ Sort by Memory" matches
+            # no catalog key. (That is also why these four labels no longer sit
+            # in tools/i18n_check's chrome scan, which only reads a literal in
+            # the label slot; the strings themselves are unchanged and
+            # tools/i18n_coverage_check reads them from the _t() calls.)
+            def mark(col):
+                return "✓ " if self._sort_col == col else "    "
             items = [
                 ("Refresh Now", self._manual_refresh),
                 nbapp.SEP,
-                ("Sort by Memory",
+                (mark(4) + _t("Sort by Memory"),
                  lambda: self._sort(4, Gtk.SortType.DESCENDING)),
-                ("Sort by Processor",  # numeric cpu_pct (5), not the formatted text (3)
+                (mark(5) + _t("Sort by Processor"),  # numeric cpu_pct (5), not the formatted text (3)
                  lambda: self._sort(5, Gtk.SortType.DESCENDING)),
-                ("Sort by Name",
+                (mark(0) + _t("Sort by Name"),
                  lambda: self._sort(0, Gtk.SortType.ASCENDING)),
-                ("Sort by ID",
+                (mark(1) + _t("Sort by ID"),
                  lambda: self._sort(1, Gtk.SortType.ASCENDING)),
                 nbapp.SEP,
             ]
+            # THE ELLIPSIS IS THE TRUTH HERE. _end_process raises a confirm
+            # card naming the program ("End “Writer”? Anything it has not
+            # saved will be lost.") with Cancel beside it, and MENU-CONVENTIONS
+            # §1 makes "…" the promise that something is asked BEFORE anything
+            # happens. The plain label promised the opposite. Ending a program
+            # is the one destructive action in this OS that undo cannot cover
+            # -- a signalled program is gone -- so the confirm stays and the
+            # label is what has to move. (Both spellings, because the
+            # accelerator is only advertised while the item is live.)
             if has_sel:
-                items.append(("End Program    Del", end_cb))
+                items.append(("End Program…    Del", end_cb))
             else:
-                items.append(("End Program", end_cb))
+                items.append(("End Program…", end_cb))
             return items
         return super().menu_items(name)
 

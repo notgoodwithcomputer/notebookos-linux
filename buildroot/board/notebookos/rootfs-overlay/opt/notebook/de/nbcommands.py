@@ -287,7 +287,12 @@ def dynamic_item(cid, name, enabled, callback):
         return (cmd.source_label, None)
     if not name:
         return (_t(cmd.source_label), callback)
-    return (_t(cmd.framed_label("%s")) % name, callback)
+    # UndoHistory already returns translated labels, but the other history
+    # adapters are allowed to return their stored source name (Animation does).
+    # Translate the inserted action as well as the frame so those menus do not
+    # mix a localized "Undo" with an English "Delete Frame". Looking up an
+    # already-translated name is a harmless catalog miss and leaves it intact.
+    return (_t(cmd.framed_label("%s")) % _t(name), callback)
 
 
 # -------------------------------------------------------- base app menus --

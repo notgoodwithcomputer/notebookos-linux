@@ -24,6 +24,7 @@ from datetime import date, timedelta
 import nbapp
 import nbpicker
 import nbicons
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 # Persistence — the flat text/done list stays shared with the desktop widget
@@ -47,6 +48,29 @@ CAL_FILE = os.path.join(CFG_DIR, "calendar.json")       # Calendar app's events
 # Named-calendar definitions (name + colour) so a rail event can be drawn in its
 # calendar's colour, exactly as the Calendar app shows it.
 CALENDARS_FILE = os.path.join(CFG_DIR, "calendars.json")
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+MAX_STORE_BYTES = 16 * 1024 * 1024
+
+
+class TasksStoreTooLarge(ValueError):
+    pass
+
+
+def _read_store_json(path, limit=MAX_STORE_BYTES):
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise TasksStoreTooLarge("Tasks store is too large")
+    return json.loads(raw)
+
+
+def read_tasks_document(path, limit=MAX_DOCUMENT_BYTES):
+    """Decode a selected Tasks document without an unbounded UI-thread read."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("Tasks document is too large")
+    return json.loads(raw.decode("utf-8-sig"))
 
 INK = "#1A1916"
 # Tertiary/hint ink — one warm gray for every sublabel, timestamp, count and
@@ -58,6 +82,26 @@ MUTED = "#8A857A"
 # clamped to the neutral below so the schedule stays within the design language.
 SIGNAL_RED = "#C8341E"
 EVENT_NEUTRAL = "#9A9484"   # neutral rail-event colour (matches Calendar)
+
+def _set_user_text(label, text, fallback=""):
+    """Put a name the USER typed on a label without the catalog rewriting it.
+
+    Every list name, task title and schedule-event title in this app is the
+    user's own words. nbi18n's auto-translate layer looks up EVERY label, so a
+    list called "Home" on a French install drew "Accueil" in the sidebar and in
+    the header while tasks.json went on holding "Home" — the name on screen was
+    not the name in the file, and not the name the user typed. Only the empty
+    fallback ("Inbox" for an unfiled task) is ours to translate."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)          # a Gtk.Label
+    except AttributeError:
+        label.set_label(empty)         # a Gtk.Button
+
 
 # Monoline weight for this app's BESPOKE hand-drawn glyphs — the checkbox tick
 # and the schedule timeline-marker ring. Kept a touch heavier than the nbicons
@@ -79,12 +123,19 @@ DEFAULT_PROJECT_NAMES = set()
 # values that stay distinguishable at dot size.
 LIST_COLORS = ["#4A5E73", "#6E7B57", "#9A7B4F", "#8A857A", "#7A5C8A", "#3F6B6B"]
 
-DUE_ORDER = ["overdue", "today", "anytime", "tomorrow", "week", "later", "inbox"]
+DUE_ORDER = ["overdue", "today", "anytime", "tomorrow", "week", "nextweek",
+             "later", "inbox"]
 DUE_LABELS = {
     "overdue": "Overdue", "today": "Today", "anytime": "Anytime",
-    "tomorrow": "Tomorrow", "week": "This Week", "later": "Later",
-    "inbox": "Unsorted",
+    "tomorrow": "Tomorrow", "week": "This Week", "nextweek": "Next week",
+    "later": "Later", "inbox": "Unsorted",
 }
+# "This Week" and "Next week" are CALENDAR weeks (Monday to Sunday, as the
+# mini month calendar counts them), not rolling seven-day windows: a task the
+# row menu files under "Next week" must come up under a heading that says
+# Next week. When "This Week" was "the next seven days" it collected next
+# Sunday's task under THIS WEEK — the heading contradicting the word the
+# person had just chosen.
 
 # A task may carry a real calendar day ("date": "YYYY-MM-DD"). Its group is then
 # worked out from that day EVERY time the list is drawn, so tomorrow's task
@@ -222,7 +273,19 @@ class Tasks(nbapp.AppWindow):
         """Load the full app model before the UI is built. Restores user-added
         lists into PROJECTS first (so the sidebar/menus include them), then the
         richer tasks and the schedule events."""
+        # These registries are module globals because the app's menus and rows
+        # share them, but loading a new Tasks instance must still begin from its
+        # own store.  Without clearing them, a second instance in the same
+        # process inherited the first profile's lists and its launch-time save
+        # then wrote those foreign lists into the second profile.
+        PROJECTS[:] = []
+        PROJ_COLOR.clear()
+        self._flat_quarantine_pending = False
         meta = self._read_meta()
+        known_meta = {"tasks", "projects", "events"}
+        self._meta_extra = ({k: copy.deepcopy(v) for k, v in meta.items()
+                             if k not in known_meta}
+                            if isinstance(meta, dict) else {})
         if isinstance(meta, dict):
             # A garbage sidecar might carry "projects" as something other than a
             # list (a number, a string, an object); coerce anything non-list to
@@ -276,11 +339,15 @@ class Tasks(nbapp.AppWindow):
         the user set only exist here, and _save_tasks rewrites this file on
         close, so shrugging the whole thing off quietly flattened every task
         back to an undated Today."""
+        self._meta_quarantine_pending = False
         try:
-            with open(META_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json(META_FILE)
         except FileNotFoundError:
             return None            # first run: nothing here to lose
+        except TasksStoreTooLarge:
+            self._meta_damaged = True
+            self._meta_quarantine_pending = True
+            return None
         except Exception:
             # A sidecar that EXISTS and will not parse is a different thing,
             # and this used to be the same branch as first-run. The flat file
@@ -291,19 +358,29 @@ class Tasks(nbapp.AppWindow):
             # (atomic_write_json quarantines them first); what was missing was
             # telling anybody.
             self._meta_damaged = True
+            self._meta_quarantine_pending = os.path.exists(META_FILE)
             return None
         if isinstance(data, dict):
             return data
         if isinstance(data, list):
             return {"tasks": data}
+        # Valid JSON can still be a damaged Tasks store. Treating a scalar as
+        # first-run lets the unconditional launch save silently replace the
+        # original bytes, while a syntax error correctly takes the damaged-file
+        # warning/quarantine path above.
+        self._meta_damaged = True
+        nbapp.quarantine_unrecognized(META_FILE)
+        self._meta_quarantine_pending = os.path.exists(META_FILE)
         return None
 
     def _read_flat(self):
         """The shared flat file ([{text,done}, ...]) or None. This is what the
         desktop widget writes, so it is authoritative for tick state."""
         try:
-            with open(TASKS_FILE) as fh:
-                data = json.load(fh)
+            data = _read_store_json(TASKS_FILE)
+        except TasksStoreTooLarge:
+            self._flat_quarantine_pending = True
+            return None
         except Exception:
             return None
         if isinstance(data, dict):
@@ -360,9 +437,13 @@ class Tasks(nbapp.AppWindow):
         # can't be computed.
         day = t.get("date")
         day = _iso(_from_iso(day)) if _from_iso(day) is not None else ""
-        return {"title": str(t.get("title", "")), "project": proj, "due": due,
-                "date": day, "time": str(t.get("time", "") or ""),
-                "prio": prio, "done": bool(t.get("done"))}
+        known = {"title", "project", "due", "date", "time", "prio", "done"}
+        out = {k: copy.deepcopy(v) for k, v in t.items() if k not in known}
+        out.update({"title": str(t.get("title", "")), "project": proj,
+                    "due": due, "date": day,
+                    "time": str(t.get("time", "") or ""),
+                    "prio": prio, "done": bool(t.get("done"))})
+        return out
 
     @staticmethod
     def _due_of(t):
@@ -381,8 +462,13 @@ class Tasks(nbapp.AppWindow):
             return "today"
         if d == now + timedelta(days=1):
             return "tomorrow"
-        if d <= now + timedelta(days=7):
+        # The rest of this Monday-to-Sunday week, then the whole of the next
+        # one (see the note under DUE_LABELS); Later is everything beyond.
+        sunday = now + timedelta(days=6 - now.weekday())
+        if d <= sunday:
             return "week"
+        if d <= sunday + timedelta(days=7):
+            return "nextweek"
         return "later"
 
     @staticmethod
@@ -533,8 +619,16 @@ class Tasks(nbapp.AppWindow):
         anything malformed. No time.strptime / import calendar (calendar.py
         shadows the stdlib module here)."""
         try:
-            y, m, d = str(s).split("-")
-            return (int(y), int(m), int(d))
+            raw = str(s)
+            y, m, d = raw.split("-")
+            parsed = date(int(y), int(m), int(d))
+            # The shared Calendar schema is deliberately canonical. Reject
+            # loose spellings such as 2026-8-4 as well as impossible dates;
+            # otherwise they enter the rail model even though Calendar itself
+            # can never select or display the corresponding day.
+            if raw != _iso(parsed):
+                return None
+            return (parsed.year, parsed.month, parsed.day)
         except (ValueError, TypeError):
             return None
 
@@ -600,10 +694,11 @@ class Tasks(nbapp.AppWindow):
         """
         disk = self._read_flat()
         if not isinstance(disk, list):
-            return
+            return {}
         base = self._done_by_occurrence(getattr(self, "_flat_base", []))
         current = self._done_by_occurrence(disk)
         seen = {}
+        adopted = {}
         for i, row in enumerate(outgoing):
             text = str(row.get("text", ""))
             n = seen.get(text, 0)
@@ -614,10 +709,12 @@ class Tasks(nbapp.AppWindow):
             mine = bool(row.get("done"))
             if current[key] != base[key] and mine == base[key]:
                 row["done"] = current[key]
+                adopted[key] = current[key]
                 # Keep the in-memory model and the file in agreement so a
                 # second autosave cannot undo the merge it just performed.
                 if i < len(self.tasks):
                     self.tasks[i]["done"] = current[key]
+        return adopted
 
     def _save_tasks(self):
         """Persist the TASKS. The shared flat file keeps the widget's
@@ -625,20 +722,50 @@ class Tasks(nbapp.AppWindow):
         be broken); the richer tasks and any user-added lists go to the private
         sidecar. Schedule events are NOT stored here — they live in the Calendar
         app's shared store (see _append_calendar_event). Never crash on I/O."""
+        flat_error = None
+        self._last_external_ticks = {}
         try:
             flat = [{"text": t.get("title", ""), "done": bool(t.get("done"))}
                     for t in self.tasks]
-            self._merge_external_ticks(flat)
+            self._last_external_ticks = self._merge_external_ticks(flat)
+            # _merge_external_ticks performs the freshest disk read and can
+            # discover an oversized projection after launch, so preservation
+            # belongs after that read and immediately before replacement.
+            if getattr(self, "_flat_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(TASKS_FILE)
+                if os.path.exists(TASKS_FILE):
+                    raise OSError("could not preserve the oversized Tasks projection")
+                self._flat_quarantine_pending = False
             nbapp.atomic_write_json(TASKS_FILE, flat)
             self._flat_base = [dict(t) for t in flat]
-        except Exception:
-            pass
+        except Exception as exc:
+            flat_error = exc
+        if flat_error is not None:
+            if not getattr(self, "_save_warned", False):
+                self._save_warned = True
+                try:
+                    self._flash(nbapp.save_failure_reason(flat_error, TASKS_FILE))
+                except Exception:
+                    pass
+            # Do not publish a new authoritative sidecar when its desktop
+            # projection could not be written. Callers can now roll the whole
+            # visible mutation back without a split-store resurrection.
+            return False
         try:
+            if getattr(self, "_meta_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(META_FILE)
+                if os.path.exists(META_FILE):
+                    raise OSError("could not preserve the unrecognized Tasks sidecar")
+                self._meta_quarantine_pending = False
             extra = [[n, c] for (n, c) in PROJECTS
                      if n not in DEFAULT_PROJECT_NAMES]
-            meta = {"tasks": self.tasks, "projects": extra}
+            meta = copy.deepcopy(getattr(self, "_meta_extra", {}))
+            meta.update({"tasks": self.tasks, "projects": extra})
             nbapp.atomic_write_json(META_FILE, meta)
+            if flat_error is not None:
+                raise flat_error
             self._save_warned = False
+            return True
         except Exception as exc:
             # See academics._save_to_disk. The sidecar holds everything the flat
             # file cannot express — due dates, notes, which list a task is on —
@@ -647,16 +774,47 @@ class Tasks(nbapp.AppWindow):
             if not getattr(self, "_save_warned", False):
                 self._save_warned = True
                 try:
-                    self._flash(nbapp.save_failure_reason(exc, META_FILE))
+                        path = TASKS_FILE if exc is flat_error else META_FILE
+                        self._flash(nbapp.save_failure_reason(exc, path))
                 except Exception:
                     pass
+            # The sidecar is the authoritative copy: it contains the title,
+            # due date, notes and project that the shared desktop projection
+            # cannot represent.  Callers which promise a completed action must
+            # be able to withhold that promise when this write failed.
+            return False
 
     def _undo_snapshot(self):
         return {"tasks": copy.deepcopy(self.tasks),
                 "projects": copy.deepcopy(PROJECTS),
                 "view": self.view}
 
+    def _save_tasks_or_restore(self, before):
+        """Persist one UI mutation, restoring both stores' model on failure."""
+        if self._save_tasks():
+            return True
+        # A failed rich-sidecar write may happen after the flat projection
+        # adopted a completion tick from the desktop widget. Roll back this
+        # app's attempted rich edit, but carry that other writer's change
+        # across the rollback instead of overwriting it on the repair save.
+        external = dict(getattr(self, "_last_external_ticks", {}))
+        self.tasks = copy.deepcopy(before["tasks"])
+        seen = {}
+        for row in self.tasks:
+            text = str(row.get("title", ""))
+            n = seen.get(text, 0)
+            seen[text] = n + 1
+            key = (text, n)
+            if key in external:
+                row["done"] = external[key]
+        PROJECTS[:] = copy.deepcopy(before["projects"])
+        PROJ_COLOR.clear(); PROJ_COLOR.update(PROJECTS)
+        self.view = before["view"]
+        self._save_tasks()  # best-effort restore of the shared flat projection
+        return False
+
     def _restore_undo_snapshot(self, state):
+        before = self._undo_snapshot()
         self.tasks = copy.deepcopy(state.get("tasks", []))
         PROJECTS[:] = copy.deepcopy(state.get("projects", []))
         PROJ_COLOR.clear()
@@ -664,11 +822,26 @@ class Tasks(nbapp.AppWindow):
         self.view = state.get("view", "view:today")
         if self.view.startswith("proj:") and self.view[5:] not in PROJ_COLOR:
             self.view = "view:today"
-        self._save_tasks()
+        if not self._save_tasks():
+            self.tasks = before["tasks"]
+            PROJECTS[:] = before["projects"]
+            PROJ_COLOR.clear()
+            PROJ_COLOR.update(PROJECTS)
+            self.view = before["view"]
+            # The shared flat projection may have landed before the rich
+            # sidecar failed. Restore it best-effort so neither store claims
+            # the rejected undo happened.
+            self._save_tasks()
+            if hasattr(self, "_body"):
+                self._rebuild_sidebar()
+            elif hasattr(self, "listbox"):
+                self._refresh()
+            return False
         if hasattr(self, "_body"):
             self._rebuild_sidebar()
         elif hasattr(self, "listbox"):
             self._refresh()
+        return True
 
     def _on_destroy(self, *_):
         # Idempotent: GTK can emit "destroy" more than once through nested
@@ -698,18 +871,17 @@ class Tasks(nbapp.AppWindow):
         return False
 
     def _on_key(self, w, ev):
-        # Esc backs out of an open overlay card (New List or Remove List) FIRST.
+        # Esc backs out of an open overlay card (New List, Rename) FIRST.
         # Without this, the base nbapp._on_key treats Esc as a quit (no card
         # overlay of its own to dismiss) and closes the whole app — so pressing
-        # Esc to cancel the card used to kill Tasks. _close_newlist() /
-        # _close_removelist() return True only when a card was actually open (and
-        # close it); otherwise we fall through to the base handling (menu close /
-        # quit), mirroring novel.py's prompt intercept.
+        # Esc to cancel the card used to kill Tasks. The _close_*() helpers
+        # return True only when a card was actually open (and close it);
+        # otherwise we fall through to the base handling (menu close / quit),
+        # mirroring novel.py's prompt intercept.
         if ev.keyval == Gdk.KEY_Escape and (self._close_task_menu()
                                             or self._close_rename()
                                             or self._close_clearcard()
-                                            or self._close_newlist()
-                                            or self._close_removelist()):
+                                            or self._close_newlist()):
             return True
         if hasattr(self, "undo") and nbapp.undo_keys(self.undo, ev):
             return True
@@ -757,8 +929,7 @@ class Tasks(nbapp.AppWindow):
         On an unrecognised shape flash and change nothing (no model swap, no
         _doc_path, no list merge, no autosave)."""
         try:
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
+            data = read_tasks_document(path)
         except Exception:
             self._flash("Open failed")
             return False
@@ -898,7 +1069,13 @@ class Tasks(nbapp.AppWindow):
             # Documents folder. File now offers only what the app can actually
             # make (docs/MENU-CONVENTIONS.md, the single-store File menu).
             return [
-                ("New Task…", self._file_new_task),
+                # NO ELLIPSIS: rule 1 of the menu conventions makes "…" the
+                # promise of a dialog, a picker or a confirm before anything
+                # happens, and this item raises none. _file_new_task clears the
+                # quick-add field that is already on screen and puts the caret
+                # in it -- an immediate action, the same shape as New Recipe in
+                # Cookbook. The ellipsis promised a card that never came.
+                ("New Task", self._file_new_task),
                 ("New List…", lambda: self._on_new_list(None)),
                 nbapp.SEP,
                 ("Close    Esc", self.close),
@@ -926,14 +1103,15 @@ class Tasks(nbapp.AppWindow):
         if name == "Lists":
             items = [("New List…", lambda: self._on_new_list(None))]
             # Remove List targets the currently selected list, so it greys out
-            # (never disappears) while a built-in view is showing. It confirms
-            # first — hence the ellipsis — then reassigns that list's tasks to
-            # Inbox; never a silent delete.
+            # (never disappears) while a built-in view is showing. It acts at
+            # once — no ellipsis, nothing to ask: the list's tasks are kept
+            # and reassigned to Inbox, and Edit > Undo brings the list back
+            # (undo replaced the confirm card; see docs/MENU-CONVENTIONS.md §1).
             on_list = (self.view.startswith("proj:")
                        and self.view[5:] in PROJ_COLOR)
             nm = self.view[5:] if on_list else ""
             items.append(
-                ("Remove List…",
+                ("Remove List",
                  (lambda n=nm: self._remove_list(n)) if on_list else None))
             if PROJECTS:
                 items.append(nbapp.SEP)
@@ -988,7 +1166,8 @@ class Tasks(nbapp.AppWindow):
 
             for name, color in PROJECTS:
                 inner.pack_start(
-                    self._side_row("proj:" + name, name, dotcolor=color),
+                    self._side_row("proj:" + name, name, dotcolor=color,
+                                   verbatim=True),
                     False, False, 0)
 
         scroll.add(inner)
@@ -1133,12 +1312,11 @@ class Tasks(nbapp.AppWindow):
         # label's natural width collapses to its longest word, and with nothing
         # else to anchor it the card rendered one word per line, off centre,
         # with the button clipped off the bottom. The other cards here are held
-        # open by something that does not wrap — New List by its entry's
-        # width_chars, Remove List by its own longer line — and this one had
-        # nothing.
+        # open by something that does not wrap — New List and Rename by their
+        # entry's width_chars — and this one had nothing.
         card.set_size_request(360, -1)
         title = Gtk.Label(
-            label=_t("Your task dates and lists could not be read"), xalign=0)
+            label=_t("Task dates and lists could not be read"), xalign=0)
         title.get_style_context().add_class("nltitle")
         title.set_line_wrap(True)
         title.set_max_width_chars(34)
@@ -1201,90 +1379,13 @@ class Tasks(nbapp.AppWindow):
         return False
 
     # ------------------------------------------------------------- list removal
-    def _open_removelist(self, name):
-        """Confirmation card for deleting a list. Reuses the New List overlay
-        approach (an in-window layer, reliable on the no-compositor stack). The
-        list's tasks are NOT deleted — they are reassigned to Inbox (no list)."""
-        if name not in PROJ_COLOR:
-            return
-        try:
-            self._close_menu()
-        except Exception:
-            pass
-        self._close_newlist()
-        self._close_removelist()
-        n = sum(1 for t in self.tasks if t.get("project") == name)
-
-        W, H = self._surface_size()
-        layer = Gtk.Fixed()
-        scrim = Gtk.EventBox()
-        scrim.get_style_context().add_class("scrim")
-        scrim.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-        scrim.set_size_request(W, H)
-        scrim.connect("button-press-event",
-                      lambda *a: (self._close_removelist(), True)[1])
-        layer.put(scrim, 0, 0)
-
-        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
-        card.get_style_context().add_class("nlcard")
-        title = Gtk.Label(label=_t("Remove List"), xalign=0)
-        title.get_style_context().add_class("nltitle")
-        card.pack_start(title, False, False, 0)
-
-        # Say what happens to the tasks, in a full sentence and the app's own
-        # typographic quotes: the old fragment ('… 3 tasks reassigned to
-        # Inbox.') read like a log line and left it unclear whether the tasks
-        # were about to be deleted with the list.
-        msg = ("Remove the list “%s”? Its %d task%s %s kept and moved to Inbox."
-               % (name, n, "" if n == 1 else "s", "is" if n == 1 else "are"))
-        if n == 0:
-            msg = "Remove the list “%s”? It has no tasks in it." % name
-        body = Gtk.Label(label=msg, xalign=0)
-        body.get_style_context().add_class("nlbody")
-        body.set_line_wrap(True)
-        body.set_max_width_chars(30)
-        card.pack_start(body, False, False, 0)
-
-        btns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        btns.set_margin_top(6); btns.set_halign(Gtk.Align.END)
-        cancel = Gtk.Button(label=_t("Cancel"))
-        cancel.set_relief(Gtk.ReliefStyle.NONE)
-        cancel.get_style_context().add_class("nlbtn")
-        cancel.connect("clicked", lambda *a: self._close_removelist())
-        btns.pack_start(cancel, False, False, 0)
-        remove = Gtk.Button(label=_t("Remove"))
-        remove.set_relief(Gtk.ReliefStyle.NONE)
-        remove.get_style_context().add_class("nlbtn")
-        remove.get_style_context().add_class("nlremove")
-        remove.connect("clicked", lambda *a, nm=name: self._remove_list(nm))
-        btns.pack_start(remove, False, False, 0)
-        card.pack_start(btns, False, False, 0)
-
-        holder = Gtk.EventBox()   # own GdkWindow so it blits over the app body
-        holder.add(card)
-        layer.put(holder, 0, 0)
-        self._overlay.add_overlay(layer)
-        layer.show_all()
-        self._centre_card(layer, holder, W, H)
-        self._rl_layer = layer
-
-    def _close_removelist(self):
-        layer = getattr(self, "_rl_layer", None)
-        if layer is not None:
-            try:
-                self._overlay.remove(layer)
-            except Exception:
-                pass
-            self._rl_layer = None
-            return True
-        return False
-
     def _remove_list(self, name):
         """Delete a list: reassign its tasks to Inbox (project=None, never
-        dropped), drop it from PROJECTS/PROJ_COLOR, rebuild + persist."""
-        self._close_removelist()
+        dropped), drop it from PROJECTS/PROJ_COLOR, rebuild + persist. Acts at
+        once — Edit > Undo is the way back, so there is no confirm card."""
         if name not in PROJ_COLOR:
             return
+        before = self._undo_snapshot()
         self.undo.checkpoint("Remove List")
         for t in self.tasks:
             if t.get("project") == name:
@@ -1295,7 +1396,10 @@ class Tasks(nbapp.AppWindow):
         if self.view == "proj:" + name:
             self.view = "view:today"
         self._rebuild_sidebar()   # rebuilds the sidebar and refreshes the list
-        self._save_tasks()
+        if not self._save_tasks_or_restore(before):
+            self._rebuild_sidebar()
+            self.undo.commit()
+            return
         self.undo.commit()
 
     def _swatch(self, color, idx):
@@ -1343,14 +1447,26 @@ class Tasks(nbapp.AppWindow):
             except Exception:
                 pass
             return
-        if name not in PROJ_COLOR:
+        before = self._undo_snapshot()
+        # Creating a list is an undo step (a name that already exists only
+        # selects that list, which is not one). Committed AFTER the new list
+        # is selected so Redo lands back on it, not on the view before it.
+        fresh = name not in PROJ_COLOR
+        if fresh:
+            self.undo.checkpoint("New List")
             color = LIST_COLORS[self._nl_color_idx % len(LIST_COLORS)]
             PROJECTS.append((name, color))
             PROJ_COLOR[name] = color
         self._close_newlist()
         self._rebuild_sidebar()
-        self._save_tasks()
+        if not self._save_tasks_or_restore(before):
+            self._rebuild_sidebar()
+            if fresh:
+                self.undo.commit()  # state was restored; only clears the label
+            return
         self._on_select(None, "proj:" + name)
+        if fresh:
+            self.undo.commit()
 
     def _rebuild_sidebar(self):
         old = getattr(self, "_sidebar", None)
@@ -1365,7 +1481,8 @@ class Tasks(nbapp.AppWindow):
         self._sidebar.show_all()
         self._refresh()
 
-    def _side_row(self, vid, label, glyph=None, dotcolor=None):
+    def _side_row(self, vid, label, glyph=None, dotcolor=None,
+                  verbatim=False):
         btn = Gtk.Button(); btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.get_style_context().add_class("siderow")
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -1379,7 +1496,13 @@ class Tasks(nbapp.AppWindow):
             dot.set_valign(Gtk.Align.CENTER)
             row.pack_start(dot, False, False, 0)
 
-        name = Gtk.Label(label=label, xalign=0)
+        # A built-in view ("Today", "Upcoming", "Inbox") is chrome and
+        # translates; a user list name never does — see _set_user_text.
+        name = Gtk.Label(xalign=0)
+        if verbatim:
+            _set_user_text(name, label)
+        else:
+            name.set_text(label)
         name.get_style_context().add_class("siderowlabel")
         # A long list name ellipsizes inside the fixed-width sidebar instead of
         # stretching the chrome.
@@ -1521,6 +1644,13 @@ class Tasks(nbapp.AppWindow):
             d_proj, d_due, d_date = None, "inbox", ""
         else:
             d_proj, d_due, d_date = None, "today", _iso(_today())
+        before = self._undo_snapshot()
+        # An add is an undo step of its own, bracketed like every other
+        # mutation here. Left unrecorded (as it was), the history's newest
+        # step stayed the one BEFORE the adds, so "Undo Delete Task" after
+        # three fresh tasks stepped back over all three and wrote that older
+        # list to disk. The label matches File > New Task.
+        self.undo.checkpoint("New Task")
         self.tasks.append({
             "title": title,
             "project": p_proj if p_proj is not None else d_proj,
@@ -1528,7 +1658,11 @@ class Tasks(nbapp.AppWindow):
             "date": p_date if p_due is not None else d_date,
             "time": p_time or "", "prio": p_prio, "done": False})
         entry.set_text("")
-        self._save_tasks()
+        if not self._save_tasks_or_restore(before):
+            self.undo.commit()  # state was restored; only clears the label
+            self._refresh()
+            return
+        self.undo.commit()
         self._refresh()
 
     @staticmethod
@@ -1536,9 +1670,10 @@ class Tasks(nbapp.AppWindow):
         """Resolve one '>…' quick-add token to (group, ISO day). A weekday name
         ('>friday', '>fri') resolves to the NEXT such day — today when today is
         that day — so "bins >thu" lands on the right Thursday without anyone
-        working out the date. 'today'/'tomorrow'/'week' get their real day too;
-        the dateless groups (anytime, inbox) keep no day. Returns (None, None)
-        when the token is not a day at all."""
+        working out the date. 'today'/'tomorrow' get their real day too, and
+        '>week' / '>nextweek' mean a week from today; the dateless groups
+        (anytime, inbox) keep no day. Returns (None, None) when the token is
+        not a day at all."""
         key = word.lower()
         now = _today()
         if key in DAY_TOKENS:
@@ -1549,8 +1684,8 @@ class Tasks(nbapp.AppWindow):
             return "today", _iso(now)
         if gid == "tomorrow":
             return "tomorrow", _iso(now + timedelta(days=1))
-        if gid == "week":
-            return "week", _iso(now + timedelta(days=7))
+        if gid in ("week", "nextweek"):
+            return "nextweek", _iso(now + timedelta(days=7))
         if gid is not None:
             return gid, ""
         return None, None
@@ -1573,8 +1708,12 @@ class Tasks(nbapp.AppWindow):
             low = w.lower()
             if len(w) > 1 and w[0] == "#":
                 key = low[1:]
-                match = next((n for n, _ in PROJECTS if n.lower().startswith(key)),
-                             None)
+                names = [n for n, _ in PROJECTS]
+                match = next((n for n in names if n.lower() == key), None)
+                if match is None:
+                    prefixes = [n for n in names
+                                if n.lower().startswith(key)]
+                    match = prefixes[0] if len(prefixes) == 1 else None
                 if match:
                     project = match
                     continue
@@ -1606,12 +1745,12 @@ class Tasks(nbapp.AppWindow):
         scope and the sidebar counts can never drift apart.
 
         'Later' sits under Upcoming rather than under Today: now that a dated
-        task is grouped from its real day, Later means "more than a week away",
+        task is grouped from its real day, Later means "beyond next week",
         which is the definition of upcoming, not of today."""
         if view == "view:today":
             return ("overdue", "today", "anytime")
         if view == "view:upcoming":
-            return ("tomorrow", "week", "later")
+            return ("tomorrow", "week", "nextweek", "later")
         if view == "view:inbox":
             return ("inbox",)
         return ()
@@ -1639,11 +1778,26 @@ class Tasks(nbapp.AppWindow):
         # model, persist, then update just this row's widgets in place plus the
         # running counts. Structural ops (add/delete/quick-add/view switch) keep
         # using _refresh().
+        before = copy.deepcopy(self.tasks)
         self.undo.checkpoint("Complete Task" if not self.tasks[idx]["done"]
                              else "Reopen Task")
         done = not self.tasks[idx]["done"]
         self.tasks[idx]["done"] = done
-        self._save_tasks()
+        if not self._save_tasks():
+            # Do not show or record a completion that the authoritative rich
+            # store rejected.  The flat desktop projection may have been
+            # written first, so restore it on a best-effort second save too.
+            self.tasks = before
+            self._save_tasks()
+            # Gtk.ToggleButton changes its native checked/ATK state before
+            # emitting clicked.  Put that state back as well as the model so
+            # assistive technology and the custom check drawing cannot
+            # disagree after a failed write.
+            try:
+                _btn.set_active(bool(before[idx]["done"]))
+            except (AttributeError, IndexError, TypeError):
+                pass
+            return
         self.undo.commit()
         handles = getattr(self, "_rows", {}).get(idx)
         if handles is None:
@@ -1683,10 +1837,10 @@ class Tasks(nbapp.AppWindow):
         return False
 
     def _open_task_menu(self, idx, x, y):
-        """A small right-click menu for one task: when it is due, Rename… and
-        Delete. Drawn as an in-window overlay (the same reliable no-compositor
-        approach as the base dropdowns), positioned at the click point and
-        clamped on-screen.
+        """A small right-click menu for one task: when it is due, which list
+        it is on (once there are lists), Rename… and Delete. Drawn as an
+        in-window overlay (the same reliable no-compositor approach as the
+        base dropdowns), positioned at the click point and clamped on-screen.
 
         The reschedule rows are the point of the menu: before them, a task filed
         under Tomorrow could only be moved by deleting it and typing it again."""
@@ -1696,8 +1850,13 @@ class Tasks(nbapp.AppWindow):
         menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         menu.get_style_context().add_class("nbmenu")
 
-        def additem(label, cb, cls=None):
-            it = Gtk.Button(label=label); it.set_relief(Gtk.ReliefStyle.NONE)
+        def additem(label, cb, cls=None, verbatim=False):
+            it = Gtk.Button()
+            if verbatim:
+                _set_user_text(it, label)     # a list the user named
+            else:
+                it.set_label(label)
+            it.set_relief(Gtk.ReliefStyle.NONE)
             it.get_style_context().add_class("nbmenu-item")
             if cls:
                 it.get_style_context().add_class(cls)
@@ -1705,8 +1864,11 @@ class Tasks(nbapp.AppWindow):
                 it.get_child().set_xalign(0.0)
             except Exception:
                 pass
-            it.connect("clicked",
-                       lambda _b, fn=cb: (self._close_task_menu(), fn()))
+            if cb is None:
+                it.set_sensitive(False)   # greyed, as the base dropdowns do
+            else:
+                it.connect("clicked",
+                           lambda _b, fn=cb: (self._close_task_menu(), fn()))
             menu.pack_start(it, False, False, 0)
 
         def addsep():
@@ -1721,10 +1883,26 @@ class Tasks(nbapp.AppWindow):
         for label, group, day in (
                 ("Today", "today", _iso(now)),
                 ("Tomorrow", "tomorrow", _iso(now + timedelta(days=1))),
-                ("Next week", "week", _iso(now + timedelta(days=7))),
+                ("Next week", "nextweek", _iso(now + timedelta(days=7))),
                 ("Anytime", "anytime", "")):
             additem(label,
                     lambda i=idx, g=group, d=day: self._reschedule(i, g, d))
+        # Which list the task is on: one row per user list plus Inbox (the
+        # word this app already uses for "no list", on the row's own meta
+        # line and in Remove List). Choosing one moves the task there. The
+        # row for where the task already is greys out — that is the marker,
+        # so no padding has to be carried into the label (see above). Before
+        # these rows, a task could only be filed into a list by typing it
+        # again with a #List token: there was no way to move one already made.
+        if PROJECTS:
+            addsep()
+            here = self.tasks[idx].get("project")
+            for pname, _color in PROJECTS:
+                additem(pname, (None if pname == here else
+                                (lambda i=idx, n=pname: self._move_task(i, n))),
+                        verbatim=True)
+            additem("Inbox", (None if here is None else
+                              (lambda i=idx: self._move_task(i, None))))
         addsep()
         additem("Rename…", lambda i=idx: self._open_rename(i))
         additem("Delete task", lambda i=idx: self._delete_task(i),
@@ -1790,12 +1968,43 @@ class Tasks(nbapp.AppWindow):
         self._close_task_menu()
         if not (0 <= idx < len(self.tasks)):
             return
+        before = self._undo_snapshot()
         t = self.tasks[idx]
+        new_done = False if day and t.get("done") else bool(t.get("done"))
+        if (t.get("due") == group and t.get("date") == day
+                and bool(t.get("done")) == new_done):
+            return
+        self.undo.checkpoint("Reschedule Task")
         t["due"] = group
         t["date"] = day
         if day and t.get("done"):
             t["done"] = False
-        self._save_tasks()
+        self._save_tasks_or_restore(before)
+        # On failure the helper restored `before`; commit then observes an
+        # equal state and only clears the pending structural label.
+        self.undo.commit()
+        self._refresh()
+
+    def _move_task(self, idx, name):
+        """File one task on another list from the row menu (None = no list,
+        shown as Inbox). Nothing else about the task changes — its day, time
+        and done state travel with it. Persists, refreshes, and is an undo
+        step like every other row-menu action."""
+        self._close_task_menu()
+        if not (0 <= idx < len(self.tasks)):
+            return
+        if name is not None and name not in PROJ_COLOR:
+            return
+        before = self._undo_snapshot()
+        t = self.tasks[idx]
+        if t.get("project") == name:
+            return
+        self.undo.checkpoint("Move Task")
+        t["project"] = name
+        self._save_tasks_or_restore(before)
+        # On failure the helper restored `before`; commit then observes an
+        # equal state and only clears the pending structural label.
+        self.undo.commit()
         self._refresh()
 
     def _delete_task(self, idx):
@@ -1806,9 +2015,15 @@ class Tasks(nbapp.AppWindow):
         self._close_task_menu()
         if not (0 <= idx < len(self.tasks)):
             return
+        before = copy.deepcopy(self.tasks)
         self.undo.checkpoint("Delete Task")
         del self.tasks[idx]
-        self._save_tasks()
+        if not self._save_tasks():
+            self.tasks = before
+            self._save_tasks()  # best-effort restore of the flat projection
+            self.undo.commit()  # clear the pending label; state is unchanged
+            self._refresh()
+            return
         self.undo.commit()
         self._refresh()
 
@@ -1901,9 +2116,17 @@ class Tasks(nbapp.AppWindow):
             except Exception:
                 pass
             return
+        if text == self.tasks[idx].get("title", ""):
+            self._close_rename()   # nothing changed: no save, no undo step
+            return
+        before = self._undo_snapshot()
+        self.undo.checkpoint("Rename Task")
         self.tasks[idx]["title"] = text
         self._close_rename()
-        self._save_tasks()
+        self._save_tasks_or_restore(before)
+        # On failure the helper restored `before`; commit then observes an
+        # equal state and only clears the pending structural label.
+        self.undo.commit()
         self._refresh()
 
     # --------------------------------------------------------- clear completed
@@ -1926,9 +2149,15 @@ class Tasks(nbapp.AppWindow):
         """Drop every done task (kept non-done ones untouched), persist, refresh.
         Reached only through the confirm card above."""
         self._close_clearcard()
+        before = copy.deepcopy(self.tasks)
         self.undo.checkpoint("Clear Completed")
         self.tasks = [t for t in self.tasks if not t.get("done")]
-        self._save_tasks()
+        if not self._save_tasks():
+            self.tasks = before
+            self._save_tasks()
+            self.undo.commit()
+            self._refresh()
+            return
         self.undo.commit()
         self._refresh()
 
@@ -2202,7 +2431,8 @@ class Tasks(nbapp.AppWindow):
         content.set_margin_top(12); content.set_margin_bottom(12)
         content.set_margin_start(14); content.set_margin_end(16)
         content.set_valign(Gtk.Align.CENTER)
-        et = Gtk.Label(label=ev.get("title", ""), xalign=0)
+        et = Gtk.Label(xalign=0)
+        _set_user_text(et, ev.get("title", ""))
         et.get_style_context().add_class("eventtitle")
         et.set_line_wrap(True); et.set_max_width_chars(26)
         # max_width_chars caps where the text WRAPS, not how narrow the label
@@ -2216,7 +2446,8 @@ class Tasks(nbapp.AppWindow):
         content.pack_start(et, False, False, 0)
         where = (ev.get("where") or "").strip()
         if where:
-            es = Gtk.Label(label=where, xalign=0)
+            es = Gtk.Label(xalign=0)
+            _set_user_text(es, where)
             es.get_style_context().add_class("eventsub")
             es.set_margin_top(3)
             # Same mechanism, less protection: this one had no wrap at ALL, so
@@ -2322,14 +2553,18 @@ class Tasks(nbapp.AppWindow):
             else:
                 pill.get_style_context().add_class("calday")
             cell.pack_start(pill, True, True, 0)
-            # A month grid invites clicks (the red "today" pill especially), so
-            # each day is a live cell. A bare Gtk.Box gets no pointer events, so
-            # wrap it in a windowless EventBox — no visual change, but the click
-            # now lands. Jumps to the task view that matches the picked day.
-            daycell = Gtk.EventBox()
-            daycell.set_visible_window(False)
-            daycell.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            daycell.connect("button-press-event", self._on_cal_day, d)
+            # A named native button makes every date available to pointer,
+            # keyboard and assistive technology without changing the cell.
+            daycell = Gtk.Button()
+            daycell.set_relief(Gtk.ReliefStyle.NONE)
+            daycell.get_style_context().add_class("calhit")
+            daycell.connect("clicked", self._on_cal_day, d)
+            try:
+                daycell.get_accessible().set_name(
+                    "%d %s %d" % (d, _t(MONTHS[now.tm_mon - 1]),
+                                   now.tm_year))
+            except Exception:
+                pass
             daycell.add(cell)
             grid.attach(daycell, cpos, r, 1, 1)
             cpos += 1
@@ -2338,7 +2573,7 @@ class Tasks(nbapp.AppWindow):
         box.pack_start(grid, False, False, 0)
         return box
 
-    def _on_cal_day(self, _widget, _event, day):
+    def _on_cal_day(self, _widget, day):
         # Clicking a calendar day selects the task view that best matches it:
         # a future date -> Upcoming, today or a past date -> Today (which also
         # carries the overdue group). Both are existing views, so this reuses
@@ -2384,6 +2619,15 @@ class Tasks(nbapp.AppWindow):
         full, short = self._title_full, self._title_short
         if not full or not short:
             return
+        # getattr, not self.view: this fitter runs from a size-allocate
+        # handler, which can land before the view is chosen (and from every
+        # suite that drives it on a partial instance). A layout guard must not
+        # be what raises — same shape as the calendar/journal/music stores.
+        if str(getattr(self, "view", "") or "").startswith("proj:"):
+            # A list name has no shorter truth, and re-setting it here would
+            # go through the plain (translated) setter and undo the stamp
+            # _refresh put on it.
+            return
         layout = lbl.create_pango_layout(full)
         want = full if layout.get_pixel_size()[0] <= alloc.width else short
         if lbl.get_text() != want:
@@ -2397,17 +2641,21 @@ class Tasks(nbapp.AppWindow):
             eb, ti = "Today", _display_date(now)
             ti_short = _t("%d %s" % (now[2], MONTHS[now[1] - 1]))
         elif self.view == "view:upcoming":
-            # Matches what this view actually holds — the Tomorrow and This
-            # Week groups. "The next two weeks" promised a range the view has
-            # no bucket for.
-            eb, ti = "Upcoming", "The week ahead"
+            # Covers what this view actually holds — Tomorrow, This Week, Next
+            # week AND Later (see _view_dues), so it names no range: "The week
+            # ahead" sat over a task six weeks out, and "The next two weeks"
+            # before it promised a range the view has no bucket for.
+            eb, ti = "Upcoming", "Coming up"
         elif self.view == "view:inbox":
             eb, ti = "Inbox", "Unsorted tasks"
         else:
             eb, ti = "List", self.view[5:]
         self.eyebrow.set_text(eb.upper())
         self._title_full, self._title_short = ti, ti_short
-        self.title_lbl.set_text(ti)   # _fit_title corrects on allocation
+        if self.view.startswith("proj:"):
+            _set_user_text(self.title_lbl, ti)   # the user's list name
+        else:
+            self.title_lbl.set_text(ti)   # _fit_title corrects on allocation
 
         scoped = self._scoped()
         # Header 'N remaining' + sidebar per-list counts (shared with the
@@ -2457,6 +2705,11 @@ class Tasks(nbapp.AppWindow):
                 items = [(i, t) for i, t in scoped if self._due_of(t) == due]
                 if not items:
                     continue
+                # Dated rows in date order inside a group, not in the order
+                # they were typed: THIS WEEK listed a Sunday above a Friday
+                # because the Sunday was entered first. The sort is stable,
+                # so undated rows and same-day rows keep their entered order.
+                items.sort(key=lambda it: it[1].get("date") or "")
                 self.listbox.pack_start(self._group_head(due, len(items)),
                                         False, False, 0)
                 for i, t in items:
@@ -2481,8 +2734,13 @@ class Tasks(nbapp.AppWindow):
         return row
 
     def _task_row(self, idx, t):
-        btn = Gtk.Button(); btn.set_relief(Gtk.ReliefStyle.NONE)
+        btn = Gtk.ToggleButton(); btn.set_relief(Gtk.ReliefStyle.NONE)
         btn.get_style_context().add_class("taskrow")
+        btn.set_active(bool(t["done"]))
+        try:
+            btn.get_accessible().set_name(t["title"])
+        except Exception:
+            pass
         btn.connect("clicked", self._toggle, idx)
         btn.connect("button-press-event", self._on_task_press, idx)
         btn.set_tooltip_text(
@@ -2500,7 +2758,8 @@ class Tasks(nbapp.AppWindow):
         row.pack_start(chk, False, False, 0)
 
         mid = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        title = Gtk.Label(label=t["title"], xalign=0)
+        title = Gtk.Label(xalign=0)
+        _set_user_text(title, t["title"])
         title.get_style_context().add_class(
             "taskdone" if t["done"] else "tasktitle")
         # Long titles wrap (breaking mid-word if a single token is huge) rather
@@ -2522,7 +2781,8 @@ class Tasks(nbapp.AppWindow):
         pdot.set_valign(Gtk.Align.CENTER)
         pdot.connect("draw", self._draw_dot, color)
         meta.pack_start(pdot, False, False, 0)
-        pl = Gtk.Label(label=t["project"] or "Inbox", xalign=0)
+        pl = Gtk.Label(xalign=0)
+        _set_user_text(pl, t["project"], "Inbox")
         pl.get_style_context().add_class("taskproj")
         # A user list can be named anything; unellipsized this sublabel set the
         # window's minimum width just as the header title did.
@@ -2614,7 +2874,7 @@ class Tasks(nbapp.AppWindow):
 
         .sidebar { background: #F1EEE6; border-right: 1px solid #D7D2C5; }
         .sidebar scrolledwindow, .sidebar viewport { background: #F1EEE6; }
-        .sectionhead { font-size: 11px; letter-spacing: 0.13em; color: #8A857A;
+        .sectionhead { font-size: 11px; letter-spacing: 0.13em; color: #6E695E;
                        font-weight: 700; }
         .siderow { padding: 9px 12px; border-radius: 6px; background: transparent;
                    border: none; box-shadow: none; margin-bottom: 2px; }
@@ -2622,7 +2882,12 @@ class Tasks(nbapp.AppWindow):
         .siderow.selected { background: #EAE3D2;
                             box-shadow: inset 3px 0 0 #C8341E; }
         .siderowlabel { font-size: 15px; color: #1A1916; font-weight: 500; }
-        .sidecount { font-size: 12px; color: #8A857A; }
+        .sidecount { font-size: 12px; color: #6E695E; }
+        /* On the CHOSEN row the ground is @select, where @muted measures
+           4.27:1 -- under AA for 12px. The count is exactly the thing you
+           reached for, so it steps to @ink-3 (9.40:1) rather than staying
+           the faintest text in the window at the moment it matters. */
+        .siderow.selected .sidecount { color: #3A362E; }
         .newlist { padding: 15px 26px; background: #F1EEE6; border: none;
                    box-shadow: none; border-top: 1px solid #D7D2C5;
                    border-radius: 0; }
@@ -2630,10 +2895,10 @@ class Tasks(nbapp.AppWindow):
         .newlistlabel { font-size: 14px; color: #6E695E; font-weight: 500; }
 
         .centercol { background: #FCFBF8; border-right: 1px solid #D7D2C5; }
-        .eyebrow { font-size: 12px; letter-spacing: 0.16em; color: #8A857A;
+        .eyebrow { font-size: 12px; letter-spacing: 0.16em; color: #6E695E;
                    font-weight: 700; }
         .viewtitle { font-size: 34px; font-weight: 700; color: #1A1916; }
-        .remaining { font-size: 14px; color: #8A857A; }
+        .remaining { font-size: 14px; color: #6E695E; }
         .quickadd { min-height: 48px; border: 1px dashed #C9C4B6;
                     border-radius: 8px; }
         .draftentry { background: transparent; border: none; box-shadow: none;
@@ -2649,34 +2914,37 @@ class Tasks(nbapp.AppWindow):
                    box-shadow: none; }
         .taskrow:hover { background: #F8F7F2; }
         .tasktitle { font-size: 16px; color: #1A1916; }
-        .taskdone { font-size: 16px; color: #B3AD9E;
+        .taskdone { font-size: 16px; color: #6E695E;
                     text-decoration-line: line-through; }
         .taskproj { font-size: 12px; color: #6E695E; }
         .taskdot { font-size: 12px; color: #C9C4B6; }
-        .tasknote { font-size: 12px; color: #8A857A; }
+        .tasknote { font-size: 12px; color: #6E695E; }
         .tasknoteover { font-size: 12px; color: #C8341E; font-weight: 600; }
         .grouphead { font-size: 12px; letter-spacing: 0.1em; font-weight: 700;
                      color: #6E695E; }
         .groupover { font-size: 12px; letter-spacing: 0.1em; font-weight: 700;
                      color: #C8341E; }
         .groupline { background: #D7D2C5; min-height: 1px; }
-        .groupcount { font-size: 12px; color: #8A857A; }
+        .groupcount { font-size: 12px; color: #6E695E; }
 
         .rail { background: #FCFBF8; }
         .railhead { border-bottom: 1px solid #D7D2C5; }
         .railtitle { font-size: 20px; font-weight: 700; color: #1A1916; }
-        .emptytext { font-size: 14px; color: #8A857A; }
-        .emptyhint { font-size: 12px; color: #9A9484; }
-        .emptysub { font-size: 13px; color: #8A857A; }
+        .emptytext { font-size: 14px; color: #6E695E; }
+        .emptyhint { font-size: 12px; color: #6E695E; }
+        .emptysub { font-size: 13px; color: #6E695E; }
         .eventtime { font-size: 13px; color: #1A1916; font-weight: 600; }
-        .eventdur { font-size: 11px; color: #8A857A; }
+        .eventdur { font-size: 11px; color: #6E695E; }
         .eventcard { background: #FCFBF8; border: 1px solid #D7D2C5;
                      border-radius: 12px; }
         .eventtitle { font-size: 15px; color: #1A1916; font-weight: 600; }
-        .eventsub { font-size: 12px; color: #8A857A; }
+        .eventsub { font-size: 12px; color: #6E695E; }
         .minical { border-top: 1px solid #D7D2C5; }
         .minititle { font-size: 14px; font-weight: 700; color: #1A1916; }
-        .caldow { font-size: 10px; color: #B3AD9E; font-weight: 700; }
+        .caldow { font-size: 10px; color: #6E695E; font-weight: 700; }
+        .calhit { padding: 0; margin: 0; border: none; min-width: 0;
+                  min-height: 0; background: transparent;
+                  background-image: none; box-shadow: none; }
         .calday { font-size: 12px; color: #6E695E; }
         .calmarked { font-size: 12px; color: #1A1916; font-weight: 700; }
         .caltoday { font-size: 12px; color: #FCFBF8; font-weight: 700;
@@ -2696,7 +2964,7 @@ class Tasks(nbapp.AppWindow):
                   padding: 26px 30px; }
         .nltitle { font-size: 20px; font-weight: 700; color: #1A1916; }
         .nlbody { font-size: 14px; color: #4A473F; }
-        .nlhint { font-size: 11px; letter-spacing: 0.13em; color: #8A857A;
+        .nlhint { font-size: 11px; letter-spacing: 0.13em; color: #6E695E;
                   font-weight: 700; }
         /* The colour picker: a real button, so the keyboard can reach it, but
            wearing none of the button chrome -- the DrawingArea inside IS the
@@ -2718,15 +2986,12 @@ class Tasks(nbapp.AppWindow):
         /* A colour set on the BUTTON node never reaches the label inside it:
            the theme's `* { color: ink }` matches that label node directly and
            beats the inherited value. Without the `label` selectors below, the
-           Create / Remove buttons render as solid slabs with ink text on ink
+           Create / Save buttons render as solid slabs with ink text on ink
            background: an invisible primary action. Same for the destructive
            menu item further down. */
         .nlcreate { background: #1A1916; border: 1px solid #1A1916; }
         .nlcreate, .nlcreate label { color: #FCFBF8; }
         .nlcreate:hover { background: #2A2620; }
-        .nlremove { background: #C8341E; border: 1px solid #C8341E; }
-        .nlremove, .nlremove label { color: #FCFBF8; }
-        .nlremove:hover { background: #B12D19; }
 
         /* Destructive item in the task right-click menu: red is the reserved
            alert use, kept red on hover too. */

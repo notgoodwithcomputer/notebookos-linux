@@ -36,11 +36,14 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, Pango, PangoCairo, GdkPixbuf, GLib  # noqa: E402
 
 import base64
+import codecs
+import copy
 import errno
 import os
 import sys
 import json
 import time
+import math
 
 import cairo
 
@@ -48,7 +51,50 @@ import nbapp
 import nbpicker
 import nbicons
 import nbprint
+import nbi18n
 from nbi18n import _t  # noqa: E402
+
+
+def _is_writer_path(path):
+    """Return whether a filesystem path names Writer's native format.
+
+    File extensions are case-insensitive from the user's perspective (and on
+    common removable media), so ``Notes.WRITER`` must not be opened or saved as
+    lossy plain text merely because its suffix uses capitals.
+    """
+    return os.fspath(path).lower().endswith(".writer")
+
+
+def _decode_text_bytes(source):
+    """Decode a text file, honoring an unambiguous Unicode BOM first."""
+    codecs_to_try = []
+    if source.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        codecs_to_try.append("utf-32")
+    elif source.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        codecs_to_try.append("utf-16")
+    elif source.startswith(codecs.BOM_UTF8):
+        codecs_to_try.append("utf-8-sig")
+    else:
+        codecs_to_try.append("utf-8")
+    try:
+        return source.decode(codecs_to_try[0]), False
+    except (UnicodeDecodeError, UnicodeError):
+        # Recovery remains deliberately UTF-8-shaped so arbitrary legacy bytes
+        # cannot be silently reinterpreted and overwritten. The caller unbinds
+        # this recovered document from its source and routes Save through As.
+        return source.decode("utf-8", errors="replace"), True
+
+
+MAX_DOCUMENT_BYTES = 64 * 1024 * 1024
+
+
+def _read_document_bytes(path, limit=MAX_DOCUMENT_BYTES):
+    """Read a selected document without unbounded GTK-thread allocation."""
+    with open(path, "rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("document is too large")
+    return raw
 
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
@@ -172,10 +218,13 @@ def _save_problem(exc):
 # the individual formatting records that make no sense are dropped.
 def _sane_page(page):
     """A page dict with a usable size, orientation and four numeric margins."""
-    out = {"size": "Letter", "orientation": "portrait",
-           "margins": list(DEFAULT_MARGINS_IN)}
     if not isinstance(page, dict):
-        return out
+        page = {}
+    # Keep fields owned by newer builds. Known values below are still replaced
+    # by their validated forms, so an extension cannot bypass page geometry.
+    out = dict(page)
+    out.update({"size": "Letter", "orientation": "portrait",
+                "margins": list(DEFAULT_MARGINS_IN)})
     size = page.get("size")
     if isinstance(size, str) and size in PAGE_SIZES:
         out["size"] = size
@@ -193,7 +242,27 @@ def _sane_page(page):
             vals.append(min(4.0, max(0.0, float(v))))
         if vals:
             out["margins"] = vals
+    tabs = page.get("tabs")
+    clean_tabs = []
+    if isinstance(tabs, (list, tuple)):
+        for value in tabs:
+            try:
+                value = float(value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(value) and 0.0 < value < 20.0:
+                clean_tabs.append(round(value, 4))
+    if clean_tabs or "tabs" in page:
+        out["tabs"] = sorted(set(clean_tabs))
     return out
+
+
+def _page_with_setup(page, size, orientation, margins):
+    """Apply Page Setup without throwing away ruler stops or newer fields."""
+    out = dict(page) if isinstance(page, dict) else {}
+    out.update({"size": size, "orientation": orientation,
+                "margins": list(margins)})
+    return _sane_page(out)
 
 
 def _sane_text(v):
@@ -519,11 +588,19 @@ class WrapRow(Gtk.Fixed):
 class Table(Gtk.Box):
     """A simple bordered table embedded inline via a Gtk.TextChildAnchor. Cells
     are wrapped Gtk.TextViews; the surrounding editor talks to it through
-    serialize()/from_data() and the row/column mutators."""
+    serialize()/from_data() and the row/column mutators.
 
-    def __init__(self, data=None):
+    `on_change` is the editor's own "the document changed" callback. Cell text
+    is document text: without it, typing into a cell reached NOTHING — the save
+    chip still read "● Saved 14:23", no autosave was armed, the cell text never
+    reached the .writer file or the recovery store, and File > New threw it away
+    without asking, because every one of those paths hangs off the page buffer's
+    "changed" signal and a cell has a buffer of its own."""
+
+    def __init__(self, data=None, on_change=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.get_style_context().add_class("wtable")
+        self._on_change = on_change
         self._grid = Gtk.Grid()
         self._grid.get_style_context().add_class("wtablegrid")
         self.pack_start(self._grid, False, False, 0)
@@ -550,8 +627,20 @@ class Table(Gtk.Box):
         tv.set_pixels_above_lines(3)
         tv.set_pixels_below_lines(3)
         tv.get_buffer().set_text(text or "")
+        # Connected AFTER the seed text, so building or rebuilding a table (a
+        # load, an undo) is never mistaken for the writer typing in it.
+        if self._on_change is not None:
+            tv.get_buffer().connect("changed", self._on_change)
         frame.pack_start(tv, True, True, 0)
         return {"frame": frame, "tv": tv}
+
+    def cell_position(self, widget):
+        """(row, column) of the cell whose TextView is `widget`, else None."""
+        for r, crow in enumerate(self._cells):
+            for c, cell in enumerate(crow):
+                if cell["tv"] is widget:
+                    return (r, c)
+        return None
 
     def n_rows(self):
         return len(self._cells)
@@ -578,21 +667,27 @@ class Table(Gtk.Box):
             crow.append(cell)
         self.show_all()
 
-    def del_row(self):
+    # `idx` is the row/column the caret is in. It used to be absent, so both of
+    # these always took the LAST one: there was no way at all to delete the
+    # first row of a table, and asking for one deleted a different row's text.
+    # Gtk.Grid.remove_row/remove_column take the cells out AND close the gap,
+    # which a plain remove() of each frame does not.
+    def del_row(self, idx=None):
         if self.n_rows() <= 1:
             return
-        r = self.n_rows() - 1
-        for cell in self._cells[r]:
-            self._grid.remove(cell["frame"])
-        self._cells.pop()
+        r = self.n_rows() - 1 if idx is None else _clamp(int(idx), 0,
+                                                        self.n_rows() - 1)
+        self._grid.remove_row(r)
+        self._cells.pop(r)
 
-    def del_col(self):
+    def del_col(self, idx=None):
         if self.n_cols() <= 1:
             return
-        c = self.n_cols() - 1
+        c = self.n_cols() - 1 if idx is None else _clamp(int(idx), 0,
+                                                        self.n_cols() - 1)
+        self._grid.remove_column(c)
         for crow in self._cells:
-            self._grid.remove(crow[c]["frame"])
-            crow.pop()
+            crow.pop(c)
 
     def serialize(self):
         out = []
@@ -622,9 +717,19 @@ class Writer(nbapp.AppWindow):
         self._save_timer = None
         self._undo_timer = None
         self._count_timer = None          # debounced live word count
+        self._flash_timer = None
+        self._flash_id = 0
         self._restoring = False           # guard: rebuild must not checkpoint
         self._pending = set()             # queued char styles for the next run
+        # Paragraph formats queued for the line about to be typed, keyed by tag
+        # group ("style:" -> "style:Heading 1", "list:" -> None to clear). A
+        # blank line has no characters to tag, so picking Heading 1 (or a
+        # bullet, or Centre) on one used to do nothing whatever to the words
+        # typed next — see _queue_para.
+        self._pending_para = {}
         self._syncing = False             # guard the caret->toolbar sync
+        self._saved_sel = None            # selection held while the size box
+        self._size_entry_was = ""         # has focus (a GtkEntry steals it)
         self._smart_busy = False          # guard the smart-quote re-insert
         self._img_meta = {}               # pixbuf -> {"path":..., "ow":int}
         self._tables = {}                 # child-anchor -> Table
@@ -667,6 +772,7 @@ class Writer(nbapp.AppWindow):
         if self._path and doc.get("dirty"):
             self._file_dirty = True
             self._set_save_chip(_t("Not saved to file"), ok=False)
+        self.connect("delete-event", self._on_delete)
         self.connect("destroy", self._on_destroy)
 
         if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
@@ -687,8 +793,8 @@ class Writer(nbapp.AppWindow):
         s.get_style_context().add_class("tbsep")
         return s
 
-    def _iconbtn(self, icon, cmd, tip, style_extra=None):
-        b = Gtk.Button()
+    def _iconbtn(self, icon, cmd, tip, style_extra=None, toggle=False):
+        b = Gtk.ToggleButton() if toggle else Gtk.Button()
         b.get_style_context().add_class("tbbtn")
         if style_extra:
             b.get_style_context().add_class(style_extra)
@@ -698,6 +804,50 @@ class Writer(nbapp.AppWindow):
         except Exception:
             b.set_label(cmd[:1].upper())
         return b
+
+    @staticmethod
+    def _combo_toggle(combo):
+        """The drop-down toggle inside a GtkComboBox-with-entry, wearing a
+        chevron this OS can actually draw.
+
+        GTK puts its own arrow in there as a CSS icon node, and this image
+        ships no icon theme for it to resolve against — so the toggle rendered
+        as an empty rounded box beside the size field and read as a blank,
+        broken button. The toggle is an internal child (get_children() returns
+        only the entry), so it is reached through forall.
+        """
+        found = []
+
+        def dig(widget):
+            if isinstance(widget, Gtk.ToggleButton):
+                found.append(widget)
+                return
+            if isinstance(widget, Gtk.Container):
+                widget.forall(lambda ch, *_a: dig(ch))
+
+        dig(combo)
+        if not found:
+            return None
+        btn = found[0]
+        btn.connect_after("draw", Writer._draw_combo_chevron)
+        return btn
+
+    @staticmethod
+    def _draw_combo_chevron(btn, cr):
+        w = btn.get_allocated_width()
+        h = btn.get_allocated_height()
+        cx, cy = w / 2.0, h / 2.0
+        cr.save()
+        cr.set_source_rgb(*_rgb("#2A2620"))
+        cr.set_line_width(1.4)
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_join(cairo.LINE_JOIN_ROUND)
+        cr.move_to(cx - 3.5, cy - 1.5)
+        cr.line_to(cx, cy + 2.5)
+        cr.line_to(cx + 3.5, cy - 1.5)
+        cr.stroke()
+        cr.restore()
+        return False
 
     def _colour_btn(self, which, tip):
         """A toolbar button that draws its own mark over a bar of the colour it
@@ -796,6 +946,20 @@ class Writer(nbapp.AppWindow):
         self.size_combo.get_style_context().add_class("tbcombo")
         self.size_combo.get_child().set_text(str(DEFAULT_SIZE))
         self.size_combo.connect("changed", self._on_size_combo)
+        ent = self.size_combo.get_child()
+        # A GtkEntry selects its own contents and takes the X PRIMARY selection
+        # when it is focused, which makes the page drop ITS selection: select a
+        # word, click the size box, type 18 — and the size landed on nothing,
+        # because by then there was nothing selected. _saved_sel holds the
+        # selection across that (see _on_mark_set) and _commit_size puts it
+        # back. Return commits and hands the caret back to the page; so does
+        # leaving the box, so a size typed and then clicked away from is not
+        # silently dropped. That is watched through "is-focus" rather than
+        # focus-out-event because is-focus tracks the window's focus WIDGET,
+        # which changes even on a window that does not hold the keyboard.
+        ent.connect("notify::is-focus", self._on_size_entry_focus_moved)
+        ent.connect("activate", self._on_size_entry_activate)
+        self._size_arrow = self._combo_toggle(self.size_combo)
         row.add_item(self.size_combo)
 
         row.add_item(self._tb_sep(), 4)
@@ -816,7 +980,7 @@ class Writer(nbapp.AppWindow):
                 ("<s>S</s>", "strike", "Strikethrough"),
                 ("x<sup>2</sup>", "super", "Superscript"),
                 ("x<sub>2</sub>", "sub", "Subscript")):
-            b = Gtk.Button()
+            b = Gtk.ToggleButton()
             lab = Gtk.Label()
             lab.set_markup(markup)
             b.add(lab)
@@ -846,7 +1010,7 @@ class Writer(nbapp.AppWindow):
                                 ("aligncenter", "center", "Center"),
                                 ("alignright", "right", "Align right"),
                                 ("alignjustify", "fill", "Justify")):
-            b = self._iconbtn(icon, just, tip)
+            b = self._iconbtn(icon, just, tip, toggle=True)
             b.connect("clicked", lambda _b, j=just: self._set_align(j))
             self._fmt_btns["align:" + just] = b
             row.add_item(b)
@@ -854,11 +1018,11 @@ class Writer(nbapp.AppWindow):
         row.add_item(self._tb_sep(), 4)
 
         # lists + indent
-        b = self._iconbtn("bullet", "bullet", "Bulleted list")
+        b = self._iconbtn("bullet", "bullet", "Bulleted list", toggle=True)
         b.connect("clicked", lambda *_: self._toggle_list("bullet"))
         self._fmt_btns["list:bullet"] = b
         row.add_item(b)
-        b = self._iconbtn("number", "number", "Numbered list")
+        b = self._iconbtn("number", "number", "Numbered list", toggle=True)
         b.connect("clicked", lambda *_: self._toggle_list("number"))
         self._fmt_btns["list:number"] = b
         row.add_item(b)
@@ -1185,11 +1349,13 @@ class Writer(nbapp.AppWindow):
         prev = Gtk.Button(label="‹")
         prev.get_style_context().add_class("tbbtn")
         prev.set_tooltip_text(_t("Previous match"))
+        prev.get_accessible().set_name(_t("Previous match"))
         prev.connect("clicked", lambda *_: self._find_next(-1))
         bar.pack_start(prev, False, False, 0)
         nxt = Gtk.Button(label="›")
         nxt.get_style_context().add_class("tbbtn")
         nxt.set_tooltip_text(_t("Next match"))
+        nxt.get_accessible().set_name(_t("Next match"))
         nxt.connect("clicked", lambda *_: self._find_next(1))
         bar.pack_start(nxt, False, False, 0)
         self.find_count = Gtk.Label(label="")
@@ -1455,7 +1621,51 @@ class Writer(nbapp.AppWindow):
         return out
 
     # ---- paragraph formatting -------------------------------------------
+    #
+    # A blank line has no characters to carry a tag: _para_bounds returns an
+    # EMPTY range on an empty last line, and on an empty middle line the only
+    # thing in range is the "\n", which text typed before it does not inherit
+    # (a GtkTextBuffer gives inserted text the tags of the character to its
+    # LEFT). So picking Heading 1 — or a bullet, a number, Centre, Double —
+    # with the caret on a blank line changed nothing about the words typed
+    # next, and the style combo snapped straight back to Body. These queue the
+    # choice instead, exactly as _pending queues bold for the next typed run,
+    # and _on_inserted lays it over the whole line as soon as there is one.
+    def _para_is_blank(self):
+        """True when the caret sits alone on a line with no text of its own."""
+        if self.buf.get_has_selection():
+            return False
+        it = self.buf.get_iter_at_mark(self.buf.get_insert())
+        s = it.copy(); s.set_line_offset(0)
+        e = it.copy()
+        if not e.ends_line():
+            e.forward_to_line_end()
+        return s.compare(e) == 0
+
+    def _queue_para(self, prefix, key):
+        """Queue a paragraph format for the line about to be typed. `key` is
+        None to queue the group being CLEARED (a list switched off)."""
+        self._pending_para[prefix] = key
+
+    def _apply_pending_para(self, it):
+        """Lay the queued paragraph formats over the line `it` is on."""
+        pend, self._pending_para = dict(self._pending_para), {}
+        s = it.copy(); s.set_line_offset(0)
+        e = it.copy()
+        if not e.ends_line():
+            e.forward_to_line_end()
+        e.forward_char()          # include the break, as _para_bounds does
+        for prefix, key in pend.items():
+            self._clear_group(s, e, prefix)
+            if prefix == "style:":
+                # a style is an instruction: direct sizes go, as in _set_style
+                self._clear_group(s, e, "size:")
+            if key:
+                self.buf.apply_tag(self._tag(key), s, e)
+
     def _set_style(self, name):
+        if self._para_is_blank():
+            self._queue_para("style:", "style:" + name)
         s, e = self._para_bounds()
         self._checkpoint()
         self._clear_group(s, e, "style:")
@@ -1481,6 +1691,8 @@ class Writer(nbapp.AppWindow):
         self._sync_toolbar()
 
     def _set_align(self, j):
+        if self._para_is_blank():
+            self._queue_para("align:", "align:" + j)
         s, e = self._para_bounds()
         self._checkpoint()
         self._clear_group(s, e, "align:")
@@ -1489,6 +1701,8 @@ class Writer(nbapp.AppWindow):
         self._sync_toolbar()
 
     def _set_spacing(self, name):
+        if self._para_is_blank():
+            self._queue_para("spacing:", "spacing:" + name)
         s, e = self._para_bounds()
         self._checkpoint()
         self._clear_group(s, e, "spacing:")
@@ -1499,7 +1713,12 @@ class Writer(nbapp.AppWindow):
         s, e = self._para_bounds()
         self._checkpoint()
         cur = self._para_indent_level(s)
+        if "indent:" in self._pending_para:      # already queued on this line
+            queued = self._pending_para["indent:"]
+            cur = int(queued.split(":")[1]) if queued else 0
         new = _clamp(cur + delta, 0, 8)
+        if self._para_is_blank():
+            self._queue_para("indent:", "indent:%d" % new if new else None)
         self._clear_group(s, e, "indent:")
         if new > 0:
             self.buf.apply_tag_by_name("indent:%d" % new, s, e)
@@ -1517,6 +1736,10 @@ class Writer(nbapp.AppWindow):
         self._checkpoint()
         tag = self.buf.get_tag_table().lookup("list:" + kind)
         on = s.has_tag(tag)
+        if "list:" in self._pending_para:        # already queued on this line
+            on = self._pending_para["list:"] == "list:" + kind
+        if self._para_is_blank():
+            self._queue_para("list:", None if on else "list:" + kind)
         self._clear_group(s, e, "list:")
         if not on:
             self.buf.apply_tag_by_name("list:" + kind, s, e)
@@ -1562,7 +1785,11 @@ class Writer(nbapp.AppWindow):
             self.body.grab_focus()
 
     def _on_size_combo(self, combo):
-        if self._syncing:
+        # A size PICKED from the list applies at once. Text TYPED into the box
+        # sets the combo's active row to -1 and arrives one character at a time
+        # ("1", then "18"), so it is committed on Return or when the box is
+        # left — otherwise the first keystroke of "18" applied 6pt.
+        if self._syncing or combo.get_active() < 0:
             return
         txt = combo.get_active_text() or ""
         try:
@@ -1570,7 +1797,68 @@ class Writer(nbapp.AppWindow):
         except (TypeError, ValueError):
             return
         sz = _clamp(sz, 6, 200)
+        self._restore_saved_selection()
         self._apply_value_tag("size:", "size:%d" % sz)
+        self._size_entry_was = str(sz)
+
+    SIZE_MIN, SIZE_MAX = 6, 200
+
+    def _on_size_entry_focus_moved(self, ent, _pspec=None):
+        if ent.is_focus():
+            return
+        self._commit_size(ent)
+
+    def _on_size_entry_activate(self, ent):
+        self._commit_size(ent)
+        # Return means "done with the box": the writing is in the document, so
+        # that is where the caret goes back to.
+        self.body.grab_focus()
+
+    def _commit_size(self, ent):
+        """Apply the size typed into the box, and say what was applied.
+
+        The box used to keep whatever was typed while quietly applying
+        something else: "9999" showed 9999 and applied 200, "abc" showed abc
+        and applied nothing at all, with no word either way."""
+        if self._loading:
+            return
+        txt = (ent.get_text() or "").strip()
+        if txt == (self._size_entry_was or "").strip():
+            return
+        limits = (_t("Size"), self.SIZE_MIN, self.SIZE_MAX)
+        try:
+            asked = int(float(txt))
+        except (TypeError, ValueError):
+            self._show_size(ent, self._size_entry_was or str(DEFAULT_SIZE))
+            self._flash(_t("%s must be a number from %d to %d") % limits)
+            return
+        sz = _clamp(asked, self.SIZE_MIN, self.SIZE_MAX)
+        self._restore_saved_selection()
+        self._apply_value_tag("size:", "size:%d" % sz)
+        self._show_size(ent, str(sz))
+        if sz != asked:
+            self._flash(_t("%s must be a number from %d to %d") % limits)
+
+    def _show_size(self, ent, text):
+        """Put `text` in the size box without it reading as a fresh edit."""
+        self._size_entry_was = text
+        was, self._syncing = self._syncing, True
+        try:
+            ent.set_text(text)
+        finally:
+            self._syncing = was
+
+    def _restore_saved_selection(self):
+        """Re-select what the page had selected before the size box took focus."""
+        sel, self._saved_sel = self._saved_sel, None
+        if not sel or self.buf.get_selection_bounds():
+            return
+        s, e = sel
+        if s == e:
+            return
+        n = self.buf.get_char_count()
+        self.buf.select_range(self.buf.get_iter_at_offset(_clamp(s, 0, n)),
+                              self.buf.get_iter_at_offset(_clamp(e, 0, n)))
 
     # matches the order the spacing combo is built in (see _toolbar)
     SPACING_ORDER = ("single", "onehalf", "double")
@@ -1587,6 +1875,17 @@ class Writer(nbapp.AppWindow):
     def _on_mark_set(self, buf, it, mark):
         if mark is buf.get_insert():
             self._pending.clear()
+            self._pending_para.clear()
+            # The selection as of the last CARET move. A GtkEntry taking focus
+            # claims the X PRIMARY selection, and the buffer answers that by
+            # collapsing its own selection onto the caret — moving the
+            # selection_bound mark and not this one. So the page's selection
+            # survives here for as long as the caret has not really moved,
+            # which is what lets a size typed into the toolbar box still land
+            # on the words that were selected before it was clicked.
+            bounds = buf.get_selection_bounds()
+            self._saved_sel = ((bounds[0].get_offset(), bounds[1].get_offset())
+                               if bounds else None)
             self._sync_toolbar()
 
     def _sync_toolbar(self):
@@ -1611,6 +1910,11 @@ class Writer(nbapp.AppWindow):
                     if name in self._pending:
                         return True
                     return self._char_active_at(probe, name)
+                # A paragraph format queued for a blank line IS the state of
+                # that line; the button has to stay lit until it is typed on.
+                group = name.split(":", 1)[0] + ":"
+                if group in self._pending_para:
+                    return self._pending_para[group] == name
                 tag = self.buf.get_tag_table().lookup(name)
                 return bool(tag and probe.has_tag(tag)) or name in self._pending
 
@@ -1629,6 +1933,9 @@ class Writer(nbapp.AppWindow):
                 if tag and probe.has_tag(tag):
                     cur_style = name
                     break
+            queued = self._pending_para.get("style:")
+            if queued:
+                cur_style = queued[len("style:"):]
             if cur_style in STYLE_ORDER:
                 self.style_combo.set_active(STYLE_ORDER.index(cur_style))
 
@@ -1638,7 +1945,8 @@ class Writer(nbapp.AppWindow):
             if fam in FONT_FAMILIES:
                 self.font_combo.set_active(FONT_FAMILIES.index(fam))
             sz = self._value_at(probe, "size:")
-            self.size_combo.get_child().set_text(sz or str(DEFAULT_SIZE))
+            self._show_size(self.size_combo.get_child(),
+                            sz or str(DEFAULT_SIZE))
 
             # spacing
             sp = "Single"
@@ -1646,6 +1954,10 @@ class Writer(nbapp.AppWindow):
                 tag = self.buf.get_tag_table().lookup("spacing:" + name)
                 if tag and probe.has_tag(tag):
                     sp = lbl
+            queued = self._pending_para.get("spacing:")
+            if queued:
+                sp = {"single": "Single", "onehalf": "1.5",
+                      "double": "Double"}.get(queued[len("spacing:"):], sp)
             idx = {"Single": 0, "1.5": 1, "Double": 2}[sp]
             self.spacing_combo.set_active(idx)
         finally:
@@ -1659,6 +1971,22 @@ class Writer(nbapp.AppWindow):
         return None
 
     def _flag(self, btn, on):
+        # ToggleButton exposes CHECKED/PRESSED to assistive technology; the CSS
+        # class remains the visual treatment. Gtk.ToggleButton.set_active
+        # emits "clicked" as well as "toggled" (gtk_toggle_button_set_active
+        # calls gtk_button_clicked), so mirroring the caret's formatting onto
+        # the button through plain set_active ran the button's EDIT handler:
+        # the caret entering bold text toggled bold off, which re-synced the
+        # toolbar, which toggled it back on -- RecursionError on every caret
+        # move through formatted text, and centring/lists applied to
+        # paragraphs nobody touched. set_active_quietly changes the state
+        # with the button's handlers blocked; the toolbar reflects, it never
+        # edits.
+        if isinstance(btn, Gtk.ToggleButton):
+            nbapp.set_active_quietly(btn, bool(on))
+        elif hasattr(btn, "set_active"):
+            # a stand-in without GObject signals (the format suite's Button)
+            btn.set_active(bool(on))
         ctx = btn.get_style_context()
         (ctx.add_class if on else ctx.remove_class)("on")
 
@@ -1691,6 +2019,8 @@ class Writer(nbapp.AppWindow):
     def _on_inserted(self, buf, it, text, length):
         if self._loading or self._restoring:
             return
+        if self._pending_para:
+            self._apply_pending_para(it)
         if not self._pending:
             return
         start = it.copy()
@@ -1746,6 +2076,24 @@ class Writer(nbapp.AppWindow):
         if self._count_timer is None:
             self._count_timer = GLib.timeout_add(150, self._count_tick)
         self.body.queue_draw()
+        if self._undo_timer:
+            GLib.source_remove(self._undo_timer)
+        self._undo_timer = GLib.timeout_add(600, self._undo_checkpoint_fire)
+
+    def _on_cell_changed(self, _buf=None):
+        """Typing in a table cell, on the same footing as typing on the page.
+
+        A cell is a Gtk.TextView of its own, so none of this app's document
+        machinery hangs off it: the chip kept saying "● Saved 14:23", no
+        autosave was armed, the words never reached the .writer file or the
+        recovery store, and File > New discarded them without asking, all while
+        they sat there on screen."""
+        if self._loading or self._restoring:
+            return
+        self._mark_dirty()
+        # The same 600ms checkpoint typing on the page arms — without it the
+        # newest snapshot predated the table, so Ctrl+Z with the caret in a
+        # cell rebuilt the document from before it and the table vanished.
         if self._undo_timer:
             GLib.source_remove(self._undo_timer)
         self._undo_timer = GLib.timeout_add(600, self._undo_checkpoint_fire)
@@ -1927,6 +2275,11 @@ class Writer(nbapp.AppWindow):
         lbl.get_style_context().add_class("swatchtitle")
         box.pack_start(lbl, False, False, 0)
         grid = Gtk.FlowBox()
+        # BOTH bounds. A FlowBox's natural width is one child wide unless a
+        # minimum is set, and the card sizes to natural — so the swatches came
+        # out as one 540px-tall column, one colour per row, rather than the
+        # compact grid set_max_children_per_line(6) reads as asking for.
+        grid.set_min_children_per_line(min(6, len(swatches)))
         grid.set_max_children_per_line(6)
         grid.set_selection_mode(Gtk.SelectionMode.NONE)
         for col in swatches:
@@ -1946,7 +2299,7 @@ class Writer(nbapp.AppWindow):
                 1000 + swatches.index(c)))
             grid.add(b)
         box.pack_start(grid, False, False, 0)
-        cancel = dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
+        cancel = dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
         cancel.get_style_context().add_class("tbbtn")
         dlg.show_all()
         resp = dlg.run()
@@ -2004,8 +2357,8 @@ class Writer(nbapp.AppWindow):
             lbl.set_margin_top(8)
             box.pack_start(lbl, False, False, 0)
             box.pack_start(entry, False, False, 0)
-        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        ok = dlg.add_button("Insert", Gtk.ResponseType.OK)
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button(_t("Insert"), Gtk.ResponseType.OK)
         # The action, not a toolbar control — same fix as Page setup's Apply.
         ok.get_style_context().add_class("suggested-action")
         ue.connect("activate", lambda *_: dlg.response(Gtk.ResponseType.OK))
@@ -2054,7 +2407,7 @@ class Writer(nbapp.AppWindow):
             self.buf.insert(it, "\n")
             it = self.buf.get_iter_at_mark(self.buf.get_insert())
         anchor = self.buf.create_child_anchor(it)
-        tbl = Table(data)
+        tbl = Table(data, self._on_cell_changed)
         self.body.add_child_at_anchor(tbl, anchor)
         tbl.show_all()
         self._tables[anchor] = tbl
@@ -2073,14 +2426,40 @@ class Writer(nbapp.AppWindow):
         # fall back to the last inserted table
         return next(iter(self._tables.values())) if self._tables else None
 
+    def _focused_cell(self):
+        """The table and (row, column) the keyboard focus is in, or (None, None)."""
+        try:
+            w = self.get_focus()
+        except Exception:                                         # noqa: BLE001
+            w = None
+        while w is not None:
+            for tbl in self._tables.values():
+                pos = tbl.cell_position(w)
+                if pos is not None:
+                    return tbl, pos
+            w = w.get_parent()
+        return None, None
+
     def _table_op(self, op):
-        tbl = self._current_table()
+        # Delete Row / Delete Column act on the row or column the caret is in.
+        # They always took the LAST one, so there was no way to delete the
+        # first row of a table and the row that went was not the one asked for.
+        # With the caret merely NEXT to a table (no cell focused) the last one
+        # is still the only sensible target, which is what _current_table's own
+        # best-effort fallback means.
+        tbl, pos = self._focused_cell()
+        if tbl is None:
+            tbl, pos = self._current_table(), None
         if not tbl:
             self._flash("Put the cursor by a table first.")
             return
         self._checkpoint()
-        {"add_row": tbl.add_row, "add_col": tbl.add_col,
-         "del_row": tbl.del_row, "del_col": tbl.del_col}[op]()
+        if op == "del_row":
+            tbl.del_row(pos[0] if pos else None)
+        elif op == "del_col":
+            tbl.del_col(pos[1] if pos else None)
+        else:
+            {"add_row": tbl.add_row, "add_col": tbl.add_col}[op]()
         self._mark_dirty()
 
     # =====================================================================
@@ -2194,8 +2573,13 @@ class Writer(nbapp.AppWindow):
 
     def _push_history(self):
         snap = self._snapshot()
+        # Table cell text is compared too: it is not in "body" (a table is one
+        # object character there), so a cell edit looked identical to the step
+        # before it and was coalesced away — the only record of what the cell
+        # used to say went with it.
         if self._hi >= 0 and self._history[self._hi].get("body") == snap.get("body") \
-                and self._history[self._hi].get("runs") == snap.get("runs"):
+                and self._history[self._hi].get("runs") == snap.get("runs") \
+                and self._history[self._hi].get("tables") == snap.get("tables"):
             self._history[self._hi] = snap    # coalesce (caret move only)
             return
         del self._history[self._hi + 1:]
@@ -2238,6 +2622,14 @@ class Writer(nbapp.AppWindow):
             self.buf.place_cursor(it)
         finally:
             self._restoring = False
+        # The rebuild destroys and remakes every table, so a caret that was in
+        # one of its cells has nowhere to be; put it back on the page rather
+        # than leaving the window with no focus at all.
+        try:
+            if self.get_focus() is None:
+                self.body.grab_focus()
+        except Exception:                                         # noqa: BLE001
+            pass
         self._update_wordcount()
         self._sync_toolbar()
         self.body.queue_draw()
@@ -2451,7 +2843,7 @@ class Writer(nbapp.AppWindow):
         self.buf.delete(it, e)
         it = self.buf.get_iter_at_offset(off)
         anchor = self.buf.create_child_anchor(it)
-        tbl = Table(tb.get("data"))
+        tbl = Table(tb.get("data"), self._on_cell_changed)
         self.body.add_child_at_anchor(tbl, anchor)
         tbl.show_all()
         self._tables[anchor] = tbl
@@ -2555,13 +2947,21 @@ class Writer(nbapp.AppWindow):
             return 15
 
     def _refresh_hf_labels(self):
-        self.header_lbl.set_text(self._header or "")
+        # BOTH bands go through the same substitution the PDF uses (see
+        # _expand_tokens). The header alone used to be set raw, so the band a
+        # writer looks at while typing showed "{title} p{page}" where the
+        # printed page shows the title and the number.
+        # The running header is the writer's own line — "Notes", "Body",
+        # "Chapter 1" — and the PDF prints it from the model, so a translated
+        # band meant the page on screen no longer matched the page that
+        # printed. Only the model is authoritative; the band shows it as typed.
+        nbi18n.set_verbatim(self.header_lbl,
+                            self._expand_tokens(self._header or "", 1))
         self.header_lbl.set_visible(bool(self._header))
         foot = self._footer or ""
         if self._page_numbers:
             foot = (foot + "     Page {page}").strip()
-        self.footer_lbl.set_text(foot.replace("{page}", "1").replace("{pages}", "1")
-                                 .replace("{title}", self._doc_title()))
+        nbi18n.set_verbatim(self.footer_lbl, self._expand_tokens(foot, 1))
         self.footer_lbl.set_visible(bool(foot))
 
     def _doc_title(self):
@@ -2645,8 +3045,8 @@ class Writer(nbapp.AppWindow):
         pn.set_active(self._page_numbers)
         grid.attach(pn, 1, 6, 3, 1)
 
-        dlg.add_button("Cancel", Gtk.ResponseType.CANCEL)
-        ok = dlg.add_button("Apply", Gtk.ResponseType.OK)
+        dlg.add_button(_t("Cancel"), Gtk.ResponseType.CANCEL)
+        ok = dlg.add_button(_t("Apply"), Gtk.ResponseType.OK)
         # The action, not a toolbar control: .tbbtn made Apply identical to
         # Cancel. suggested-action is the shared primary treatment.
         ok.get_style_context().add_class("suggested-action")
@@ -2654,10 +3054,11 @@ class Writer(nbapp.AppWindow):
         r = dlg.run()
         if r == Gtk.ResponseType.OK:
             si = size_c.get_active()
-            self._page = {
-                "size": size_keys[si] if 0 <= si < len(size_keys) else cur_size,
-                "orientation": "landscape" if orient_c.get_active() else "portrait",
-                "margins": [round(sp.get_value(), 2) for sp in spins]}
+            self._page = _page_with_setup(
+                self._page,
+                size_keys[si] if 0 <= si < len(size_keys) else cur_size,
+                "landscape" if orient_c.get_active() else "portrait",
+                [round(sp.get_value(), 2) for sp in spins])
             self._header = he.get_text()
             self._footer = fe.get_text()
             self._page_numbers = pn.get_active()
@@ -2705,9 +3106,13 @@ class Writer(nbapp.AppWindow):
     def _save_autosave(self):
         try:
             nbapp.atomic_write_json(DOC_FILE, self._serialize())
-        except OSError as exc:
+            self._last_store_error = None
+            return True
+        except Exception as exc:
+            self._last_store_error = exc
             self._flash(nbapp.save_failure_reason(exc, DOC_FILE), secs=9)
             self._set_save_chip(_t("Not saved"), ok=False)
+            return False
 
     def _mark_dirty(self, *_):
         if self._loading:
@@ -2728,14 +3133,19 @@ class Writer(nbapp.AppWindow):
 
     def _update_status(self):
         if self._path:
-            self.status.set_text(os.path.basename(self._path))
+            # The file's own name, which a document opened from the Finder can
+            # carry without an extension ("Notes", "Home").
+            nbi18n.set_verbatim(self.status, os.path.basename(self._path))
         else:
             self.status.set_text(_t("Unsaved document"))
 
     def _update_wordcount(self):
         text = self.buf.get_text(self.buf.get_start_iter(),
                                  self.buf.get_end_iter(), False)
-        words = len(text.split())
+        # A token has to have a letter or a digit in it to be a word. A plain
+        # split() counted a lone em dash or hyphen — "one — two" read as three
+        # words — which is not what a writer working to a word count means.
+        words = sum(1 for t in text.split() if any(c.isalnum() for c in t))
         # Words only. The character half read "1 chars" on a one-letter
         # document, and "chars" is an abbreviation that appears nowhere else in
         # the OS — Academics, Novel and Screenplay all show a word count and
@@ -2765,7 +3175,22 @@ class Writer(nbapp.AppWindow):
 
     def _flash(self, msg, secs=2.6):
         self.status.set_text(msg)
-        GLib.timeout_add(int(secs * 1000), self._update_status_return)
+        self._flash_id += 1
+        token = self._flash_id
+        if self._flash_timer:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:
+                pass
+
+        def restore():
+            if token != self._flash_id:
+                return False
+            self._flash_timer = None
+            self._update_status()
+            return False
+
+        self._flash_timer = GLib.timeout_add(int(secs * 1000), restore)
 
     def _update_status_return(self):
         self._update_status()
@@ -2812,7 +3237,14 @@ class Writer(nbapp.AppWindow):
 
     def _file_new(self):
         if not self._confirm_discard():
-            return
+            return False
+        previous = self._snapshot()
+        previous_path = self._path
+        previous_dirty = self._file_dirty
+        previous_history = copy.deepcopy(self._history)
+        previous_hi = self._hi
+        previous_setup = (self._page, self._header, self._footer,
+                          self._page_numbers)
         self._restoring = True
         try:
             self.buf.set_text("")
@@ -2821,10 +3253,54 @@ class Writer(nbapp.AppWindow):
             self._restoring = False
         self._path = None
         self._file_dirty = False
+        # A new document is a NEW document: it used to inherit the last one's
+        # paper, orientation, margins and header/footer, so File > New after a
+        # Legal landscape letter opened a blank sheet 1344px wide with the
+        # previous document's title still printed in its footer.
+        self._page = _sane_page({})
+        self._header = ""; self._footer = ""; self._page_numbers = False
+        self._apply_page_geometry()
         self._history = []; self._hi = -1
         self._push_history()
+        # New is a state-replacing action, not merely a visual reset. Commit its
+        # empty session recovery immediately; otherwise a crash before the first
+        # keystroke resurrects the document the person deliberately replaced.
+        if not self._save_autosave():
+            self._restoring = True
+            try:
+                self._deserialize(previous)
+                caret = previous.get("_caret", 0)
+                self.buf.place_cursor(self.buf.get_iter_at_offset(
+                    _clamp(caret, 0, self.buf.get_char_count())))
+            finally:
+                self._restoring = False
+            self._path = previous_path
+            self._file_dirty = previous_dirty
+            self._history = previous_history
+            self._hi = previous_hi
+            (self._page, self._header, self._footer,
+             self._page_numbers) = previous_setup
+            self._apply_page_geometry()
+            self._update_status(); self._update_wordcount()
+            self._sync_toolbar(); self.body.queue_draw()
+            return False
+        self._scroll_to_top()
         self._clear_save_chip()
         self._update_status(); self._update_wordcount()
+        return True
+
+    def _scroll_to_top(self):
+        """Show the top of the paper. Replacing the document left the desk
+        scrolled where the OLD one was, so a new page opened with its top edge
+        (and header band) out of view — on a long document, so far out of view
+        that typing the first word showed nothing on screen at all."""
+        try:
+            for adj in (self._scroll.get_vadjustment(),
+                        self._scroll.get_hadjustment()):
+                if adj is not None:
+                    adj.set_value(adj.get_lower())
+        except Exception:                                         # noqa: BLE001
+            pass
 
     def _file_open(self):
         if not self._confirm_discard():
@@ -2837,12 +3313,14 @@ class Writer(nbapp.AppWindow):
 
     def _open_file(self, path):
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                raw = fh.read()
-        except OSError:
+            source_bytes = _read_document_bytes(path)
+        except (OSError, ValueError):
             self._flash("Couldn't open that file.")
             return
-        if path.endswith(".writer"):
+        raw, decode_failed = _decode_text_bytes(source_bytes)
+        if _is_writer_path(path):
+            if decode_failed:
+                self._quarantine_pending = path
             try:
                 doc = json.loads(raw)
                 if not self._is_writer_store(doc):
@@ -2873,12 +3351,20 @@ class Writer(nbapp.AppWindow):
         self._page_numbers = doc["page_numbers"]
         self._deserialize(doc)
         self._apply_page_geometry()
-        self._path = path
-        self._file_dirty = False
+        plain_decode_failed = decode_failed and not _is_writer_path(path)
+        # Replacement characters are useful for recovery, but they must never
+        # be written over the only original bytes. Make the recovered text a
+        # new unsaved document so Ctrl+S routes through Save As.
+        self._path = None if plain_decode_failed else path
+        self._file_dirty = plain_decode_failed
         self._history = []; self._hi = -1
         self._push_history()
+        self._scroll_to_top()
         self._clear_save_chip()
         self._update_status(); self._update_wordcount(); self._sync_toolbar()
+        if plain_decode_failed:
+            self._flash(_t("Some text could not be decoded. Use Save As to "
+                           "preserve the original file."), secs=9)
 
     def _file_save(self):
         if not self._path:
@@ -2956,10 +3442,10 @@ class Writer(nbapp.AppWindow):
         return r == Gtk.ResponseType.OK
 
     def _write_file(self, path):
-        if not path.endswith(".writer") and not self._confirm_plain_text(path):
+        if not _is_writer_path(path) and not self._confirm_plain_text(path):
             return
         try:
-            if path.endswith(".writer"):
+            if _is_writer_path(path):
                 if getattr(self, "_quarantine_pending", None) == path:
                     nbapp.quarantine_unrecognized(path)
                     # Never replace the only damaged copy when the move-aside
@@ -2991,7 +3477,7 @@ class Writer(nbapp.AppWindow):
         # Name the shape that reached the disk. "Saved 19:43" on a .txt read
         # exactly like a lossless save, which is how the dropped formatting
         # stayed invisible.
-        if path.endswith(".writer"):
+        if _is_writer_path(path):
             self._set_save_chip(_t("Saved %s") % time.strftime("%H:%M"),
                                 ok=True)
         else:
@@ -3664,7 +4150,9 @@ class Writer(nbapp.AppWindow):
         return super()._on_key(w, ev)
 
     def _on_destroy(self, *_):
-        for attr in ("_save_timer", "_undo_timer", "_count_timer"):
+        self._flash_id += 1
+        for attr in ("_save_timer", "_undo_timer", "_count_timer",
+                     "_flash_timer"):
             tid = getattr(self, attr, None)
             if tid:
                 try:
@@ -3674,6 +4162,19 @@ class Writer(nbapp.AppWindow):
                 setattr(self, attr, None)
         self._save_autosave()
         return False
+
+    def _on_delete(self, *_):
+        """Keep the only copy of an unsaved document alive on write failure --
+        and SAY so, with a way out. A veto with no card is a window that
+        cannot be closed on a full disk (Esc only ever leaves in this OS)."""
+        if self._save_autosave():
+            return False
+        # A named document with no edits since its last successful File > Save
+        # is already durable even if the private recovery store is unavailable.
+        if self._path and not self._file_dirty:
+            return False
+        return not nbapp.close_unsaved_card(
+            self, getattr(self, "_last_store_error", None), DOC_FILE)
 
     # =====================================================================
     #  CSS — every surface explicitly backgrounded (no black leaks)
@@ -3731,6 +4232,13 @@ class Writer(nbapp.AppWindow):
         .savechip.dirty { color: #C8341E; }
         .swatchbox { background: #F8F7F2; padding: 16px 18px; }
         .swatchbox label { color: #2A2620; }
+        /* The action-area buttons live inside the .swatchbox content box, so
+           the rule above reached their labels too and beat Papertone's
+           `button.suggested-action label { color: #FCFBF8 }` (this provider is
+           installed at APPLICATION priority): "Insert" and "Apply" came out as
+           near-black text on an ink slab, unreadable. .dangerbtn sets its own
+           label colour, which is why Discard was fine and these two were not. */
+        .swatchbox button.suggested-action label { color: #FCFBF8; }
         /* Dialog headings share the OS-wide .dlghead size/weight (Papertone); this
            only adds the spacing below them. Before, these were bold but at the
            body size, so Writer's dialogs were the only ones whose heading did
@@ -3749,7 +4257,7 @@ class Writer(nbapp.AppWindow):
                      border: 1px solid #C8341E; border-radius: 8px;
                      box-shadow: none; font-weight: 600; }
         .dangerbtn:hover { background: #B12D19; border-color: #B12D19; }
-        .ghosthint { color: #9A9484; }
+        .ghosthint { color: #6E695E; }
         """ % {"desk": DESK, "sheet": SHEET}).encode()
         try:
             prov = Gtk.CssProvider()

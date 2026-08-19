@@ -97,7 +97,6 @@ _PUNCT = {
     "<": "‹«",
     ">": "›»",
     "$": "€£¥¢",
-    "0": "°",
 }
 
 
@@ -167,6 +166,7 @@ class DiacriticsPicker:
         self._sel = 0
         self._base = ""
         self._target = None      # text widget the palette will insert into
+        self._held_target = None # widget that received the initial plain key
         self._layer = None       # overlay layer (nbapp) ...
         self._popup = None       # ... or a popup window when there's no overlay
         self._dead = False
@@ -198,6 +198,7 @@ class DiacriticsPicker:
         self._cancel_hold()
         self._cancel_release()
         self._held = None
+        self._held_target = None
 
     # ---- eligibility ------------------------------------------------------
     def _focus_text(self):
@@ -261,6 +262,7 @@ class DiacriticsPicker:
         if not self._eligible(ev, ch):
             return False
         self._held = (kv, ch)
+        self._held_target = self._focus_text()
         self._hold_src = GLib.timeout_add(HOLD_MS, self._on_hold_elapsed)
         return False        # let the plain letter type normally
 
@@ -292,6 +294,17 @@ class DiacriticsPicker:
         if kv == Gdk.KEY_Escape:
             self._close()
             return True
+        # Modified keys belong to the app's accelerators, not the picker.
+        # Check this before digits/arrows/space: Ctrl+1 used to choose an
+        # accent, and Ctrl+Left used to move the palette selection instead of
+        # moving by a word in the editor. Dismiss first so the same event can
+        # continue through the window's normal shortcut handling.
+        modified = ev.state & (Gdk.ModifierType.CONTROL_MASK
+                               | Gdk.ModifierType.MOD1_MASK
+                               | Gdk.ModifierType.SUPER_MASK)
+        if modified:
+            self._close()
+            return False
         if Gdk.KEY_1 <= kv <= Gdk.KEY_9:
             self._commit(kv - Gdk.KEY_1)
             return True
@@ -309,10 +322,7 @@ class DiacriticsPicker:
         # palette opened, then consume the raw event. Modified/non-printable
         # keys still fall through so accelerators and editing keys keep working.
         ch = ev.string or ""
-        modified = ev.state & (Gdk.ModifierType.CONTROL_MASK
-                               | Gdk.ModifierType.MOD1_MASK
-                               | Gdk.ModifierType.SUPER_MASK)
-        if len(ch) == 1 and ch.isprintable() and not modified:
+        if len(ch) == 1 and ch.isprintable():
             tgt = self._target       # _close() deliberately clears this
             self._close()
             if tgt is None or not isinstance(tgt, Gtk.Widget):
@@ -337,6 +347,7 @@ class DiacriticsPicker:
             # its palette without allowing another copy into the text widget.
             if self._eligible(ev, ch):
                 self._held = (kv, ch)
+                self._held_target = self._focus_text()
                 self._hold_src = GLib.timeout_add(
                     HOLD_MS, self._on_hold_elapsed)
             return True
@@ -396,7 +407,7 @@ class DiacriticsPicker:
         base = self._held[1]
         items = TABLE.get(base) or ()
         tgt = self._focus_text()
-        if not items or tgt is None:
+        if not items or tgt is None or tgt is not self._held_target:
             self._abandon()
             return
         self._items = items
@@ -501,14 +512,48 @@ class DiacriticsPicker:
         """Fallback for windows without nbapp's overlay (e.g. a bare dialog)."""
         try:
             pop = Gtk.Window(type=Gtk.WindowType.POPUP)
+            # Pin an opaque system visual before realization. On compositor
+            # hardware an inherited RGBA visual can leave undecorated popup
+            # pixels black or transparent instead of paper-coloured.
+            screen = pop.get_screen()
+            if screen is not None and screen.get_system_visual() is not None:
+                pop.set_visual(screen.get_system_visual())
             pop.set_type_hint(Gdk.WindowTypeHint.TOOLTIP)
             pop.set_transient_for(self.win)
             pop.add(row)
-            gdkwin = self._target.get_window() or self.win.get_window()
+            if isinstance(self._target, Gtk.TextView):
+                gdkwin = self._target.get_window(Gtk.TextWindowType.WIDGET)
+            else:
+                gdkwin = self._target.get_window()
+            gdkwin = gdkwin or self.win.get_window()
             if gdkwin is not None:
                 res = gdkwin.get_origin()       # (x,y) or (ok,x,y) per binding
-                a = self._target.get_allocation()
-                pop.move(res[-2] + 6, res[-1] + a.height + 2)
+                root_x, root_y = res[-2], res[-1]
+                if isinstance(self._target, Gtk.TextView):
+                    buf = self._target.get_buffer()
+                    it = buf.get_iter_at_mark(buf.get_insert())
+                    caret = self._target.get_iter_location(it)
+                    wx, wy = self._target.buffer_to_window_coords(
+                        Gtk.TextWindowType.WIDGET, caret.x, caret.y)
+                    x, above = root_x + wx, root_y + wy
+                    y = above + caret.height + 2
+                else:
+                    a = self._target.get_allocation()
+                    x, above, y = root_x, root_y, root_y + a.height + 2
+                _minimum, natural = pop.get_preferred_size()
+                display = Gdk.Display.get_default()
+                monitor = display.get_monitor_at_window(gdkwin) if display else None
+                if monitor is not None:
+                    work = monitor.get_workarea()
+                    x = min(max(x + 6, work.x),
+                            max(work.x + work.width - natural.width, work.x))
+                    if y + natural.height > work.y + work.height:
+                        y = above - natural.height - 2
+                    y = min(max(y, work.y),
+                            max(work.y + work.height - natural.height, work.y))
+                else:
+                    x += 6
+                pop.move(int(x), int(y))
             pop.show_all()
             self._popup = pop
         except Exception:

@@ -107,9 +107,21 @@ def _rgb15(color, default=0):
         return (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10)
     s = str(color or "").strip()
     if s.startswith("#") and len(s) == 7:
-        r = int(s[1:3], 16); g = int(s[3:5], 16); b = int(s[5:7], 16)
+        try:
+            r = int(s[1:3], 16); g = int(s[3:5], 16); b = int(s[5:7], 16)
+        except ValueError:
+            return default & 0x7FFF
         return (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10)
     return default & 0x7FFF
+
+
+def _valid_model_color(color):
+    """Whether an explicitly supplied model colour has a recognized shape."""
+    if color in (None, "") or isinstance(color, int):
+        return True
+    if isinstance(color, (list, tuple)):
+        return len(color) == 3
+    return re.fullmatch(r"#[0-9A-Fa-f]{6}", str(color).strip()) is not None
 
 
 def _cstr(s):
@@ -2397,12 +2409,29 @@ def check_project(model):
     reported now, but as what it is: a variable set and never read, or read and
     never set, with the near-miss named when there is one.
     """
+    problems = []
+    rooms = model.get("rooms", []) if isinstance(model, dict) else []
+    if isinstance(rooms, list):
+        for index, room in enumerate(rooms):
+            if not isinstance(room, dict) or "bg" not in room:
+                continue
+            if not _valid_model_color(room.get("bg")):
+                name = str(room.get("name") or room.get("id")
+                           or "Room %d" % (index + 1))
+                problems.append(
+                    "%s — background colour must be #RRGGBB, an RGB triplet, "
+                    "or a 15-bit colour" % name)
     try:
         g = _Gen(model)
         g.generate()
-        return list(g.problems)
-    except Exception:
-        return []
+        problems.extend(g.problems)
+        return problems
+    except Exception as exc:
+        # Validation must never turn an unexpected generator failure into a
+        # false green result. Keep it actionable without exposing a traceback
+        # in the project-checking surface.
+        problems.append("Project validation could not finish: %s" % exc)
+        return problems
 
 
 # ---------------------------------------------------------------- build

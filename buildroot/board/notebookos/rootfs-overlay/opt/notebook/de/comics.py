@@ -33,6 +33,7 @@ import nbicons
 import nbpicker
 import nbprint
 import nbjobs
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 PAGE_PX_W = 1650
@@ -172,7 +173,7 @@ CSS = b"""
 .comics-lrow.active { background: #FCFBF8; box-shadow: inset 3px 0 0 #C8341E; }
 .comics-lname { font-size: 14px; color: #1A1916; }
 .comics-lrow.active .comics-lname { font-weight: 600; }
-.comics-lopacity { font-size: 11px; color: #9A9484; }
+.comics-lopacity { font-size: 11px; color: #6E695E; }
 .comics-eyebtn { min-width: 26px; min-height: 26px; padding: 0;
                  background: transparent; border: none; box-shadow: none; }
 .comics-prompt { background: #FCFBF8; border: 1px solid #1A1916;
@@ -223,9 +224,25 @@ def _rgb(hex_):
     return tuple(int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
 
 
-def view_pixel(x, y, zoom, width=PAGE_PX_W, height=PAGE_PX_H, clamp=False):
-    px = int(math.floor(float(x) / float(zoom)))
-    py = int(math.floor(float(y) / float(zoom)))
+def view_pixel(x, y, zoom, width=PAGE_PX_W, height=PAGE_PX_H, clamp=False,
+               size=1):
+    """Display coordinate -> one page pixel.
+
+    `size` is the width of the footprint about to be stamped. An EVEN
+    footprint has no middle pixel -- brush_runs emits it as -n/2..+n/2-1 --
+    so anchoring it on floor() adds the pointer's own sub-pixel remainder to
+    the same side and the ink lands up and to the left of the crosshair, by
+    more the bigger the brush. Rounding anchors it on the nearest boundary
+    instead, which is the best a pixel grid allows. Odd widths are symmetric
+    and keep floor(). Same fix, same reason, as illustrator.view_pixel -- see
+    the full account there."""
+    u, v = float(x) / float(zoom), float(y) / float(zoom)
+    if int(size) % 2 == 0:
+        px = int(math.floor(u + 0.5))
+        py = int(math.floor(v + 0.5))
+    else:
+        px = int(math.floor(u))
+        py = int(math.floor(v))
     if clamp:
         px = max(0, min(width - 1, px))
         py = max(0, min(height - 1, py))
@@ -1079,10 +1096,21 @@ def load_store(path):
         return ComicDocument(), False, []
     except Exception:
         return ComicDocument(), True, ["The recovery file could not be read."]
+    session = raw.pop("_session", None) if isinstance(raw, dict) else None
     doc, reports = ComicDocument.parse(raw)
     if doc is None:
         nbapp.quarantine_unrecognized(path)
         return ComicDocument(), True, ["The recovery file was not a Comics document."]
+    candidate = _resolve_path(session.get("doc_path")) \
+        if isinstance(session, dict) else None
+    if candidate and os.path.isfile(candidate):
+        try:
+            with open(candidate, encoding="utf-8") as fh:
+                bound, _ignored = ComicDocument.parse(json.load(fh))
+            if bound is not None:
+                doc.doc_path = candidate
+        except Exception:
+            pass
     return doc, False, reports
 
 
@@ -1101,10 +1129,11 @@ def _copy_surface(surface):
     return copy_surface
 
 
-def autosave_snapshot(doc):
+def autosave_snapshot(doc, doc_path=None):
     """Capture dirty pixels on the UI thread without PNG compression."""
     out = dict(doc._extra)
     out.update({"format": STORE_FORMAT, "app": "comics", "pages": []})
+    out["_session"] = {"doc_path": _portable_path(doc_path)}
     updates = []
     for page in doc.pages:
         saved = dict(page.get("_extra", {}))
@@ -1250,6 +1279,7 @@ class Comics(nbapp.AppWindow):
                 screen, self._provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         self.get_style_context().add_class("comics")
         self.doc, self._store_read_only, reports = load_store(COMICS_FILE)
+        self.doc_path = getattr(self.doc, "doc_path", None)
         if path:
             self._open_path(path)
         self._build_ui()
@@ -1364,6 +1394,7 @@ class Comics(nbapp.AppWindow):
             btn=Gtk.Button(); btn.set_relief(Gtk.ReliefStyle.NONE); btn.add(nbicons.image(icon,15)); btn.set_tooltip_text(_t(tip)); btn.connect("clicked",lambda _w,cb=cb:cb()); phead.pack_start(btn,False,False,0); self.page_buttons[ident]=btn
         side.pack_start(phead, False, False, 0)
         self.pages_box = Gtk.ListBox()
+        self.pages_box.connect("row-activated", self._on_page_activated)
         pages_sw = Gtk.ScrolledWindow()
         pages_sw.add(self.pages_box)
         side.pack_start(pages_sw, True, True, 0)
@@ -1379,6 +1410,7 @@ class Comics(nbapp.AppWindow):
             btn=Gtk.Button(); btn.set_relief(Gtk.ReliefStyle.NONE); btn.add(nbicons.image(icon,15)); btn.set_tooltip_text(_t(tip)); btn.connect("clicked",lambda _w,cb=cb:cb()); lhead.pack_start(btn,False,False,0); self.layer_buttons[ident]=btn
         side.pack_start(lhead,False,False,0)
         self.layers_box = Gtk.ListBox()
+        self.layers_box.connect("row-activated", self._on_layer_activated)
         layer_sw = Gtk.ScrolledWindow()
         layer_sw.set_size_request(-1, 220)
         layer_sw.add(self.layers_box)
@@ -1649,7 +1681,7 @@ class Comics(nbapp.AppWindow):
             return False
         if self._store_read_only:
             return False
-        snapshot, updates = autosave_snapshot(self.doc)
+        snapshot, updates = autosave_snapshot(self.doc, self.doc_path)
         generation = self._change_generation
 
         def work(job):
@@ -1694,6 +1726,19 @@ class Comics(nbapp.AppWindow):
         self._render_chip("saved")
         return True
 
+    def _on_page_activated(self, _box, row):
+        index = getattr(row, "_page_index", None)
+        if isinstance(index, int):
+            self._switch_page(index)
+
+    def _on_layer_activated(self, _box, row):
+        # Layer rows are displayed top-first, so retain their model index on
+        # the row rather than deriving it from ListBox position. The disabled
+        # one-layer hint intentionally has no such index and is a no-op.
+        index = getattr(row, "_layer_index", None)
+        if isinstance(index, int):
+            self._select_layer(index)
+
     def _refresh(self):
         if not hasattr(self, "pages_box"):
             return
@@ -1703,6 +1748,7 @@ class Comics(nbapp.AppWindow):
         total = len(self.doc.pages)
         for i in range(total):
             row = Gtk.ListBoxRow()
+            row._page_index = i
             row.get_style_context().add_class("comics-prow")
             box=Gtk.Box(spacing=8); thumb=Gtk.DrawingArea(); thumb.set_size_request(96,148); thumb._page_i=i; thumb.connect("draw",self._draw_thumbnail)
             box.pack_start(thumb,False,False,6)
@@ -1714,9 +1760,9 @@ class Comics(nbapp.AppWindow):
                 self.pages_box.select_row(row)
         page=self.doc.pages[self.doc.active]
         for index in reversed(range(len(page["layers"]))):
-            ly=page["layers"][index]; row=Gtk.ListBoxRow(); row.get_style_context().add_class("comics-lrow"); box=Gtk.Box(spacing=6)
+            ly=page["layers"][index]; row=Gtk.ListBoxRow(); row._layer_index=index; row.get_style_context().add_class("comics-lrow"); box=Gtk.Box(spacing=6)
             eye=Gtk.ToggleButton(); eye.set_relief(Gtk.ReliefStyle.NONE); eye.get_style_context().add_class("comics-eyebtn"); eye.set_active(ly.visible); eye.add(nbicons.image("eye" if ly.visible else "eyeoff",15)); eye.connect("toggled",lambda w,index=index:self._toggle_layer(index,w.get_active())); box.pack_start(eye,False,False,0)
-            lname=Gtk.Label(label=ly.name,xalign=0); lname.get_style_context().add_class("comics-lname"); lname.set_ellipsize(Pango.EllipsizeMode.END); box.pack_start(lname,True,True,0); opacity=Gtk.Label(label="%d%%"%ly.opacity); opacity.get_style_context().add_class("comics-lopacity"); box.pack_start(opacity,False,False,6); row.add(box); row.connect("button-press-event",lambda _w,_e,index=index:self._select_layer(index)); self.layers_box.add(row)
+            lname=Gtk.Label(xalign=0); nbi18n.set_verbatim(lname, ly.name); lname.get_style_context().add_class("comics-lname"); lname.set_ellipsize(Pango.EllipsizeMode.END); box.pack_start(lname,True,True,0); opacity=Gtk.Label(label="%d%%"%ly.opacity); opacity.get_style_context().add_class("comics-lopacity"); box.pack_start(opacity,False,False,6); row.add(box); row.connect("button-press-event",lambda _w,_e,index=index:self._select_layer(index)); self.layers_box.add(row)
             if index==self.active_layer:row.get_style_context().add_class("active");self.layers_box.select_row(row)
         if len(page["layers"])==1:
             hint=Gtk.ListBoxRow(); hint.set_sensitive(False)
@@ -2047,10 +2093,23 @@ class Comics(nbapp.AppWindow):
             return min(candidates)[1]
         return "move"
 
+    def _anchor_size(self):
+        """The footprint width that decides where a click ANCHORS.
+
+        The chosen brush size, never the pressure-modulated one: letting
+        pressure flip the anchor's parity between samples would make a stroke
+        jitter half a pixel sideways as the hand eased off. Tools that act on a
+        single pixel answer 1, which is floor() -- see view_pixel."""
+        if self.tool in ("pencil", "brush", "eraser", "line", "rect",
+                         "ellipse"):
+            return int(getattr(self, "size", 1) or 1)
+        return 1
+
     def _on_press(self, _widget, ev):
         if getattr(ev, "button", 1) != 1:
             return False
-        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True)
+        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True,
+                       size=self._anchor_size())
         self._cursor = p
         if self.tool in ("pencil", "brush", "eraser"):
             self._drawing = True; self._anchor = self._last = p; self._stroke_track = None
@@ -2080,7 +2139,8 @@ class Comics(nbapp.AppWindow):
         return False
 
     def _on_motion(self, _widget, ev):
-        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True); self._cursor = p
+        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True,
+                       size=self._anchor_size()); self._cursor = p
         self.pos_lbl.set_text("%d, %d" % p)
         if not self._drawing:
             self.canvas.queue_draw(); return True
@@ -2116,7 +2176,8 @@ class Comics(nbapp.AppWindow):
     def _on_release(self, _widget, ev):
         if not self._drawing:
             return False
-        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True); self._drawing = False
+        p = view_pixel(ev.x, ev.y, self.zoom, clamp=True,
+                       size=self._anchor_size()); self._drawing = False
         if self.tool in ("pencil", "brush", "eraser"):
             self._stroke_segment(self._last, p); self._commit_edit(self._stroke_track, self.tool.title())
         elif self.tool in ("line", "rect", "ellipse"):
@@ -2135,8 +2196,22 @@ class Comics(nbapp.AppWindow):
 
     def _on_scroll(self, _widget, ev):
         if getattr(ev, "state", 0) & Gdk.ModifierType.CONTROL_MASK:
+            if ev.direction == Gdk.ScrollDirection.UP:
+                step = 1
+            elif ev.direction == Gdk.ScrollDirection.DOWN:
+                step = -1
+            elif ev.direction == Gdk.ScrollDirection.SMOOTH:
+                try:
+                    ok, _dx, dy = ev.get_scroll_deltas()
+                except Exception:
+                    ok, dy = True, getattr(ev, "delta_y", 0.0)
+                if not ok or not dy:
+                    return False
+                step = 1 if dy < 0 else -1
+            else:
+                return False
             old=self.zoom; hx,hy=view_pixel(ev.x,ev.y,old)
-            self._step_zoom(-1 if ev.direction in (Gdk.ScrollDirection.DOWN, Gdk.ScrollDirection.LEFT) else 1)
+            self._step_zoom(step)
             hadj,vadj=self.mat.get_hadjustment(),self.mat.get_vadjustment(); hadj.set_value(max(hadj.get_lower(),min(hadj.get_upper()-hadj.get_page_size(),hx*self.zoom-ev.x))); vadj.set_value(max(vadj.get_lower(),min(vadj.get_upper()-vadj.get_page_size(),hy*self.zoom-ev.y)))
             return True
         return False
@@ -2392,6 +2467,12 @@ class Comics(nbapp.AppWindow):
         before = self._snapshot()
         if not fn():
             return False
+        # Page insertions, removals and moves change the meaning of every
+        # following numeric page index.  Neither cache may survive that
+        # remapping: otherwise a thumbnail/object overlay from the old page N
+        # is painted for the new page N until that page happens to be edited.
+        self._thumb_cache.clear()
+        self._object_overlay.clear()
         self._push(before, name)
         self._refresh()
         return True
@@ -2670,7 +2751,14 @@ class Comics(nbapp.AppWindow):
             return False
         self.doc, self.doc_path = doc, path
         self.doc.doc_path = path
-        return not reports
+        # parse() reports recoverable repairs (for example, replacing one
+        # unreadable layer) while still returning a valid ComicDocument.  The
+        # document has already been adopted here, so treating those reports as
+        # an open failure leaves the canvas and history showing the old model
+        # even though self.doc now points at the new one.
+        if reports:
+            self._flash(reports[0], False)
+        return True
 
     def _new(self):
         before = self._snapshot()
@@ -2689,7 +2777,10 @@ class Comics(nbapp.AppWindow):
     def _save(self):
         if not self.doc_path:
             return self._save_as()
-        return self._write_document(self.doc_path)
+        ok = self._write_document(self.doc_path)
+        if ok:
+            self._autosave()
+        return ok
 
     def _save_as(self):
         path = nbpicker.save_file(self, title="Save Comic As", start_dir=DOCS_DIR,
@@ -2698,6 +2789,7 @@ class Comics(nbapp.AppWindow):
         if path and self._write_document(path):
             self.doc_path = path
             self.doc.doc_path = path
+            self._autosave()
             self._refresh()
             return True
         return False
@@ -3043,3 +3135,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+def _portable_path(path):
+    if not path:
+        return None
+    try:
+        rel = os.path.relpath(path, NB_HOME)
+    except ValueError:
+        return path
+    return path if rel.startswith(os.pardir) or os.path.isabs(rel) else rel
+
+
+def _resolve_path(path):
+    if not path or os.path.isabs(path):
+        return path
+    return os.path.join(NB_HOME, path)

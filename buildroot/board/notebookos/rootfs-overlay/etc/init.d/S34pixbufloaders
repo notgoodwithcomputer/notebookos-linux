@@ -21,15 +21,18 @@
 #
 # Runs synchronously and early: it is a handful of small shared objects, and
 # the first thing the desktop does is draw icons.
-STAMP=/var/cache/gdk-pixbuf-loaders.stamp
+STAMP=${NB_PIXBUF_STAMP:-/var/cache/gdk-pixbuf-loaders.stamp}
 
 start() {
 	command -v gdk-pixbuf-query-loaders >/dev/null 2>&1 || return 0
-	dir=$(echo /usr/lib/gdk-pixbuf-2.0/*/loaders 2>/dev/null | head -1)
+	dir=${NB_PIXBUF_LOADER_DIR:-$(echo /usr/lib/gdk-pixbuf-2.0/*/loaders 2>/dev/null | head -1)}
 	[ -d "$dir" ] || return 0
 	cache="${dir%/loaders}/loaders.cache"
 	# Only redo the work when the loader set has actually changed.
-	sig=$(ls -1 "$dir" 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1)
+	# Cache contents describe what each binary can decode, not merely its name.
+	# Include file bytes so an in-place loader upgrade invalidates the cache.
+	sig=$( (cd "$dir" && md5sum libpixbufloader-*.so 2>/dev/null) \
+		| md5sum 2>/dev/null | cut -d' ' -f1)
 	if [ -f "$STAMP" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$sig" ]; then
 		return 0
 	fi

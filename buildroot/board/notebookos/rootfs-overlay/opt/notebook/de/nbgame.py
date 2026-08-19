@@ -95,7 +95,8 @@ class GameSession:
     Ctrl+Esc grab. Call run(); `on_exit` fires (on the GLib main loop) when the
     game ends by any route."""
 
-    def __init__(self, parent, vbam, rom, on_exit, scale_filter=None):
+    def __init__(self, parent, vbam, rom, on_exit, scale_filter=None,
+                 extra_args=None):
         self.parent = parent
         self.vbam = vbam
         self.rom = rom
@@ -104,6 +105,7 @@ class GameSession:
             sw, sh = _screen_size(parent)
             scale_filter = pick_scale_filter(sw, sh)
         self.scale_filter = scale_filter
+        self.extra_args = list(extra_args or [])
         self.proc = None
         self.stage = None
         self._banner = None
@@ -113,6 +115,7 @@ class GameSession:
         self._x = None
         self._poll_id = 0
         self._embed_id = 0
+        self._launch_id = 0
         self._embed_tries = 0
         self._embedded = False
         self._embed_win = 0
@@ -139,7 +142,7 @@ class GameSession:
         except Exception:
             pass
         # give the stage a moment to map (matchbox floats the dialog), then launch
-        GLib.timeout_add(250, self._launch)
+        self._launch_id = GLib.timeout_add(250, self._launch)
 
     def stop(self, why="external"):
         """End the game (used by every exit route: Ctrl+Esc grab, the stage key
@@ -197,6 +200,8 @@ class GameSession:
         # level as a backup to the server-side X grab.
         st.add_events(Gdk.EventMask.KEY_PRESS_MASK)
         st.connect("key-press-event", self._on_stage_key)
+        st.connect("delete-event", self._on_stage_delete)
+        st.connect("destroy", self._on_stage_destroy)
         _install_css()
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -230,6 +235,18 @@ class GameSession:
         # fade the banner text after a few seconds so it does not sit over play
         # forever (the Exit button stays fully visible)
         GLib.timeout_add_seconds(6, self._dim_banner)
+
+    def _on_stage_delete(self, *_args):
+        """Route the window manager's close action through normal cleanup."""
+        self.stop("window close")
+        return True
+
+    def _on_stage_destroy(self, *_args):
+        # Defensive path for toolkit/session teardown that skips delete-event.
+        # _finish marks done before destroying the stage, so this is idempotent.
+        if not self._done:
+            self.stop("stage destroyed")
+            self._finish()
 
     def _dim_banner(self):
         try:
@@ -272,11 +289,17 @@ class GameSession:
 
     # ---- launch + embed ---------------------------------------------------
     def _launch(self):
+        self._launch_id = 0
+        if self._done or self.stage is None:
+            # An exit can finish before this delayed callback is dispatched.
+            # Never start an emulator after its owning stage/session is gone.
+            return False
         # -f <n> is vbam's software stretch; its window is a fixed size that
         # matchbox/-F fullscreen won't grow, so the factor is chosen per panel
         # (pick_scale_filter) and the window centred inside the fullscreen
         # stage.
-        cmd = [self.vbam, "-f", self.scale_filter, self.rom]
+        cmd = ([self.vbam, "-f", self.scale_filter]
+               + self.extra_args + [self.rom])
         try:
             self._logfh = open(_log_path(), "w")
         except Exception:
@@ -351,6 +374,17 @@ class GameSession:
                     win = int(tok)
                 except ValueError:
                     continue
+                if how != "pid":
+                    # Class/title are only discovery fallbacks. They are not
+                    # ownership: an older or independently launched VBA-M has
+                    # the same values. Refuse it unless X says this exact child
+                    # owns the candidate window.
+                    owners = self._xdo(["getwindowpid", str(win)])
+                    try:
+                        if not owners or int(owners[0]) != pid:
+                            continue
+                    except (TypeError, ValueError):
+                        continue
                 w, h = _vbam_geom(win)
                 if w < 240 or h < 160:      # a GBA screen is 240x160
                     continue
@@ -529,7 +563,7 @@ class GameSession:
         if self._done:
             return False
         self._done = True
-        for src in ("_poll_id", "_embed_id", "_reassert_id"):
+        for src in ("_launch_id", "_poll_id", "_embed_id", "_reassert_id"):
             sid = getattr(self, src, 0)
             if sid:
                 try:

@@ -223,6 +223,7 @@ class Settings(nbapp.AppWindow):
     def __init__(self):
         super().__init__()
         self._install_css()
+        self._settings_quarantine_pending = False
         self._settings = self._load_settings()
         # "We are putting the window back, not editing it." Reopening on the
         # pane the user left walks the same _select the sidebar walks, so
@@ -232,6 +233,9 @@ class Settings(nbapp.AppWindow):
         self._restore = nbstate.RestoreScope()
         self._confirm_layer = None
         self._dt_source = None
+        self._pr_test_source = None
+        self._pr_reset_source = None
+        self._audio_source = None
         # Built by _page_datetime, but declared here: _apply_datetime writes to
         # it, and a method that reaches for a widget only some pages create is
         # the exact shape of the crash that stopped Settings opening at all
@@ -248,6 +252,8 @@ class Settings(nbapp.AppWindow):
         # window cancels it at the next file boundary instead of leaving it
         # copying to a stick nobody is watching any more. Article V §2.5/§2.6.
         self._bk_jobs = nbjobs.JobOwner(name="settings-backup")
+        self._audio_jobs = nbjobs.JobOwner(name="settings-audio")
+        self._audio_lock = threading.Lock()
         self.connect("destroy", self._on_destroy)
 
         body = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -294,7 +300,7 @@ class Settings(nbapp.AppWindow):
 
         self._rows = []
         for name, icon in SECTIONS:
-            row = Gtk.Button()
+            row = Gtk.ToggleButton()
             row.set_relief(Gtk.ReliefStyle.NONE)
             row.get_style_context().add_class("setrow")
             hb = Gtk.Box(spacing=12)
@@ -390,19 +396,28 @@ class Settings(nbapp.AppWindow):
         # pane, and it has nothing new to record.
         if not self._restore.active:
             self._settings[LAST_PANE] = name
-        for n, row in self._rows:
-            ctx = row.get_style_context()
-            if n == name:
-                ctx.add_class("selected")
-            else:
-                ctx.remove_class("selected")
+        # The sidebar rows are ToggleButtons and this method is their own
+        # "clicked" handler; set_active() emits "clicked", so lighting the row
+        # from in here re-entered _select for every row until the stack blew
+        # (every sidebar click and every View-menu switch recursed). Restate
+        # the row through choose_segment, which blocks each row's handler while
+        # it lights exactly one — the same fix the Finder list/grid pair uses.
+        nbapp.choose_segment(self._rows, name, "selected")
 
     def _on_page_switch(self, *_):
         # Fired by the stack whenever the visible page changes — build the
         # newly-shown page on first view.
         name = self.stack.get_visible_child_name()
-        if name:
-            self._ensure_built(name)
+        if not name:
+            return
+        if name == "Backup" and name in self._built:
+            # Pages are cached once built, so coming back to Backup would
+            # otherwise go on showing the size measured at first view; files
+            # saved since then are what the user is about to copy. Say the
+            # figure is being worked out again, then measure again.
+            self._bk_what_lbl.set_text(_t("Working out the size…"))
+            self._measure_backup()
+        self._ensure_built(name)
 
     def _ensure_built(self, name):
         # Build a page's content into its placeholder the first time it is
@@ -501,13 +516,20 @@ class Settings(nbapp.AppWindow):
         lbl.get_style_context().add_class("setgroup")
         parent.pack_start(lbl, False, False, 0)
 
-    def _row_widget(self, card, label, widget, first=False, sub=None):
+    def _row_widget(self, card, label, widget, first=False, sub=None,
+                    label_is_users=False):
         r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         r.get_style_context().add_class("setitem")
         if not first:
             r.get_style_context().add_class("bordered")
         lblbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        lbl = Gtk.Label(label=label, xalign=0)
+        lbl = Gtk.Label(xalign=0)
+        if label_is_users:
+            # A printer queue, an account, a volume: named by the person, and
+            # "Home", "Work" and "Office" are all catalog words.
+            nbi18n.set_verbatim(lbl, label)
+        else:
+            lbl.set_text(label)
         lbl.get_style_context().add_class("setlabel")
         lblbox.pack_start(lbl, False, False, 0)
         if sub:
@@ -526,12 +548,20 @@ class Settings(nbapp.AppWindow):
         card.pack_start(r, False, False, 0)
         return r
 
-    def _value_row(self, card, label, value, first=False):
-        val = Gtk.Label(label=value, xalign=1)
+    def _value_row(self, card, label, value, first=False,
+                   value_is_users=False, label_is_users=False):
+        val = Gtk.Label(xalign=1)
+        if value_is_users:
+            # A computer name, an account name, a full name: typed by the
+            # person, so the About page must echo what they typed.
+            nbi18n.set_verbatim(val, value)
+        else:
+            val.set_text(value)
         val.get_style_context().add_class("setvalue")
         val.set_line_wrap(True)
         val.set_max_width_chars(46)
-        return self._row_widget(card, label, val, first=first)
+        return self._row_widget(card, label, val, first=first,
+                                label_is_users=label_is_users)
 
     def _note(self, col, text):
         note = Gtk.Label(xalign=0)
@@ -577,9 +607,36 @@ class Settings(nbapp.AppWindow):
         self._row_widget(card, label, sw, first=first, sub=sub)
         return sw
 
-    def _on_pref_switch(self, _sw, state, key, on_change):
+    def _on_pref_switch(self, sw, state, key, on_change):
+        missing = object()
+        previous = self._settings.get(key, missing)
         self._settings[key] = bool(state)
-        self._save_settings()
+        if not self._save_settings():
+            # state-set runs before GTK changes the switch. Refuse that visual
+            # transition and restore the in-memory preference when its bytes
+            # could not be committed; applying the accessibility callback here
+            # would otherwise change the live desktop only to revert at boot.
+            if previous is missing:
+                self._settings.pop(key, None)
+            else:
+                self._settings[key] = previous
+            # Returning True keeps the switch's STATE where it was, but GTK
+            # has already flipped its "active" flag — the one the knob is
+            # drawn from — so the switch painted ON over a preference that
+            # was neither saved nor applied. Put the flag back too, with this
+            # handler blocked so the reset is not itself another attempt.
+            was = bool(previous) if previous is not missing else False
+            sw.handler_block_by_func(self._on_pref_switch)
+            try:
+                sw.set_active(was)
+            finally:
+                sw.handler_unblock_by_func(self._on_pref_switch)
+            # And say why, on the page the switch is on. The reason is the
+            # shared durability wording _save_settings already worked out.
+            self._set_pref_error(getattr(self, "_save_error", None)
+                                 or _t("This could not be saved."))
+            return True
+        self._set_pref_error("")
         if on_change:
             try:
                 on_change(bool(state))
@@ -587,24 +644,63 @@ class Settings(nbapp.AppWindow):
                 pass
         return False
 
+    def _set_pref_error(self, text):
+        # The Accessibility page's own status note (the only page built from
+        # _pref_switch); hidden while it has nothing to say, like the Sound
+        # page's, so a page that has never failed shows no blank strip.
+        label = getattr(self, "_pref_error_label", None)
+        if label is None:
+            return
+        label.set_text(text)
+        label.set_visible(bool(text))
+
     # ---- persistence ----
     def _load_settings(self):
         try:
             with open(CFG_FILE) as fh:
                 data = json.load(fh)
             if isinstance(data, dict):
+                self._settings_baseline = dict(data)
                 return data
             # Valid JSON in an alien shape will not be caught by the shared
             # parse-damage guard at save time. Preserve it now, before the
             # empty settings default can replace the only copy.
             nbapp.quarantine_unrecognized(CFG_FILE)
+            self._settings_quarantine_pending = os.path.exists(CFG_FILE)
         except Exception:
             pass
+        self._settings_baseline = {}
         return {}
 
     def _save_settings(self):
         try:
-            nbapp.atomic_write_json(CFG_FILE, self._settings)
+            desired = dict(self._settings)
+            baseline = dict(getattr(self, "_settings_baseline", {}))
+
+            def merge(current):
+                # Publish only fields this Settings process changed since its
+                # last successful read/write. A media-key daemon may have
+                # updated sound fields meanwhile; copying our stale whole
+                # snapshot would erase that independent change.
+                for key in set(baseline) | set(desired):
+                    old = baseline.get(key, object())
+                    new = desired.get(key, object())
+                    if old == new:
+                        continue
+                    if key in desired:
+                        current[key] = desired[key]
+                    else:
+                        current.pop(key, None)
+                return current
+
+            recover = (nbapp.quarantine_unrecognized
+                       if getattr(self, "_settings_quarantine_pending", False)
+                       else None)
+            published = nbapp.atomic_update_json(
+                CFG_FILE, merge, recover_unrecognized=recover)
+            self._settings_quarantine_pending = False
+            self._settings = published
+            self._settings_baseline = dict(published)
             self._save_error = None
             return True
         except Exception as exc:
@@ -619,7 +715,31 @@ class Settings(nbapp.AppWindow):
 
     def _on_destroy(self, *_):
         self._alive = False
+        self._audio_jobs.close()
         self._backup_close()
+        src = getattr(self, "_audio_source", None)
+        if src is not None:
+            try:
+                GLib.source_remove(src)
+            except Exception:
+                pass
+            self._audio_source = None
+        # A queued test page can remain in CUPS for a while.  Do not let its
+        # poll retain this window or touch a button after the page is gone.
+        src = getattr(self, "_pr_test_source", None)
+        if src is not None:
+            try:
+                GLib.source_remove(src)
+            except Exception:
+                pass
+            self._pr_test_source = None
+        src = getattr(self, "_pr_reset_source", None)
+        if src is not None:
+            try:
+                GLib.source_remove(src)
+            except Exception:
+                pass
+            self._pr_reset_source = None
         # Stop the Date & Time clock ticker so nothing fires after teardown.
         src = getattr(self, "_dt_source", None)
         if src is not None:
@@ -839,16 +959,24 @@ class Settings(nbapp.AppWindow):
             return
         # Persistent file first, then apply live. hostnamectl if present does
         # both; fall back to the plain `hostname` command + file write.
+        persisted = False
         try:
             with open("/etc/hostname", "w") as fh:
                 fh.write(name + "\n")
+            persisted = True
         except OSError:
-            pass
+            persisted = False
         if have("hostnamectl"):
-            run(["hostnamectl", "set-hostname", name])
+            rc, _out = run(["hostnamectl", "set-hostname", name])
+            saved = (rc == 0)
         else:
-            run(["hostname", name])
-        self._set_status(self._host_status, "Saved", warn=False)
+            rc, _out = run(["hostname", name])
+            saved = (persisted and rc == 0)
+        if saved:
+            self._set_status(self._host_status, "Saved", warn=False)
+        else:
+            self._set_status(self._host_status,
+                             "Could not save the device name", warn=True)
 
     def _system_rows(self):
         rows = []
@@ -980,6 +1108,8 @@ class Settings(nbapp.AppWindow):
         ctl.add_widget(scombo)
         self._row_widget(card, "Size of everything", scombo)
 
+        self._res_status = self._note(col, "")
+
         if not out:
             self._note(col, "This screen cannot be adjusted from here.")
         return outer
@@ -1035,11 +1165,17 @@ class Settings(nbapp.AppWindow):
     def _x_current(self, out, o=None):
         if o is None:
             _rc, o = run(["xrandr"])
+        in_output = False
         for line in o.splitlines():
-            if line.startswith(out) and "*" in line:
-                for tok in line.split():
-                    if "x" in tok and tok[0].isdigit():
-                        return tok
+            if line.startswith(out + " ") or line.startswith(out + "\t"):
+                in_output = True
+                continue
+            if in_output and line and not line[0].isspace():
+                break
+            if in_output and "*" in line:
+                fields = line.strip().split()
+                if fields and "x" in fields[0] and fields[0][0].isdigit():
+                    return fields[0]
         for line in o.splitlines():
             if "*" in line:
                 return line.strip().split()[0]
@@ -1054,34 +1190,60 @@ class Settings(nbapp.AppWindow):
         modes = getattr(self, "_res_modes", [])
         mode = modes[i] if 0 <= i < len(modes) else None
         if mode and out:
-            nbprefs.apply_resolution(mode, out)
-            self._settings["display_resolution"] = mode
-            self._save_settings()
+            if nbprefs.apply_resolution(mode, out):
+                self._set_status(self._res_status, "", warn=False)
+                self._settings["display_resolution"] = mode
+                self._save_settings()
+            else:
+                self._set_status(
+                    self._res_status,
+                    _t("This screen cannot be adjusted from here."), warn=True)
 
     def _on_scale(self, combo, out):
         i = combo.get_active()
         if not (0 <= i < len(self._scale_vals)) or not out:
             return
         f = self._scale_vals[i]
-        run(["xrandr", "--output", out, "--scale", "%sx%s" % (f, f)])
-        self._settings["display_scale"] = f
-        self._save_settings()
+        if nbprefs.apply_scale(f, out):
+            self._set_status(self._res_status, "", warn=False)
+            self._settings["display_scale"] = f
+            self._save_settings()
+        else:
+            self._set_status(
+                self._res_status,
+                _t("This screen cannot be adjusted from here."), warn=True)
 
     # ---- Sound ----
     def _page_sound(self):
         outer, col = self._page("Sound",
                                 "Where sound comes out, and how loud it is")
+        self._sound_error_label = self._note(
+            col, getattr(self, "_sound_action_error", ""))
+        self._sound_error_label.get_style_context().add_class("setwarn")
+        # No-show-all: the page is show_all()'d after it is built, and that
+        # re-revealed the hidden empty note as a blank strip under the title
+        # rule, which then vanished (and the page jumped up) at the first
+        # slider move. Only _set_sound_error shows or hides it.
+        self._sound_error_label.set_no_show_all(True)
+        self._sound_error_label.set_visible(
+            bool(getattr(self, "_sound_action_error", "")))
+        if getattr(self, "_audio_save_error", False):
+            warning = self._note(
+                col, "The sound output changed for now, but could not be saved. "
+                     "It may change back after restarting.")
+            warning.get_style_context().add_class("setwarn")
         # WHICH SPEAKERS. A television on HDMI has its own sound device, and
         # nothing used to point at it, so a film played on the TV came out of the
         # laptop's own speakers -- or out of nothing at all. This row is the one
         # place that can be said and changed. See de/nbaudio.py.
         outs = nbaudio.outputs()
-        if not outs and not self._has_ctl("Master"):
+        playback_ctl = nbaudio.playback_control()
+        if not outs and not playback_ctl:
             card = self._card(col)
             self._value_row(card, "Sound", "No speakers or sound card found",
                             first=True)
-            self._note(col, "Plug in speakers or headphones, or switch on the "
-                            "sound device, then open Sound again.")
+            self._note(col, "Connect speakers/headphones or enable audio; "
+                            "reopen Sound.")
             return outer
         cur = nbaudio.current()
         if len(outs) > 1:
@@ -1100,20 +1262,18 @@ class Settings(nbapp.AppWindow):
             now = next((o for o in outs if o["key"] == cur), None)
             self._value_row(ocard, "Playing through",
                             now["label"] if now else "Not known")
-            self._note(col, "Follow the screen sends sound to a television "
-                            "while one is plugged into HDMI, and back to the "
-                            "built-in speakers when it is unplugged.")
+            self._note(col, "Automatic: connected HDMI TV; otherwise built-in "
+                            "speakers.")
         # HDMI carries no volume of its own: the television's own remote is the
         # volume control. A slider here would move a number and change nothing.
         if not nbaudio.has_volume(cur):
             self._grouplabel(col, "Volume")
             hcard = self._card(col)
             self._value_row(hcard, "Volume", "Set on the television", first=True)
-            self._note(col, "Sound is going out over HDMI, so the television "
-                            "sets how loud it is — use its own volume control "
-                            "or its remote.")
+            self._note(col, "HDMI volume is controlled by the television or "
+                            "its remote.")
             return outer
-        if not self._has_ctl("Master"):
+        if not playback_ctl:
             # An output exists but the card exposes no level control to move --
             # some HDMI-only and USB devices have none. Say so, because a page
             # that stops here would be a heading over nothing at all.
@@ -1125,12 +1285,13 @@ class Settings(nbapp.AppWindow):
             return outer
         self._grouplabel(col, "Speakers and headphones")
         card = self._card(col)
-        vol = self._get_volume("Master")
+        self._playback_ctl = playback_ctl
+        vol = self._get_volume(playback_ctl)
         adj = Gtk.Adjustment(value=vol, lower=0, upper=100, step_increment=5)
         scale = self._percent_scale(adj, self._on_vol)
         self._row_widget(card, "Volume", scale, first=True)
         mute = nbapp.PaperSwitch()
-        mute.set_active(self._get_mute())
+        mute.set_active(self._get_mute(playback_ctl))
         mute.connect("state-set", self._on_mute)
         self._row_widget(card, "Silence all sound", mute)
 
@@ -1152,14 +1313,32 @@ class Settings(nbapp.AppWindow):
         # A 0-100 slider whose readout is a whole percentage. The GTK default
         # draws one decimal place, so every volume read "100.0" — a number with
         # no unit and a decimal nobody asked for.
+        #
+        # The readout is a label of its own beside the slider, not the scale's
+        # built-in value: GTK sets that value flush against the trough, and the
+        # Papertone knob (16px on a 6px track) overhangs the trough's end, so at
+        # 100% the knob sat on top of the "1". A fixed measure (five character
+        # widths hold "100%", whose per-cent sign is wider than a digit) keeps
+        # the slider from shifting as the number changes width, and the two
+        # sliders on the page in one column.
         scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL, adjustment=adj)
         scale.set_size_request(280, -1)
-        scale.set_draw_value(True)
+        scale.set_draw_value(False)
         scale.set_digits(0)
-        scale.set_value_pos(Gtk.PositionType.RIGHT)
-        scale.connect("format-value", lambda _s, v: "%d%%" % round(v))
+        readout = Gtk.Label(xalign=1)
+        readout.get_style_context().add_class("setvalue")
+        readout.set_width_chars(5)
+
+        def _show(sc):
+            readout.set_text("%d%%" % round(sc.get_value()))
+        _show(scale)
+        scale.connect("value-changed", _show)
         scale.connect("value-changed", on_change)
-        return scale
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.pack_start(scale, False, False, 0)
+        row.pack_start(readout, False, False, 0)
+        row.readout = readout
+        return row
 
     def _amixer(self, card=None):
         # No -c means ctl.!default, which nbaudio pins to the card that plays.
@@ -1178,8 +1357,11 @@ class Settings(nbapp.AppWindow):
         m = re.search(r"\[(\d+)%\]", o)
         return int(m.group(1)) if m else 50
 
-    def _get_mute(self):
-        rc, o = run(["amixer", "sget", "Master"])
+    def _get_mute(self, ctl=None):
+        ctl = ctl or nbaudio.playback_control(require_switch=True)
+        if not ctl:
+            return False
+        rc, o = run(["amixer", "sget", ctl])
         if rc != 0:
             return False
         m = re.search(r"\[(on|off)\]", o)
@@ -1193,23 +1375,62 @@ class Settings(nbapp.AppWindow):
     # this OS has already shipped twice. Written down as well as applied;
     # session.sh reads them back before it falls back to its defaults.
     def _on_vol(self, scale):
+        if getattr(self, "_sound_syncing", False):
+            return
         level = int(scale.get_value())
-        run(["amixer", "sset", "Master", "%d%%" % level])
+        ctl = getattr(self, "_playback_ctl", None) or nbaudio.playback_control()
+        if not ctl:
+            return
+        previous = self._get_volume(ctl)
+        rc, _ = run(["amixer", "sset", ctl, "%d%%" % level])
+        if rc != 0:
+            self._set_sound_error(_t("Volume cannot be adjusted from here."))
+            self._sound_syncing = True
+            scale.set_value(previous)
+            self._sound_syncing = False
+            return
         self._settings["sound.volume"] = level
-        self._save_settings()
+        self._set_sound_error("" if self._save_settings() else
+                              _t("This could not be saved."))
 
     def _on_capvol(self, scale):
+        if getattr(self, "_sound_syncing", False):
+            return
         level = int(scale.get_value())
-        run(self._amixer(nbaudio.capture_card())
-            + ["sset", "Capture", "%d%%" % level])
+        card = nbaudio.capture_card()
+        previous = self._get_volume("Capture", card=card)
+        rc, _ = run(self._amixer(card) + ["sset", "Capture", "%d%%" % level])
+        if rc != 0:
+            self._set_sound_error(_t("Volume cannot be adjusted from here."))
+            self._sound_syncing = True
+            scale.set_value(previous)
+            self._sound_syncing = False
+            return
         self._settings["sound.capture"] = level
-        self._save_settings()
+        self._set_sound_error("" if self._save_settings() else
+                              _t("This could not be saved."))
 
     def _on_mute(self, _sw, state):
-        run(["amixer", "sset", "Master", "mute" if state else "unmute"])
+        ctl = (getattr(self, "_playback_ctl", None) or
+               nbaudio.playback_control(require_switch=True))
+        if not ctl:
+            return False
+        rc, _ = run(["amixer", "sset", ctl,
+                     "mute" if state else "unmute"])
+        if rc != 0:
+            self._set_sound_error(_t("Volume cannot be adjusted from here."))
+            return True
         self._settings["sound.muted"] = bool(state)
-        self._save_settings()
+        self._set_sound_error("" if self._save_settings() else
+                              _t("This could not be saved."))
         return False
+
+    def _set_sound_error(self, text):
+        self._sound_action_error = text
+        label = getattr(self, "_sound_error_label", None)
+        if label is not None:
+            label.set_text(text)
+            label.show() if text else label.hide()
 
     def _on_audio_out(self, combo):
         """Send sound somewhere else, and redraw the page around the choice.
@@ -1218,19 +1439,32 @@ class Settings(nbapp.AppWindow):
         television owns the level) and moving back brings it in, so leaving the
         old controls on screen would leave a slider there that does nothing.
 
-        Both halves are deferred to an idle callback rather than run here.
+        Rebuilding is deferred, while route selection runs on a worker.
         Rebuilding the page DESTROYS this very combo box, and destroying a widget
         from inside its own signal emission is how you get GTK warnings and a
         use-after-free; and nbaudio.choose spawns a dozen amixer processes, which
         has no business happening inside a "changed" handler on the UI thread.
         """
         key = combo.get_active_id() or None
-        GLib.idle_add(self._apply_audio_out, key)
+        self._audio_jobs.start(
+            "route", lambda job: self._choose_audio(job, key),
+            on_done=self._audio_applied,
+            on_error=lambda _exc: self._audio_applied(None),
+            policy=nbjobs.REPLACE)
 
-    def _apply_audio_out(self, key):
-        nbaudio.choose(key)
+    def _choose_audio(self, job, key):
+        # Serialize the side effects.  A superseded route may already be in a
+        # blocking amixer call; the newest choice waits and is therefore the
+        # final route applied rather than racing the older subprocess.
+        with self._audio_lock:
+            job.checkpoint()
+            return nbaudio.choose(key)
+
+    def _audio_applied(self, result):
+        if not self._alive:
+            return
+        self._audio_save_error = result is None
         self._reopen_page("Sound")
-        return False
 
     # No Network section. This kernel carries no IP stack, so the page could
     # only ever list the loopback device and the words for its state -- and the
@@ -1267,7 +1501,7 @@ class Settings(nbapp.AppWindow):
         self._pr_add_status = None
         self._printers_build_add()
 
-        self._note(col, "Connect a printer by USB and switch it on, then press "
+        self._note(col, "Connect and power on a USB printer; then select "
                         "Find printers.")
         return outer
 
@@ -1297,11 +1531,11 @@ class Settings(nbapp.AppWindow):
         if info and info != name:
             bits.append(info)
         if ready:
-            bits.append("Ready")
+            bits.append(_t("Ready"))
         else:
             # "Paused" on its own is the least useful thing this row can say at
             # the moment a document did not come out. CUPS knows why.
-            bits.append(nbprint.printer_stopped(name) or "Paused")
+            bits.append(nbprint.printer_stopped(name) or _t("Paused"))
         sub = "  ·  ".join(bits)
 
         box = Gtk.Box(spacing=6)
@@ -1323,7 +1557,8 @@ class Settings(nbapp.AppWindow):
         xb.get_style_context().add_class("setbtn")
         xb.connect("clicked", self._on_printer_remove, name)
         box.pack_start(xb, False, False, 0)
-        self._row_widget(card, name, box, first=first, sub=sub)
+        self._row_widget(card, name, box, first=first, sub=sub,
+                         label_is_users=True)
 
     # ---- add flow ----
     def _printers_build_add(self):
@@ -1340,7 +1575,11 @@ class Settings(nbapp.AppWindow):
         self._pr_dev_combo = Gtk.ComboBoxText()
         if devices:
             for _uri, label in devices:
-                self._pr_dev_combo.append_text(label)
+                # A vendor/model string off the USB bus, not a word of ours.
+                try:
+                    self._pr_dev_combo.append(None, label)
+                except Exception:
+                    self._pr_dev_combo.append_text(label)
             self._pr_dev_combo.set_active(0)
         else:
             self._pr_dev_combo.append_text("No USB printer detected")
@@ -1864,6 +2103,13 @@ class Settings(nbapp.AppWindow):
         # back to nothing but a status line if the spool fails). Non-blocking to
         # the extent that submit is a quick `lp` hand-off.
         import tempfile
+        old_reset = getattr(self, "_pr_reset_source", None)
+        if old_reset is not None:
+            try:
+                GLib.source_remove(old_reset)
+            except Exception:
+                pass
+            self._pr_reset_source = None
         try:
             fd, path = tempfile.mkstemp(suffix=".pdf", prefix="nbtest-")
             os.close(fd)
@@ -1880,7 +2126,7 @@ class Settings(nbapp.AppWindow):
             pass
         if not ok:
             btn.set_label(_t("Test failed"))
-            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            self._schedule_test_reset(btn)
             return
         # `lp` returning 0 only means the job was QUEUED. Reporting "Sent" there
         # and stopping is what let a printer that receives a job and prints
@@ -1888,27 +2134,53 @@ class Settings(nbapp.AppWindow):
         # out. So watch the queue until the job clears or the printer stops.
         btn.set_label(_t("Printing…"))
         self._pr_test_ticks = 0
-        GLib.timeout_add(1500, self._poll_test, btn, name)
+        old = getattr(self, "_pr_test_source", None)
+        if old is not None:
+            try:
+                GLib.source_remove(old)
+            except Exception:
+                pass
+        self._pr_test_source = GLib.timeout_add(
+            1500, self._poll_test, btn, name)
 
     def _poll_test(self, btn, name):
+        if not getattr(self, "_alive", False):
+            self._pr_test_source = None
+            return False
         self._pr_test_ticks = getattr(self, "_pr_test_ticks", 0) + 1
         why = nbprint.printer_stopped(name)
         if why:
+            self._pr_test_source = None
             # The row is rebuilt with the reason on it, so this button goes
             # away; set nothing on it afterwards.
             self._printers_refresh()
             return False
         if not nbprint.jobs_pending(name):
+            self._pr_test_source = None
             btn.set_label(_t("Printed"))
-            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            self._schedule_test_reset(btn)
             return False
         if self._pr_test_ticks > 60:        # ~90s, longer than any first page
+            self._pr_test_source = None
             btn.set_label(_t("Sent"))
-            GLib.timeout_add_seconds(4, self._reset_test_btn, btn)
+            self._schedule_test_reset(btn)
             return False
         return True
 
+    def _schedule_test_reset(self, btn):
+        old = getattr(self, "_pr_reset_source", None)
+        if old is not None:
+            try:
+                GLib.source_remove(old)
+            except Exception:
+                pass
+        self._pr_reset_source = GLib.timeout_add_seconds(
+            4, self._reset_test_btn, btn)
+
     def _reset_test_btn(self, btn):
+        self._pr_reset_source = None
+        if not getattr(self, "_alive", False):
+            return False
         try:
             btn.set_label(_t("Test page"))
         except Exception:
@@ -2065,18 +2337,46 @@ class Settings(nbapp.AppWindow):
         return rows
 
     def _on_blank(self, combo):
+        if getattr(self, "_suppress_blank", False):
+            return
         i = combo.get_active()
         if not (0 <= i < len(self._blank_opts)):
             return
         secs = self._blank_opts[i][1]
-        self._apply_blank(secs)
+        old = self._cfg_int("blank_timeout", 0)
+        if not self._apply_blank(secs):
+            old_i = next((j for j, (_label, value) in enumerate(self._blank_opts)
+                          if value == old), 0)
+            self._suppress_blank = True
+            try:
+                combo.set_active(old_i)
+            finally:
+                self._suppress_blank = False
+            nbapp.note_save_failure(
+                self, OSError("screen blanking could not be applied"),
+                CFG_FILE)
+            return
         self._settings["blank_timeout"] = secs
-        self._save_settings()
+        if not self._save_settings():
+            # The runtime apply succeeded but the boot/session preference did
+            # not. Put X and the selector back on the last durable value instead
+            # of displaying a choice that silently disappears next login.
+            self._settings["blank_timeout"] = old
+            self._apply_blank(old)
+            old_i = next((j for j, (_label, value) in enumerate(self._blank_opts)
+                          if value == old), 0)
+            self._suppress_blank = True
+            try:
+                combo.set_active(old_i)
+            finally:
+                self._suppress_blank = False
+            return False
+        return True
 
     def _apply_blank(self, secs):
         # nbprefs owns this, because session.sh has to do the same thing at
         # boot and two copies of "what does 5 minutes mean" would drift.
-        nbprefs.apply_blank(secs)
+        return nbprefs.apply_blank(secs)
 
     def _open_apps(self):
         """The apps that are open right now, by name.
@@ -2139,7 +2439,11 @@ class Settings(nbapp.AppWindow):
 
     def _on_power(self, _b, action):
         if action == "sleep":
-            run(["xset", "dpms", "force", "off"])
+            try:
+                subprocess.Popen(["python3", "/opt/notebook/de/login.py",
+                                  "--lock", "--sleep"])
+            except OSError:
+                pass
         elif action == "reboot":
             self._confirm(
                 "Restart", "%s %s" % (_t("Restart the computer now?"),
@@ -2213,8 +2517,25 @@ class Settings(nbapp.AppWindow):
         if not (0 <= i < len(self._kbd_codes)):
             return
         code = self._kbd_codes[i]
-        nbi18n.set_keyboard(code)          # persist, so it survives a restart
-        self._apply_keyboard(code)
+        old = nbi18n.keyboard()
+        if not self._apply_keyboard(code):
+            self._suppress_kb = True
+            combo.set_active(self._kbd_codes.index(old)
+                             if old in self._kbd_codes else -1)
+            self._suppress_kb = False
+            self._kbd_note.set_text(_t("This could not be saved."))
+            self._kbd_note.set_visible(True)
+            return
+        if not nbi18n.set_keyboard(code):
+            if old:
+                self._apply_keyboard(old)
+            self._suppress_kb = True
+            combo.set_active(self._kbd_codes.index(old)
+                             if old in self._kbd_codes else -1)
+            self._suppress_kb = False
+            self._kbd_note.set_text(_t("This could not be saved."))
+            self._kbd_note.set_visible(True)
+            return
         self._sync_dual_note()
         # keep the Region & Language page's picker (if built) in agreement
         rk = getattr(self, "_region_kb", None)
@@ -2224,15 +2545,29 @@ class Settings(nbapp.AppWindow):
             self._suppress_kb = False
 
     def _on_repeat(self, _spin):
+        if getattr(self, "_suppress_repeat", False):
+            return
         delay = self._kdelay.get_value_as_int()
         rate = self._krate.get_value_as_int()
-        self._apply_repeat(delay, rate)
+        old_delay = self._cfg_int("kbd_delay", 500)
+        old_rate = self._cfg_int("kbd_rate", 25)
+        if not self._apply_repeat(delay, rate):
+            self._suppress_repeat = True
+            try:
+                self._kdelay.set_value(old_delay)
+                self._krate.set_value(old_rate)
+            finally:
+                self._suppress_repeat = False
+            nbapp.note_save_failure(
+                self, OSError("keyboard repeat could not be applied"),
+                CFG_FILE)
+            return
         self._settings["kbd_delay"] = delay
         self._settings["kbd_rate"] = rate
         self._save_settings()
 
     def _apply_repeat(self, delay, rate):
-        nbprefs.apply_repeat(delay, rate)
+        return nbprefs.apply_repeat(delay, rate)
 
     # No Mouse & Touchpad page. Its two controls drove `xinput`, which is not
     # built into this image (BR2_PACKAGE_XAPP_XINPUT is off and there is no
@@ -2267,6 +2602,9 @@ class Settings(nbapp.AppWindow):
                         "here. Apps that are already open keep the one they "
                         "started in; restart the computer to change all of "
                         "them.")
+        self._tz_error = self._note(col, "")
+        self._tz_error.set_no_show_all(True)
+        self._tz_error.hide()
 
         setcard = self._card(col, top=16)
         now = time.localtime()
@@ -2365,40 +2703,73 @@ class Settings(nbapp.AppWindow):
         return "UTC"
 
     def _apply_tz(self, iana, posix):
+        # The symlink is kept for the day zoneinfo ships: it is what anything
+        # reading /etc/localtime would follow, and it is a no-op meanwhile.
         zi = "/usr/share/zoneinfo/" + iana
         if os.path.exists(zi):
             run(["ln", "-sf", zi, "/etc/localtime"])
-            os.environ["TZ"] = iana
-        else:
-            os.environ["TZ"] = posix
-        try:
-            import time
-            time.tzset()
-        except Exception:
-            pass
+        # The environment and tzset go through nbprefs, so the code that runs
+        # when you PICK a zone and the code that runs at the next start-up are
+        # one implementation — the exact drift nbprefs exists to prevent. It
+        # reaches this process; the panel picks the change up from the saved
+        # file within the second and hands it to every app launched after.
+        nbprefs.apply_timezone({"tz_posix": posix})
         if getattr(self, "_dt_lbl", None) is not None:
             self._dt_tick()
         self._dt_resync_inputs()
 
     def _on_tz(self, combo):
+        if getattr(self, "_suppress_tz", False):
+            return
         i = combo.get_active()
         if not (0 <= i < len(TIMEZONES)):
             return
+        self._commit_timezone(i, combo, getattr(self, "_region_tz", None),
+                              getattr(self, "_tz_error", None))
+
+    def _commit_timezone(self, i, source, peer, error_label):
+        """Save a zone before applying it; roll both pickers back on failure."""
+        missing = object()
+        old_tz = self._settings.get("tz", missing)
+        old_posix = self._settings.get("tz_posix", missing)
+        old_i = self._tz_index()
         _lbl, iana, posix = TIMEZONES[i]
-        self._apply_tz(iana, posix)
         self._settings["tz"] = iana
-        # The POSIX form too, because that is the one that has to survive the
-        # process. _apply_tz sets os.environ["TZ"], which reaches THIS process
-        # and nothing else — the panel clock, Calendar and Journal are separate
-        # processes and stayed on the old zone. session.sh exports TZ for the
-        # whole session at start-up and reads this key: no zoneinfo ships, so
-        # the IANA name on its own would tell it nothing.
         self._settings["tz_posix"] = posix
-        self._save_settings()
-        # keep the Region page's zone combo (if built) in agreement
-        rc = getattr(self, "_region_tz", None)
-        if rc is not None and rc.get_active() != i:
-            rc.set_active(i)
+        if not self._save_settings():
+            if old_tz is missing:
+                self._settings.pop("tz", None)
+            else:
+                self._settings["tz"] = old_tz
+            if old_posix is missing:
+                self._settings.pop("tz_posix", None)
+            else:
+                self._settings["tz_posix"] = old_posix
+            self._suppress_tz = True
+            try:
+                if source is not None and source.get_active() != old_i:
+                    source.set_active(old_i)
+                if peer is not None and peer.get_active() != old_i:
+                    peer.set_active(old_i)
+            finally:
+                self._suppress_tz = False
+            if error_label is not None:
+                self._set_status(error_label, _t("This could not be saved."),
+                                 warn=True)
+                error_label.show()
+            return False
+        for label in (getattr(self, "_tz_error", None),
+                      getattr(self, "_region_tz_error", None)):
+            if label is not None:
+                label.hide()
+        self._apply_tz(iana, posix)
+        if peer is not None and peer.get_active() != i:
+            self._suppress_tz = True
+            try:
+                peer.set_active(i)
+            finally:
+                self._suppress_tz = False
+        return True
 
     def _apply_datetime(self, _btn=None):
         """Set the clock, and make it survive a restart.
@@ -2481,19 +2852,30 @@ class Settings(nbapp.AppWindow):
 
         self._region_note = self._note(col, _t(REGION_NOTE))
         self._region_note.set_no_show_all(True)
+        self._region_tz_error = self._note(col, "")
+        self._region_tz_error.set_no_show_all(True)
+        self._region_tz_error.hide()
         self._sync_dual_note()
         return outer
 
-    def _sync_dual_note(self):
+    def _sync_dual_note(self, only=None):
         """Add (or drop) the Alt+Shift sentence to whichever notes are built.
 
         Appended to the existing note rather than shown in a label of its own:
         both halves are translated before they are joined, and one label that
         changes text cannot leave a blank strip on the page when it has nothing
-        to say."""
+        to say.
+
+        `only` names one note attribute to restate, leaving the other as it
+        is: a language pick writes its own confirmation into _region_note (in
+        the language just chosen, dual sentence included), and restating that
+        label here as well wiped the confirmation the moment it was written
+        whenever the Keyboard page had been built."""
         dual = "," in (nbi18n.keyboard() or "")
         for attr, base in (("_region_note", REGION_NOTE),
                            ("_kbd_note", KBD_NOTE)):
+            if only is not None and attr != only:
+                continue
             lbl = getattr(self, attr, None)
             if lbl is None:
                 continue
@@ -2514,21 +2896,41 @@ class Settings(nbapp.AppWindow):
         # means no way to type a file name or a password. xkb_args() adds
         # Alt+Shift. session.sh applies the saved layout the same way.
         try:
-            subprocess.Popen(nbi18n.xkb_args(code))
-        except OSError:
-            pass
+            result = subprocess.run(nbi18n.xkb_args(code), capture_output=True,
+                                    timeout=10)
+            return result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     def _on_region_lang(self, combo):
         i = combo.get_active()
         codes = self._region_lang_codes
         if not (0 <= i < len(codes)):
             return
-        nbi18n.set_lang(codes[i])
         kb = nbi18n.DEFAULT_KB.get(codes[i])
         kc = self._region_kb_codes
+        old_lang, old_kb = nbi18n.current_lang(), nbi18n.keyboard()
+        if kb in kc and not self._apply_keyboard(kb):
+            self._suppress_kb = True
+            combo.set_active(codes.index(old_lang) if old_lang in codes else -1)
+            self._suppress_kb = False
+            note = getattr(self, "_region_note", None)
+            if note is not None:
+                note.set_text(_t("This could not be saved."))
+                note.set_visible(True)
+            return
+        if not nbi18n.set_locale(codes[i], kb if kb in kc else None):
+            if kb in kc and old_kb:
+                self._apply_keyboard(old_kb)
+            self._suppress_kb = True
+            combo.set_active(codes.index(old_lang) if old_lang in codes else -1)
+            self._suppress_kb = False
+            note = getattr(self, "_region_note", None)
+            if note is not None:
+                note.set_text(_t("This could not be saved."))
+                note.set_visible(True)
+            return
         if kb in kc:                          # follow language with its keyboard
-            nbi18n.set_keyboard(kb)
-            self._apply_keyboard(kb)
             self._suppress_kb = True
             self._region_kb.set_active(kc.index(kb))
             self._suppress_kb = False
@@ -2549,9 +2951,10 @@ class Settings(nbapp.AppWindow):
             if "," in (kb or ""):
                 text += "  " + cat.get(KBD_DUAL_NOTE, KBD_DUAL_NOTE)
             note.set_text(text)
-        kn = getattr(self, "_kbd_note", None)
-        if kn is not None:
-            self._sync_dual_note()
+        # The Keyboard page's note (if built) follows the layout that came
+        # with the language; the confirmation above already carries the dual
+        # sentence, so only the OTHER note is restated.
+        self._sync_dual_note(only="_kbd_note")
 
     def _on_region_kb(self, combo):
         if getattr(self, "_suppress_kb", False):
@@ -2559,8 +2962,27 @@ class Settings(nbapp.AppWindow):
         i = combo.get_active()
         codes = self._region_kb_codes
         if 0 <= i < len(codes):
-            nbi18n.set_keyboard(codes[i])
-            self._apply_keyboard(codes[i])
+            old = nbi18n.keyboard()
+            if not self._apply_keyboard(codes[i]):
+                self._suppress_kb = True
+                combo.set_active(codes.index(old) if old in codes else -1)
+                self._suppress_kb = False
+                note = getattr(self, "_region_note", None)
+                if note is not None:
+                    note.set_text(_t("This could not be saved."))
+                    note.set_visible(True)
+                return
+            if not nbi18n.set_keyboard(codes[i]):
+                if old:
+                    self._apply_keyboard(old)
+                self._suppress_kb = True
+                combo.set_active(codes.index(old) if old in codes else -1)
+                self._suppress_kb = False
+                note = getattr(self, "_region_note", None)
+                if note is not None:
+                    note.set_text(_t("This could not be saved."))
+                    note.set_visible(True)
+                return
             self._sync_kbd_combo(i)
             self._sync_dual_note()
 
@@ -2591,23 +3013,13 @@ class Settings(nbapp.AppWindow):
     # what this OS runs on. A row that cannot be true does not belong on screen.
 
     def _on_region_tz(self, combo):
+        if getattr(self, "_suppress_tz", False):
+            return
         i = combo.get_active()
         if not (0 <= i < len(TIMEZONES)):
             return
-        _lbl, iana, posix = TIMEZONES[i]
-        self._apply_tz(iana, posix)
-        self._settings["tz"] = iana
-        # The POSIX form too, because that is the one that has to survive the
-        # process. _apply_tz sets os.environ["TZ"], which reaches THIS process
-        # and nothing else — the panel clock, Calendar and Journal are separate
-        # processes and stayed on the old zone. session.sh exports TZ for the
-        # whole session at start-up and reads this key: no zoneinfo ships, so
-        # the IANA name on its own would tell it nothing.
-        self._settings["tz_posix"] = posix
-        self._save_settings()
-        tc = getattr(self, "_tz_combo", None)
-        if tc is not None and tc.get_active() != i:
-            tc.set_active(i)
+        self._commit_timezone(i, combo, getattr(self, "_tz_combo", None),
+                              getattr(self, "_region_tz_error", None))
 
     # ---- Users ----
     def _page_users(self):
@@ -2616,7 +3028,8 @@ class Settings(nbapp.AppWindow):
         self._grouplabel(col, "Signed in as")
         card = self._card(col)
         cur = self._current_user()
-        self._value_row(card, "Username", cur, first=True)
+        self._value_row(card, "Username", cur, first=True,
+                        value_is_users=True)
 
         # Full name (GECOS) — an editable field only when chfn is present;
         # otherwise it is shown read-only rather than as a permanently greyed
@@ -2639,7 +3052,8 @@ class Settings(nbapp.AppWindow):
             fnbox.pack_start(self._fn_status, False, False, 0)
             self._row_widget(card, "Full name", fnbox)
         else:
-            self._value_row(card, "Full name", fullname or "—")
+            self._value_row(card, "Full name", fullname or "—",
+                            value_is_users=bool(fullname))
 
         self._grouplabel(col, "All accounts")
         card2 = self._card(col)
@@ -2650,11 +3064,15 @@ class Settings(nbapp.AppWindow):
                 if full and full != name:
                     bits.append(full)
                 if name == "root":
-                    bits.append("Administrator")
+                    bits.append(_t("Administrator"))
                 if name == cur:
-                    bits.append("Current user")
+                    bits.append(_t("Current user"))
+                # The account name is the user's; so is the full name inside
+                # the detail line, and our two words are translated above so
+                # the joined string can be left exactly as built.
                 self._value_row(card2, name, "  ·  ".join(bits) or "—",
-                                first=(i == 0))
+                                first=(i == 0), label_is_users=True,
+                                value_is_users=bool(bits))
         else:
             self._value_row(card2, "Accounts", "None", first=True)
 
@@ -2685,6 +3103,11 @@ class Settings(nbapp.AppWindow):
         # A colon would corrupt the /etc/passwd GECOS field — reject it plainly.
         if ":" in name:
             self._set_status(self._fn_status, "No colons in a name", warn=True)
+            return
+        # The page hides this editor when chfn is absent, but keep the action
+        # itself fail-safe against stale/programmatic activation too.
+        if not have("chfn"):
+            self._set_status(self._fn_status, "Could not update", warn=True)
             return
         # chfn -f sets the GECOS full-name field; report whether it took.
         rc, _ = run(["chfn", "-f", name, user])
@@ -2763,7 +3186,7 @@ class Settings(nbapp.AppWindow):
                                 or mp,
                                 "%s used of %s  ·  %d%%"
                                 % (human_kb(used_kb), human_kb(total_kb), pct),
-                                first=(i == 0))
+                                first=(i == 0), label_is_users=True)
 
         return outer
 
@@ -2911,7 +3334,7 @@ class Settings(nbapp.AppWindow):
             for i, (label, mnt, readonly) in enumerate(media):
                 rb = Gtk.RadioButton.new_from_widget(anchor)
                 rb.set_active(False)
-                rb.set_label(label)
+                nbi18n.set_verbatim(rb, label)   # the stick names itself
                 lbl = rb.get_child()
                 if isinstance(lbl, Gtk.Label):
                     lbl.set_ellipsize(Pango.EllipsizeMode.END)
@@ -2976,9 +3399,10 @@ class Settings(nbapp.AppWindow):
 
     # -- measuring (worker thread: a Pictures folder can hold thousands) --
     def _measure_backup(self):
-        # Leaving the Backup pane and coming back rebuilds the page, which
-        # starts another measurement. Keyed, so the newer one supersedes the
-        # older and only one answer ever reaches the label.
+        # Started when the page is built and again each time the pane is
+        # returned to (_on_page_switch; the page itself is cached, not
+        # rebuilt). Keyed, so the newer one supersedes the older and only one
+        # answer ever reaches the label.
         self._bk_jobs.start("measure", self._measure_worker,
                             on_done=self._measure_done)
 
@@ -3124,6 +3548,20 @@ class Settings(nbapp.AppWindow):
         failed = []
         dest = None
         try:
+            media_fn = getattr(self, "_usb_media", None)
+            live_media = ({path: readonly
+                           for _label, path, readonly in media_fn()}
+                          if callable(media_fn) else None)
+            if live_media is not None and (mnt not in live_media
+                                           or live_media[mnt]):
+                why = (_t("No USB stick found") + ". "
+                       + _t("Plug one in, then press Look again")
+                       if mnt not in live_media else
+                       _t("That stick is write-protected. Nothing was copied."))
+                return {"outcome": "failed",
+                        "why": why,
+                        "copied": 0, "dest": None, "done_bytes": 0,
+                        "failed": 0}
             try:
                 dest = self._backup_dest_dir(mnt)
                 os.makedirs(dest)
@@ -3355,6 +3793,11 @@ class Settings(nbapp.AppWindow):
         self._note(col, "These settings apply to every app. An app that is "
                         "already open keeps the look it started with until it "
                         "is closed and opened again.")
+        # Where a switch that could not be saved says so (_on_pref_switch).
+        self._pref_error_label = self._note(col, "")
+        self._pref_error_label.get_style_context().add_class("setwarn")
+        self._pref_error_label.set_no_show_all(True)
+        self._pref_error_label.hide()
         return outer
 
     def _apply_accessibility(self):
@@ -3404,6 +3847,7 @@ class Settings(nbapp.AppWindow):
             self._settings["default_apps"] = fixed
             self._save_settings()
         self._da_combos = []
+        self._da_changing = False
         for i, (label, exts, default_mod) in enumerate(DEFAULT_APP_CATEGORIES):
             combo = Gtk.ComboBoxText()
             for mod, disp in APP_CHOICES:
@@ -3417,21 +3861,41 @@ class Settings(nbapp.AppWindow):
             combo.connect("changed", self._on_defaultapp, exts)
             self._row_widget(card, label, combo, first=(i == 0))
             self._da_combos.append((exts, combo))
+        self._da_status = self._field_status()
+        col.pack_start(self._da_status, False, False, 8)
         return outer
 
     def _on_defaultapp(self, combo, exts):
+        if getattr(self, "_da_changing", False):
+            return
         i = combo.get_active()
         mods = [m for m, _d in APP_CHOICES]
         if not (0 <= i < len(mods)):
             return
         mod = mods[i]
-        mapping = self._settings.get("default_apps", {})
+        previous = self._settings.get("default_apps", {})
+        old_mapping = dict(previous) if isinstance(previous, dict) else previous
+        mapping = dict(previous) if isinstance(previous, dict) else {}
+        default_mod = next((default for _label, category_exts, default
+                            in DEFAULT_APP_CATEGORIES
+                            if tuple(category_exts) == tuple(exts)), mods[0])
+        old_mod = resolve_default_app(mapping, exts, default_mod)
         if not isinstance(mapping, dict):
             mapping = {}
         for ext in exts:
             mapping[ext] = mod
         self._settings["default_apps"] = mapping
-        self._save_settings()
+        if not self._save_settings():
+            self._settings["default_apps"] = old_mapping
+            self._da_changing = True
+            try:
+                combo.set_active(mods.index(old_mod) if old_mod in mods else -1)
+            finally:
+                self._da_changing = False
+            self._set_status(getattr(self, "_da_status", None),
+                             _t("This could not be saved."), warn=True)
+            return
+        self._set_status(getattr(self, "_da_status", None), "", warn=False)
 
     # ---- About ----
     def _page_about(self):
@@ -3456,7 +3920,10 @@ class Settings(nbapp.AppWindow):
         card = self._card(col, top=10)
         rows = self._about_rows()
         for i, (k, v) in enumerate(rows):
-            self._value_row(card, k, v, first=(i == 0))
+            # "Device name" is the hostname the user typed; every other row is
+            # a machine fact (a version, a size, a kernel release).
+            self._value_row(card, k, v, first=(i == 0),
+                            value_is_users=(k == "Device name"))
         return outer
 
     def _about_rows(self):
@@ -3509,7 +3976,7 @@ class Settings(nbapp.AppWindow):
         .setsidebar * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .setsidescroll { background: transparent; }
         .setseclabel { font-size: 11px; font-weight: 700; letter-spacing: 0.16em;
-                       color: #9A9484; margin: 0 0 10px 12px; }
+                       color: #6E695E; margin: 0 0 10px 12px; }
         /* 8px, not 9: seventeen sections have to sit in the 650px a 1024x740
            panel gives the sidebar, and one clipped row at the bottom of an
            otherwise complete list reads as breakage. 36px rows are still a
@@ -3533,7 +4000,7 @@ class Settings(nbapp.AppWindow):
         .setrule { background: #1A1916; min-height: 1px; margin-top: 14px;
                    margin-bottom: 22px; }
         .setgroup { font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
-                    color: #9A9484; margin: 20px 2px 8px; }
+                    color: #6E695E; margin: 20px 2px 8px; }
 
         /* ---- About masthead ---- */
         .setabout { margin: 2px 2px 0; }
@@ -3554,8 +4021,14 @@ class Settings(nbapp.AppWindow):
         /* 'Default' printer badge - signage red, opaque, safe on no-compositor */
         .setbadge { background: #C8341E; color: #FCFBF8; font-size: 11px;
                     font-weight: 600; padding: 2px 8px; border-radius: 4px; }
-        .setnote  { font-size: 12px; color: #9A9484; margin-top: 16px;
+        .setnote  { font-size: 12px; color: #6E695E; margin-top: 16px;
                     margin-left: 2px; }
+        /* a note that carries a failure - why a change did not save - is one
+           of these, and .setnote is written after .setwarn: both are single
+           class rules, so the later one won and the reason was set in the
+           calm grey of the explanations beside it. Same collision, same fix
+           as .setresult.setwarn below. */
+        .setnote.setwarn { color: #C8341E; }
         /* the outcome of something the user asked for and waited on: ink, not
            the grey of the explanatory notes it sits beside. .setwarn recolours
            it to signage red when the news is bad. */

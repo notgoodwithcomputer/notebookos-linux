@@ -26,6 +26,7 @@ import os
 import re
 import time
 import shutil
+import tempfile
 import threading
 import subprocess
 
@@ -68,6 +69,7 @@ OS_ID = "notebookos"
 OS_VERSION = "1.0"
 OS_VERSION_ID = "1.0"
 OS_PRETTY = "Notebook OS"
+OS_RELEASE_SOURCE = "/etc/os-release"
 # The fixed rootfs PARTUUID the prebuilt GRUB EFI boots (root=PARTUUID=...).
 # Identical to the value tools/mkimage-uefi.sh bakes into grub.cfg.
 ROOT_PARTUUID = "b8e5a5f2-1a2b-4c3d-9e8f-000000000042"
@@ -78,6 +80,15 @@ INSTALL_DIR = os.path.join(LIVE_MEDIUM, "install")
 ROOTFS_TAR = os.path.join(INSTALL_DIR, "rootfs.tar")
 BOOT_EFI_SRC = os.path.join(INSTALL_DIR, "BOOTX64.EFI")
 KERNEL_SRC = os.path.join(INSTALL_DIR, "bzImage")
+
+# Add-on map packs, staged on the medium by tools/mkiso.sh (step 5c). They sit
+# OUTSIDE /install because they are not part of the root being extracted: the
+# ISO already carries that root twice (live squashfs + install tarball), so a
+# 2.7 GB continent kept inside it would be stored twice. Copied onto the
+# installed system by _copy_map_packs, into the /data/maps that de/maps.py
+# scans, so maps keep working once the medium is unplugged.
+MAPS_SRC = os.path.join(LIVE_MEDIUM, "maps")
+MAPS_DEST = os.path.join("data", "maps")
 
 # UEFI Secure Boot payload (present on Secure-Boot media). When these exist the
 # installer writes the shim -> grub -> signed-kernel chain instead of the plain
@@ -107,6 +118,41 @@ ROOT_LABEL = "notebookos"
 # FEATURE_SWAPONOFF_LABEL and resolves LABEL= through blkid.
 SWAP_LABEL = "nbos-swap"
 TARGET_MNT = "/mnt/nbtarget"
+# Where a disk is mounted READ-ONLY just to look at it (see _detect_install).
+# Deliberately not TARGET_MNT: that name belongs to the destructive engine, and
+# a probe borrowing it would make "is something mounted on the install target?"
+# answer yes about a disk nobody has agreed to touch yet.
+PROBE_MNT = "/mnt/nbprobe"
+
+# ---- updating a system that is already on a disk ----
+# The two working directories an update uses, both on the installed root
+# itself. The new system is unpacked into UPDATE_STAGE_DIR BESIDE the old one
+# and only then moved into place, so a failure anywhere in the long part of the
+# run -- no room, an unreadable medium, a truncated tar -- leaves a machine
+# that still starts up. UPDATE_OLD_DIR holds the directories being replaced
+# until the swap has finished, which is the only reason the swap can be undone.
+#
+# Dot-names on purpose: /.nbupdate-new is not something anybody browsing their
+# own disk will stop and wonder about, and both are removed when the run ends.
+UPDATE_STAGE_DIR = ".nbupdate-new"
+UPDATE_OLD_DIR = ".nbupdate-old"
+# The top-level directories an update never touches. /root is this appliance's
+# HOME DIRECTORY -- session.sh pins NB_HOME=/root and the desktop runs as the
+# administrator, so every document, every app's store under .config/notebook,
+# the Desktop/Documents/Pictures tree and locale.json all live there. /home is
+# empty on a shipped machine and is kept for the same reason. /data is where
+# _copy_map_packs puts map packs, which are gigabytes nobody should have to
+# fetch again to get a newer system.
+#
+# This tuple is also what makes the swap safe to undo and UPDATE_OLD_DIR safe
+# to delete: these names are never moved into it, so it can only ever hold
+# system directories that this run is replacing anyway.
+PRESERVED_DIRS = ("root", "home", "data")
+# Room an update needs free on the installed root: the whole new system,
+# unpacked, sitting beside the old one, plus the same working margin the disk
+# step already insists on. Measured against the payload rather than guessed --
+# the tarball is uncompressed, so its size is very close to what it extracts to.
+UPDATE_STAGE_HEADROOM = 1.05
 
 RED = "#C8341E"
 
@@ -240,6 +286,16 @@ class Installer(nbapp.AppWindow):
         self.cfg = {
             "disk": None, "disk_model": "", "disk_size": 0,
             "disk_contents": "",
+            # "install" wipes and partitions the disk; "update" replaces the
+            # system on a disk that already carries one and keeps everything
+            # that belongs to the person using it. Only ever "update" when
+            # _detect_install has actually READ a Notebook OS marker off that
+            # disk (see _is_update): an Update offered on a blank disk is a
+            # promise to keep files that are not there, made on the one screen
+            # whose other button erases everything.
+            "mode": "install",
+            # What _detect_install found on the chosen disk, or None.
+            "existing": None,
             "hostname": "notebook",
             # The name the machine calls its owner. Shown at sign-in and in
             # Settings; it does NOT create a second account, because the
@@ -268,7 +324,30 @@ class Installer(nbapp.AppWindow):
         self._scan_gen = 0
         self._clash_gen = 0      # generation of the Summary's PARTUUID probe
         self._prev_disk = None   # last chosen disk, re-selected after a rescan
+        self._prev_mode = ""     # ...and what it had been chosen to do
         self._pulse_on = False   # progress bar pulses during the long extract
+        # Set once the engine has started erasing (see _install_failed): from
+        # then on the Summary must stop promising that nothing has been written.
+        self._disk_dirty = False
+        # What _detect_install found, keyed by disk name, for the scan that is
+        # on screen now. Cleared by every rescan with the selection it belongs
+        # to, so a row can never carry the previous scan's answer.
+        self._found_installs = {}
+        # One probe mount at a time. _detect_install mounts at the single fixed
+        # PROBE_MNT, and a rescan starts a second scan worker while the first
+        # may still be between its mount and its umount; two of those
+        # interleaved would unmount each other's disk halfway through a read.
+        self._probe_lock = threading.Lock()
+        # How far an update got, so _install_failed can say what state the
+        # machine is ACTUALLY in instead of guessing. One of "safe" (nothing
+        # replaced), "broken" (the swap started), "restored" (the swap started
+        # and was put back), "finish" (the new system is in place but the run
+        # stopped before it was configured). "" until an update starts.
+        self._update_state = ""
+        # (name, there_was_an_old_one) for every top-level directory this run
+        # has swapped, in the order it swapped them -- what _restore_trees
+        # walks backwards to undo a swap that stopped part-way.
+        self._swapped = []
 
         # A destructive write must never be interruptible: block the window
         # close (the snail logo, the app-name Close item, the window manager)
@@ -324,20 +403,21 @@ class Installer(nbapp.AppWindow):
             lbl.get_style_context().add_class("inst-step-lbl")
             row.pack_start(num, False, False, 0)
             row.pack_start(lbl, False, False, 0)
-            # Wrap the row in its own EventBox so an already-completed step can be
-            # clicked to jump back to it (the rail reads as navigation, so it must
-            # behave like it). Forward/unreached steps and the destructive
-            # Install/Done steps stay inert — see _on_rail_click.
-            ebox = Gtk.EventBox()
-            ebox.set_visible_window(False)   # input-only: catch clicks, no paint
-            ebox.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
-            ebox.connect("button-press-event", self._on_rail_click, i)
-            ebox.add(row)
-            rail.pack_start(ebox, False, False, 0)
-            self._rail_rows.append((row, num, lbl))
+            # A real toggle exposes focus, activation and current-step state to
+            # keyboard and assistive technology. Future/destructive steps are
+            # disabled in _set_step; completed steps remain navigable.
+            step_btn = Gtk.ToggleButton()
+            step_btn.set_relief(Gtk.ReliefStyle.NONE)
+            step_btn.get_style_context().add_class("inst-step-hit")
+            step_btn.get_accessible().set_name(_t(title))
+            step_btn._rail_hid = step_btn.connect(
+                "clicked", self._on_rail_click, i)
+            step_btn.add(row)
+            rail.pack_start(step_btn, False, False, 0)
+            self._rail_rows.append((step_btn, row, num, lbl))
         return rail
 
-    def _on_rail_click(self, _w, _ev, i):
+    def _on_rail_click(self, _w, i):
         # Backward navigation to a step already reached. Blocked while the
         # destructive worker runs and once the run has begun (Install / Done),
         # and never allowed to skip ahead of the furthest validated step.
@@ -413,11 +493,18 @@ class Installer(nbapp.AppWindow):
         h = Gtk.Label(label=title, xalign=0)
         h.get_style_context().add_class("inst-h1")
         inner.pack_start(h, False, False, 0)
+        # A page whose STATE can change has to be able to change what it says:
+        # the progress page went on reading "Installing" / "keep the computer
+        # switched on" over a run that had already stopped. Hand the two labels
+        # back on the column so a builder that needs them can keep them.
+        inner.page_title = h
+        inner.page_sub = None
         if subtitle:
             s = Gtk.Label(label=subtitle, xalign=0)
             s.get_style_context().add_class("inst-sub")
             s.set_line_wrap(True)
             inner.pack_start(s, False, False, 0)
+            inner.page_sub = s
         outer.add(col)
         return outer, inner
 
@@ -476,12 +563,15 @@ class Installer(nbapp.AppWindow):
             "Install Notebook OS",
             "This installs %s onto a disk in this machine." % OS_PRETTY)
         if self.medium_ok:
+            # Starts where the subtitle above stops. It used to open with
+            # "This copies %s onto a disk inside this machine", which is the
+            # sentence directly above it said twice — the first screen anyone
+            # ever sees, spending its first line on nothing new.
             self._para(col,
-                       "This copies %s onto a disk inside this machine and "
-                       "sets the machine up to start from it. The steps ask "
-                       "for a computer name, a keyboard layout and an "
-                       "administrator password. When it is finished, remove "
-                       "the installer and restart." % OS_PRETTY)
+                       "The steps ask for a computer name, a keyboard layout "
+                       "and an administrator password, and set the machine up "
+                       "to start from the disk. When it is finished, remove "
+                       "the installer and restart.")
             self._danger(col,
                          "The chosen disk will be wiped completely, and "
                          "everything on it is gone for good. Nothing is "
@@ -520,11 +610,108 @@ class Installer(nbapp.AppWindow):
         col.pack_start(top, False, False, 0)
 
         self._disk_card = self._card(col, top=8)
+
+        # The choice between replacing the system and erasing the disk. Built
+        # once and shown only when _detect_install has read a Notebook OS
+        # marker off the disk the user has just picked, because those are the
+        # only disks where both answers exist. It sits between the disk list
+        # and the consequence banner, which is the reading order: which disk,
+        # what to do to it, what that costs.
+        self._mode_card = self._card(col, top=14)
+        self._mode_card.set_no_show_all(True)
+        self._mode_card.hide()
+        # The same hidden-anchor group leader the disk list uses. The first
+        # radio in a group is active from birth and its "toggled" never fires,
+        # so without an anchor this card could not tell "Update is chosen"
+        # from "nobody has chosen anything yet" -- and the second of those,
+        # read as the first, is a disk erased by a wizard that said it would
+        # be updated.
+        self._mode_anchor = Gtk.RadioButton()
+        self._rb_update = Gtk.RadioButton.new_from_widget(self._mode_anchor)
+        self._rb_update.set_label(_t("Update the system on this disk"))
+        self._rb_fresh = Gtk.RadioButton.new_from_widget(self._mode_anchor)
+        self._rb_fresh.set_label(_t("Erase this disk and install fresh"))
+        self._mode_update_sub = self._mode_row(
+            self._mode_card, self._rb_update,
+            _t("The home folder, the settings and every file on the disk are "
+               "kept. The system, the kernel and the start-up files are "
+               "replaced."), first=True)
+        self._mode_fresh_sub = self._mode_row(
+            self._mode_card, self._rb_fresh,
+            _t("Everything on the disk is removed. No file and no setting "
+               "on it is kept."))
+        self._rb_update.connect("toggled", self._on_mode_toggle, "update")
+        self._rb_fresh.connect("toggled", self._on_mode_toggle, "install")
+
         self._disk_erase = self._danger(col, "", top=18)
         self._disk_erase.get_parent().set_no_show_all(True)
         self._disk_erase.get_parent().hide()
         self._disk_group = None
         return outer
+
+    def _mode_row(self, card, radio, sub, first=False):
+        """One choice in the install/update card: the radio, and under it the
+        sentence saying what it does to the disk.
+
+        Returns the sub-label rather than the row, because what a choice costs
+        depends on the disk: a disk too small to be partitioned for a fresh
+        install can still be updated in place, and that row has to be able to
+        say so where the choice is made (see _show_mode_card)."""
+        row = Gtk.Box()
+        row.get_style_context().add_class("inst-item")
+        if not first:
+            row.get_style_context().add_class("bordered")
+        # The sentence is a SIBLING of the radio, not its child, and indented
+        # to clear the indicator -- a GtkCheckButton handed a box instead of a
+        # label does not offset the child past its circle, and the text draws
+        # straight through it. The disk rows above learnt this the same way.
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        radio.get_style_context().add_class("inst-disk")
+        rlbl = radio.get_child()
+        if isinstance(rlbl, Gtk.Label):
+            # Translated, either label runs half again as long, and a radio's
+            # label neither wraps nor ellipsizes on its own: one long line here
+            # would set the whole wizard's minimum width, because a Stack is as
+            # wide as its widest page.
+            rlbl.set_line_wrap(True)
+            rlbl.set_max_width_chars(58)
+            rlbl.set_xalign(0)
+        box.pack_start(radio, False, False, 0)
+        lbl = Gtk.Label(label=sub, xalign=0)
+        lbl.get_style_context().add_class("inst-disk-sub")
+        lbl.set_line_wrap(True)
+        lbl.set_max_width_chars(58)
+        lbl.set_margin_start(26)      # clears the radio's indicator
+        box.pack_start(lbl, False, False, 0)
+        row.pack_start(box, True, True, 0)
+        card.pack_start(row, False, False, 0)
+        return lbl
+
+    def _hide_mode_card(self):
+        """Put the install/update choice away, and genuinely un-choose it.
+
+        Lighting the hidden anchor clears BOTH visible radios. Leaving "Update"
+        lit from the previous disk would make the set_active in _show_mode_card
+        a no-op, its "toggled" would never fire, and cfg["mode"] would keep
+        whatever the last disk decided -- which is how a wizard ends up erasing
+        a disk it has just told somebody it would update."""
+        card = getattr(self, "_mode_card", None)
+        if card is None:
+            return
+        self._mode_anchor.set_active(True)
+        card.set_no_show_all(True)
+        card.hide()
+        self._refresh_rail_titles()
+
+    def _refresh_rail_titles(self):
+        """The rail names the step. During an update the fifth step is not an
+        install, and a rail that says it is has stopped describing the run the
+        user is watching."""
+        i = self._steps_index("progress")
+        rows = getattr(self, "_rail_rows", [])
+        if 0 <= i < len(rows):
+            rows[i][3].set_text(_t("Update") if self._is_update()
+                                else _t("Install"))
 
     def _refresh_disks(self):
         # Enumeration shells out to lsblk (several times, incl. per-mount
@@ -536,9 +723,22 @@ class Installer(nbapp.AppWindow):
         # Remember the current choice so a rescan (or coming back to this step)
         # re-selects the same disk instead of silently forgetting it.
         self._prev_disk = self.cfg.get("disk")
+        # Remembered with the disk it belongs to, for the same reason: leaving
+        # this step and coming back rescans, and a deliberate "erase this disk
+        # and install fresh" that quietly reverted to Update on the way back
+        # would be the wizard changing its mind about somebody's disk without
+        # saying so.
+        self._prev_mode = self.cfg.get("mode") or ""
         self._disk_group = None
         self.cfg["disk"] = None
         self.cfg["disk_contents"] = ""
+        # Both halves of "what is on this disk" belong to the selection that is
+        # being thrown away, so both go with it. A stale cfg["existing"] would
+        # let the Summary describe an update of a disk nobody has picked yet.
+        self.cfg["existing"] = None
+        self.cfg["mode"] = "install"
+        self._found_installs = {}
+        self._hide_mode_card()
         card = self._disk_card
         for ch in card.get_children():
             card.remove(ch)
@@ -559,8 +759,24 @@ class Installer(nbapp.AppWindow):
             disks = self._list_disks()
         except Exception:
             disks = []
+        # Look for an existing install on the SAME worker. The probe mounts a
+        # filesystem, which is far too slow for the GTK main loop (the reason
+        # the enumeration moved off it in the first place), and doing it here
+        # means the disk list can say "Notebook OS is already installed here"
+        # in the row where disks are being compared rather than three screens
+        # later. Guarded per disk: one unreadable disk must not cost the scan.
+        found = {}
+        for entry in disks:
+            if self._closed or gen != self._scan_gen:
+                break
+            try:
+                info = self._detect_install(entry[0])
+            except Exception:                                  # noqa: BLE001
+                info = None
+            if info:
+                found[entry[0]] = info
         if not self._closed:
-            GLib.idle_add(self._populate_disks, gen, disks)
+            GLib.idle_add(self._populate_disks, gen, disks, found)
 
     def _disk_msg_row(self, card, text):
         lbl = Gtk.Label(label=text, xalign=0)
@@ -572,11 +788,17 @@ class Installer(nbapp.AppWindow):
         card.pack_start(row, False, False, 0)
         return lbl
 
-    def _populate_disks(self, gen, disks):
+    def _populate_disks(self, gen, disks, found=None):
         # Runs on the main thread via idle_add. Drop the result if a newer scan
         # (or a step change) has superseded it.
         if self._closed or gen != self._scan_gen:
             return False
+        # Defaulted rather than required: several suites call this directly
+        # with a disk list and nothing else, and a scan that could not read any
+        # disk's marker is exactly the same situation as one that found none --
+        # no disk offers an update, and every one of them offers an install.
+        found = found or {}
+        self._found_installs = found
         card = self._disk_card
         for ch in card.get_children():
             card.remove(ch)
@@ -605,13 +827,25 @@ class Installer(nbapp.AppWindow):
         usable = 0
         for i, (name, size, model, contents) in enumerate(disks):
             dev = "/dev/" + name
-            too_small = self._disk_too_small(size)
+            existing = found.get(name)
+            # A disk that already carries Notebook OS is never greyed out for
+            # size. An update replaces the system inside the root partition
+            # that is already there and never repartitions, so the figure that
+            # refuses a disk for a FRESH install says nothing at all about
+            # whether it can be updated -- and greying the row would take the
+            # update away with it, on precisely the machines that need one.
+            too_small = self._disk_too_small(size) and not existing
             r = Gtk.Box(spacing=12)
             r.get_style_context().add_class("inst-item")
             if i != 0:
                 r.get_style_context().add_class("bordered")
             try:
-                img = nbicons.image("disk", 20, "#6E695E")
+                # Muted with the rest of the row when the disk cannot be
+                # chosen: a pixbuf takes no state from GTK, so an icon left at
+                # full strength is the one part of a greyed row still saying
+                # "pick me".
+                img = nbicons.image("disk", 20,
+                                    "#B3AD9E" if too_small else "#6E695E")
                 img.set_valign(Gtk.Align.START)
                 img.set_margin_top(3)
                 r.pack_start(img, False, False, 0)
@@ -640,7 +874,7 @@ class Installer(nbapp.AppWindow):
                 rb_lbl.set_ellipsize(Pango.EllipsizeMode.END)
                 rb_lbl.set_max_width_chars(52)
             rb.connect("toggled", self._on_disk_toggle, dev, model, size,
-                       contents)
+                       contents, existing)
             # What is on the disk goes UNDER its name, indented to the radio's
             # label. A maker's model number is not how anyone recognises their
             # own computer's disk — what is on it is, and recognising it is the
@@ -659,6 +893,13 @@ class Installer(nbapp.AppWindow):
             else:
                 usable += 1
                 line = self._contents_line(contents)
+                if existing:
+                    # On its own line above the contents, for every disk rather
+                    # than only the chosen one: this is the fact that decides
+                    # which of the two things the wizard can do to it, and
+                    # comparing disks is what this screen is for.
+                    line = "\n".join(x for x in (self._existing_line(existing),
+                                                 line) if x)
             if line:
                 sub = Gtk.Label(label=line, xalign=0)
                 sub.get_style_context().add_class("inst-disk-sub")
@@ -699,44 +940,126 @@ class Installer(nbapp.AppWindow):
         p.set_no_show_all(True)
         p.hide()
 
-    def _on_disk_toggle(self, btn, dev, model, size, contents=""):
+    def _on_disk_toggle(self, btn, dev, model, size, contents="",
+                        existing=None):
         if not btn.get_active():
             return
         self.cfg["disk"] = dev
         self.cfg["disk_model"] = model or "Disk"
         self.cfg["disk_size"] = size
         self.cfg["disk_contents"] = contents
+        self.cfg["existing"] = existing
+        self._show_mode_card(existing)
+        self._refresh_disk_banner()
+        self._validate()
+
+    def _show_mode_card(self, existing):
+        """Offer the install/update choice for the disk just chosen, or put it
+        away when there is nothing on that disk to update.
+
+        Update is what the card lands on. Of the two things this wizard can do
+        to a disk only one of them destroys the user's files, and that one must
+        never be where a click ends up by default."""
+        card = getattr(self, "_mode_card", None)
+        if card is None:
+            return
+        if not existing:
+            self.cfg["mode"] = "install"
+            self._hide_mode_card()
+            self._refresh_row_states()
+            return
+        # A disk too small to be partitioned for a fresh install can still be
+        # updated in place (see _populate_disks), so its row stays selectable
+        # and it is the FRESH half that is refused -- with the figure, in the
+        # row where the choice is being made, rather than two screens later.
+        small = self._disk_too_small(self.cfg.get("disk_size"))
+        self._rb_fresh.set_sensitive(not small)
+        self._mode_fresh_sub.set_text(
+            (_t("Too small for a fresh install: that needs a disk of at "
+                "least %s.") % human_bytes(self._min_disk_bytes())) if small
+            else _t("Everything on the disk is removed. No file and no "
+                    "setting on it is kept."))
+        card.set_no_show_all(False)
+        card.show_all()
+        # Update unless this is the very same disk the user had already chosen
+        # to erase. Restoring the other choice is only ever done for a choice
+        # they actually made about THIS disk, so the default a click lands on
+        # is still the one that destroys nothing.
+        if (self._prev_mode == "install"
+                and self.cfg.get("disk") == self._prev_disk
+                and self._rb_fresh.get_sensitive()):
+            self._rb_fresh.set_active(True)
+        else:
+            self._rb_update.set_active(True)
+
+    def _on_mode_toggle(self, btn, mode):
+        if not btn.get_active():
+            return
+        self.cfg["mode"] = mode
+        self._refresh_disk_banner()
+        self._refresh_rail_titles()
+        # The Options step asks nothing during an update: every answer it
+        # collects is already on the disk and is kept.
+        self._refresh_row_states()
+        self._validate()
+
+    def _refresh_disk_banner(self):
+        """The consequence panel under the disk list, for whichever of the two
+        things the wizard is now going to do to the chosen disk.
+
+        Three states, and only one of them is red. Red means "this destroys
+        something" and nothing else (see the CSS note on .inst-primary): an
+        update destroys no file of the user's, and a disk we have READ and
+        found blank has nothing to destroy, so both get the same panel shape in
+        paper and ink saying the true thing. Red that appears over an empty
+        disk is red that has stopped meaning anything on the disk holding
+        somebody's photos.
+
+        No contents in any of these: every row already carries its own "On it
+        now" line a few pixels above, for every disk rather than only the
+        chosen one, which is what lets someone COMPARE before clicking. This
+        banner's job is the consequence. The contents reappear on the Summary
+        and in the final confirmation, where no disk row is on screen to check
+        against."""
+        dev = self.cfg.get("disk")
+        if not dev:
+            self._erase_parent_hide()
+            return
         p = self._disk_erase.get_parent()
         p.set_no_show_all(False)
-        # No contents here: every row already carries its own "On it now" line
-        # a few pixels above, for every disk rather than only the chosen one,
-        # which is what lets someone COMPARE before clicking. This banner's job
-        # is the consequence. The contents reappear on the Summary and in the
-        # final confirmation, where no disk row is on screen to check against.
-        #
-        # A disk we have READ and found to be blank gets the same panel in
-        # paper rather than alarm red, saying the true thing. Nothing is
-        # hidden and no confirmation is weakened (the Summary and the final
-        # modal are untouched) — but red that appears over an empty disk is red
-        # that stops meaning anything on the disk that holds someone's photos.
-        empty = (contents == "EMPTY")
-        if empty:
+        if self._is_update():
+            calm = True
             self._disk_erase.set_text(
-                "%s is empty. It will be set up from scratch for %s."
+                _t("The system on %s is replaced. The home folder, the "
+                   "settings and every file on the disk are kept. The machine "
+                   "will not start up until the update has finished.") % dev)
+        elif self.cfg.get("disk_contents") == "EMPTY":
+            calm = True
+            self._disk_erase.set_text(
+                _t("%s is empty. It will be set up from scratch for %s.")
                 % (dev, OS_PRETTY))
         else:
+            calm = False
             self._disk_erase.set_text(
-                "Everything on %s will be erased for good: every file, photo "
-                "and program on it. Check that this is the right disk." % dev)
-        for w, cls in ((p, "inst-danger"), (self._disk_erase,
-                                            "inst-danger-txt")):
+                _t("Everything on %s will be erased for good: every file, "
+                   "photo and program on it. Check that this is the right "
+                   "disk.") % dev)
+        self._set_calm(self._disk_erase, calm)
+        p.show_all()
+
+    def _set_calm(self, lbl, calm):
+        """Paper-and-ink or signage red, on a .inst-danger panel and the text
+        inside it.
+
+        Both nodes, always: the panel carries the background and the border and
+        the label carries the ink, so a class added to one of them leaves the
+        other half of the panel arguing with it."""
+        for w in (lbl.get_parent(), lbl):
             ctx = w.get_style_context()
-            if empty:
+            if calm:
                 ctx.add_class("calm")
             else:
                 ctx.remove_class("calm")
-        p.show_all()
-        self._validate()
 
     def _list_disks(self):
         """Whole disks via `lsblk -dnbr -o NAME,SIZE,MODEL,TYPE`, keeping
@@ -815,9 +1138,9 @@ class Installer(nbapp.AppWindow):
                           (d.get("LABEL") or "").replace("\\x20", " ").strip(),
                           (d.get("PARTTYPE") or "").lower()))
         if not parts:
-            # Genuinely blank, or a disk whose table we cannot read — either
-            # way there is nothing to name, and _contents_line says so.
-            return "" if not out.strip() else "EMPTY"
+            # No recognised table/filesystem is not proof of blank media: raw
+            # data and damaged/encrypted layouts have exactly this shape.
+            return "" if not out.strip() else "UNKNOWN"
         # Biggest first: the partition a person recognises is the big one.
         parts.sort(key=lambda p: -p[0])
         bits = []
@@ -850,6 +1173,235 @@ class Installer(nbapp.AppWindow):
             bits.append(_t("and %d more") % extra)
         return ", ".join(bits)
 
+    def _partition_rows(self, name):
+        """Every PARTITION on /dev/<name>, as lsblk key="value" dicts.
+
+        Separate from _disk_contents, which answers "what would a person call
+        this disk?" and deliberately folds the answer down to three phrases.
+        Recognising an install needs the raw fields instead, PARTUUID above
+        all: that is the one thing this installer STAMPS, since every install
+        writes the same fixed root PARTUUID so the prebuilt GRUB can find the
+        root it is told to boot (see the release contract at the top of this
+        file).
+
+        `-P` (key="value" pairs) for the reason _disk_contents gives: raw
+        output writes an EMPTY field as nothing at all, so one unlabelled
+        partition shifts every later column left and the row describes
+        something it is not."""
+        lsblk = self.tools.get("lsblk")
+        if not lsblk:
+            return []
+        out = ""
+        # The columns as columns, and the optional one named on its own line.
+        # PARTTYPE is missing from older lsblk builds and losing it costs only
+        # the start-up partition's type (its label is the fallback), so the
+        # query is retried without it rather than the whole probe being lost
+        # over one column — and written this way the difference between the two
+        # attempts is a word rather than two long strings to diff by eye.
+        wanted = ("NAME", "FSTYPE", "LABEL", "PARTUUID", "TYPE")
+        for extra in (("PARTTYPE",), ()):
+            cols = ",".join(wanted + extra)
+            rc, out = run_cmd([lsblk, "-Pn", "-o", cols, "/dev/" + name])
+            if rc == 0:
+                break
+            out = ""
+        rows = []
+        for ln in out.splitlines():
+            d = dict(re.findall(r'([A-Z]+)="([^"]*)"', ln))
+            if d.get("TYPE") == "part" and d.get("NAME"):
+                rows.append(d)
+        return rows
+
+    def _detect_install(self, name):
+        """An existing Notebook OS install on /dev/<name>, or None.
+
+        Runs on the scan worker thread, NEVER the GTK main loop: it mounts.
+
+        NO NEW MARKER IS INVENTED HERE. Everything checked is something an
+        install already stamps, cheapest first:
+
+          1. the fixed root PARTUUID on a partition of this disk, or failing
+             that the ext4 label ROOT_LABEL, which is what an install made
+             before the PARTUUID was pinned carries;
+          2. ID=notebookos in /etc/os-release, which _write_os_release writes;
+          3. /opt/notebook beside it, the directory the whole desktop lives in.
+
+        The last two are the ones that decide, and they are read off a MOUNTED
+        filesystem rather than believed from a label, because anybody can
+        label a partition "notebookos" and being wrong here means offering to
+        keep files that are not there -- on a screen whose other button erases
+        a disk. A guess is not good enough on this screen.
+
+        The mount is read-only, and `noload` is tried before plain `ro` so that
+        merely LOOKING at a disk never replays its ext4 journal. A probe that
+        writes to a disk nobody has agreed to touch has already broken the
+        promise this step makes, whatever it writes."""
+        rows = self._partition_rows(name)
+        if not rows:
+            return None
+        want = ROOT_PARTUUID.lower()
+        rootdev = espdev = ""
+        for d in rows:
+            dev = "/dev/" + d["NAME"]
+            fstype = (d.get("FSTYPE") or "").lower()
+            label = (d.get("LABEL") or "").replace("\\x20", " ").strip()
+            ptype = (d.get("PARTTYPE") or "").lower()
+            if not rootdev:
+                if (d.get("PARTUUID") or "").lower() == want:
+                    rootdev = dev
+                elif label == ROOT_LABEL and fstype.startswith("ext"):
+                    rootdev = dev
+            if not espdev and (ptype in ESP_TYPES or label == ESP_LABEL):
+                espdev = dev
+        # No ESP, no update offered. The kernel and the bootloader live on it,
+        # and a new system left starting the old kernel is a machine that may
+        # not come back at all -- so a disk this installer cannot finish is a
+        # disk it does not offer to start. A fresh install, which creates the
+        # ESP itself, is still offered for that disk.
+        if not rootdev or not espdev:
+            return None
+        with self._probe_lock:
+            if not self._mount_probe(rootdev):
+                return None
+            try:
+                info = self._probe_install(PROBE_MNT)
+            finally:
+                self._umount_probe()
+        if not info:
+            return None
+        info["disk"] = "/dev/" + name
+        info["root"] = rootdev
+        info["esp"] = espdev
+        return info
+
+    def _mount_probe(self, dev):
+        """Mount `dev` read-only at PROBE_MNT. False when it cannot be read.
+
+        Never raises and never reports: a disk that will not mount is simply a
+        disk with no install on it as far as this step is concerned, and it is
+        still offered for a fresh install like any other."""
+        mount = self.tools.get("mount")
+        if not mount:
+            return False
+        try:
+            os.makedirs(PROBE_MNT, exist_ok=True)
+        except OSError:
+            return False
+        if self._is_mounted(PROBE_MNT):
+            # A probe that died between its mount and its umount would
+            # otherwise stack a second filesystem on the same point and hide
+            # the one underneath from every later scan.
+            self._umount_probe()
+        for opts in ("ro,noload", "ro"):
+            rc, _out = run_cmd([mount, "-o", opts, dev, PROBE_MNT], timeout=20)
+            if rc == 0:
+                return True
+        return False
+
+    def _umount_probe(self):
+        umount = self.tools.get("umount")
+        if umount:
+            run_cmd([umount, PROBE_MNT], timeout=20)
+
+    def _probe_install(self, mnt):
+        """Read the marker off a mounted filesystem: what the wizard needs in
+        order to describe the install, or None when this is not one.
+
+        It looks in the normal place first and then inside UPDATE_OLD_DIR,
+        because that is exactly where /etc will be if an earlier update stopped
+        between moving the old system aside and putting the new one in place.
+        Refusing to recognise such a disk would take away the one action that
+        repairs it -- and running the update again is precisely what the
+        failure page tells its owner to do."""
+        base = mnt
+        rel = self._read_marker(base)
+        if rel is None:
+            base = os.path.join(mnt, UPDATE_OLD_DIR)
+            rel = self._read_marker(base)
+        if rel is None:
+            return None
+        try:
+            free = shutil.disk_usage(mnt).free
+        except OSError:
+            free = 0
+        # halfway: the swap had started, so this machine is NOT startable as it
+        # stands. leftover: only the staging tree is there, which means a run
+        # stopped while unpacking and the system on the disk is untouched. The
+        # two say different things to the person reading the failure page, and
+        # only one of them is frightening.
+        halfway = os.path.isdir(os.path.join(mnt, UPDATE_OLD_DIR))
+        leftover = os.path.isdir(os.path.join(mnt, UPDATE_STAGE_DIR))
+        return {"version": rel.get("VERSION", ""),
+                "build": rel.get("BUILD_ID", ""),
+                "user": self._read_line(os.path.join(base, "etc",
+                                                     "notebookos-user")),
+                # Where the configuration to carry over lives, relative to the
+                # mount point. Stored rather than absolute: the disk is mounted
+                # somewhere else entirely when the update actually runs.
+                "config_sub": "" if base == mnt else UPDATE_OLD_DIR,
+                "halfway": halfway,
+                "leftover": leftover,
+                "unfinished": halfway or leftover,
+                "free": free}
+
+    def _read_marker(self, base):
+        """The parsed /etc/os-release under `base` when it says ID=notebookos
+        AND the desktop is there beside it, otherwise None.
+
+        Both, not either. os-release is a text file anybody can copy onto a
+        disk; /opt/notebook is where the system this installer would replace
+        actually is. Requiring the pair is what keeps "there is an install
+        here" from being an assertion about a filename."""
+        data = {}
+        try:
+            with open(os.path.join(base, "etc", "os-release"),
+                      encoding="utf-8", errors="replace") as fh:
+                for ln in fh:
+                    key, _sep, val = ln.strip().partition("=")
+                    if key:
+                        data[key] = val.strip().strip('"')
+        except OSError:
+            return None
+        if data.get("ID") != OS_ID:
+            return None
+        if not os.path.isdir(os.path.join(base, "opt", "notebook")):
+            return None
+        return data
+
+    def _read_line(self, path):
+        """The first line of a small config file, or "" if it is not there."""
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.readline().strip()
+        except OSError:
+            return ""
+
+    def _read_text(self, path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    def _existing_line(self, info):
+        """The one sentence saying a disk already carries this system."""
+        if not info:
+            return ""
+        build = info.get("build") or ""
+        if build:
+            return (_t("%s is already installed here (build %s).")
+                    % (OS_PRETTY, build))
+        return _t("%s is already installed here.") % OS_PRETTY
+
+    def _is_update(self):
+        """True only when the wizard is going to replace a system it has
+        actually FOUND. Mode alone is not enough: an "update" of nothing would
+        spend the whole run discovering there was nothing to update, and every
+        screen and both engines read this one answer so the words on the
+        Summary can never describe a different run from the one that starts."""
+        return (self.cfg.get("mode") == "update"
+                and bool(self.cfg.get("existing")))
+
     @staticmethod
     def _kbd_index(code):
         for i, (_lbl, c) in enumerate(KBD_LAYOUTS):
@@ -881,6 +1433,24 @@ class Installer(nbapp.AppWindow):
     def _disk_too_small(self, size, swap_mib=None):
         need = self._min_disk_bytes(swap_mib)
         return bool(need) and int(size or 0) < need
+
+    def _update_free_bytes(self):
+        """How much room an update needs FREE on the root it is replacing.
+
+        The whole new system is unpacked beside the old one before anything is
+        moved, so for a few minutes both are on the partition at once. That is
+        what buys the safety: an update that runs out of room, or meets a
+        truncated tar, stops with the machine still able to start. Paying for
+        it in disk space is the trade, and it is stated on the screen that
+        refuses (see _install_ready) rather than discovered at 40%.
+
+        0 when there is no payload to measure, exactly as _min_disk_bytes does:
+        with no rootfs.tar there is nothing to install and _install_ready has
+        already refused for that reason."""
+        if not self.payload_bytes:
+            return 0
+        return int(self.payload_bytes * UPDATE_STAGE_HEADROOM
+                   + MIN_FREE_MIB * 1024 * 1024)
 
     def _start_clash_probe(self):
         """Ask, on a WORKER THREAD, whether another disk already carries the
@@ -986,6 +1556,8 @@ class Installer(nbapp.AppWindow):
             return ""
         if contents == "EMPTY":
             return _t("This disk is empty.")
+        if contents == "UNKNOWN":
+            return _t("On it now: %s") % _t("Something else")
         return _t("On it now: %s") % contents
 
     def _excluded_disks(self):
@@ -1038,6 +1610,22 @@ class Installer(nbapp.AppWindow):
         # stepping in and out with the length of whatever each one contains.
         ctl = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
+        # Shown only while the wizard is updating a system already on the disk.
+        # Every answer this page collects is on that disk already and is kept,
+        # so the page has nothing to ask -- and a page of greyed-out boxes with
+        # no sentence saying why reads as broken rather than as answered.
+        self._update_note = Gtk.Label(
+            label=_t("The system on this disk is being replaced. The name, "
+                     "computer name, keyboard, language and password already "
+                     "on it are kept, so there is nothing to answer here."),
+            xalign=0)
+        self._update_note.get_style_context().add_class("inst-callout")
+        self._update_note.set_line_wrap(True)
+        self._update_note.set_max_width_chars(72)
+        self._update_note.set_margin_top(10)
+        self._update_note.set_no_show_all(True)
+        col.pack_start(self._update_note, False, False, 0)
+
         # -- who is this for --
         # First, because the answer decides whether the rest of this page is
         # asked at all. Somebody setting a machine up FOR someone else should
@@ -1048,7 +1636,7 @@ class Installer(nbapp.AppWindow):
             label=_t("Set this up for someone else"))
         self._cb_oem.set_active(self.cfg["oem"])
         self._cb_oem.connect("toggled", self._on_oem_toggled)
-        self._field_row(
+        oem_row = self._field_row(
             oem_card, "Who is this for", self._cb_oem, first=True,
             sub=_t("Set on first start-up instead of here"))
 
@@ -1056,12 +1644,11 @@ class Installer(nbapp.AppWindow):
         card = self._card(col, top=6)
         self._e_user = Gtk.Entry()
         self._e_user.set_width_chars(20)
-        self._e_user.set_placeholder_text(_t("Name"))
         self._e_user.connect("changed", lambda *_: self._validate())
         self._e_user.connect("activate", self._activate_next)
         ctl.add_widget(self._e_user)
-        self._field_row(card, "Name", self._e_user, first=True,
-                        sub=_t("Shown on the sign-in screen"))
+        name_row = self._field_row(card, "Name", self._e_user, first=True,
+                                   sub=_t("Shown on the sign-in screen"))
 
         self._e_host = Gtk.Entry()
         self._e_host.set_text(self.cfg["hostname"])
@@ -1069,7 +1656,7 @@ class Installer(nbapp.AppWindow):
         self._e_host.connect("changed", lambda *_: self._validate())
         self._e_host.connect("activate", self._activate_next)
         ctl.add_widget(self._e_host)
-        self._field_row(card, "Computer name", self._e_host)
+        host_row = self._field_row(card, "Computer name", self._e_host)
 
         # -- region --
         # No time-zone picker. This image ships no zoneinfo database and no
@@ -1090,7 +1677,8 @@ class Installer(nbapp.AppWindow):
         # session already uses does not fire and wipe the password fields.
         self._c_kbd.connect("changed", self._on_kbd_changed)
         ctl.add_widget(self._c_kbd)
-        self._field_row(card2, "Keyboard layout", self._c_kbd, first=True)
+        kbd_row = self._field_row(card2, "Keyboard layout", self._c_kbd,
+                                  first=True)
         self._c_locale = Gtk.ComboBoxText()
         for label, _code in LOCALES:
             self._c_locale.append_text(label)
@@ -1100,9 +1688,9 @@ class Installer(nbapp.AppWindow):
         # nobody installing a computer has heard of. Point at the choice on the
         # screen instead — the first entry in the list, whose own label already
         # says what it does.
-        self._field_row(card2, "Text and characters", self._c_locale,
-                        sub="Leave as the first choice unless another is "
-                            "required")
+        loc_row = self._field_row(card2, "Text and characters", self._c_locale,
+                                  sub="Leave as the first choice unless "
+                                      "another is required")
         tznote = self._para(col, "This computer keeps time in UTC and carries "
                                  "no time-zone list. Set the clock to local "
                                  "time in Settings after restarting.",
@@ -1124,7 +1712,6 @@ class Installer(nbapp.AppWindow):
         # types something they have no intention of remembering, and there is
         # no way back into an offline machine that will not accept it.
         self._grp(col, "Administrator password")
-        card3 = None    # created after the note below, so the note sits above
         self._e_pw = Gtk.Entry()
         self._e_pw.set_visibility(False)
         self._e_pw.set_width_chars(20)
@@ -1134,10 +1721,15 @@ class Installer(nbapp.AppWindow):
         # The explanation belongs to the PAIR, not to the first box. Hung under
         # "Password" it made that row two lines tall while "Confirm password"
         # was one, so the two boxes sat at different heights and the first read
-        # as the bigger control. Same words, once, above both.
-        card3 = self._card(col) if card3 is None else card3
+        # as the bigger control. Same words, once, above both — so the note is
+        # packed BEFORE the card, not after it. Packed after (which is what the
+        # code did while claiming otherwise) it landed flush under the card's
+        # bottom edge, where it read as a caption for the last row in the card:
+        # the tick that means no password is ever asked for, over a sentence
+        # saying the password is asked for every time.
         self._grp_note(col, _t("This password is asked for every time the "
                                "computer starts. It cannot be recovered."))
+        card3 = self._card(col)
         pwrow = self._field_row(card3, "Password", self._e_pw, first=True)
         self._e_pw2 = Gtk.Entry()
         self._e_pw2.set_visibility(False)
@@ -1204,6 +1796,10 @@ class Installer(nbapp.AppWindow):
         rrow.get_style_context().add_class("bordered")
         rrow.pack_start(rbox, True, True, 0)
         card3.pack_start(rrow, False, False, 0)
+        # The rows "Set this up for someone else" defers, greyed whole (see
+        # _refresh_row_states): a question that is not being asked is its label
+        # as much as its box.
+        self._oem_rows = [name_row, host_row, kbd_row, loc_row, rrow]
 
         # -- swap --
         self._grp(col, "Spare memory space")
@@ -1221,8 +1817,17 @@ class Installer(nbapp.AppWindow):
         self._sp_swap.set_sensitive(False)
         self._sp_swap.connect("value-changed", lambda *_: self._validate())
         ctl.add_widget(self._sp_swap)
-        self._field_row(card4, "How much to set aside", self._sp_swap,
-                        sub="In megabytes (known as swap).")
+        swap_size_row = self._field_row(card4, "How much to set aside",
+                                        self._sp_swap,
+                                        sub="In megabytes (known as swap).")
+
+        # Every row on this page, for the update path. Not the same list as
+        # _oem_rows: "set this up for someone else" defers four questions to
+        # the new owner, while an update answers ALL of them from the disk --
+        # including whether there is spare memory space, which is a partition
+        # an update does not touch.
+        self._update_rows = [oem_row, name_row, host_row, kbd_row, loc_row,
+                             pwrow, pw2row, spwrow, rrow, srow, swap_size_row]
 
         # -- inline validation hint --
         self._opt_hint = Gtk.Label(xalign=0)
@@ -1241,6 +1846,8 @@ class Installer(nbapp.AppWindow):
         lbl.get_style_context().add_class("inst-note")
         lbl.set_line_wrap(True)
         lbl.set_max_width_chars(72)
+        # Never flush against whatever is packed next to it.
+        lbl.set_margin_bottom(2)
         parent.pack_start(lbl, False, False, 0)
 
     def _grp(self, parent, text):
@@ -1300,9 +1907,40 @@ class Installer(nbapp.AppWindow):
     def _on_rootless_toggle(self, btn):
         # With no console password wanted, the password fields are dead: grey
         # them rather than keep demanding an answer that is then discarded.
-        for row in getattr(self, "_pw_rows", []):
-            row.set_sensitive(not btn.get_active())
+        self._refresh_row_states()
         self._validate()
+
+    def _refresh_row_states(self):
+        """Grey the whole ROW of a question that is not being asked.
+
+        Greying the control alone leaves its label and its hint in full ink
+        beside a muted box, which reads as a row half broken rather than a row
+        deferred. All THREE things that defer a question are applied here, from
+        their current state, so none of them can undo another's greying —
+        turning "Set this up for someone else" off must not hand back password
+        rows the passwordless tick had put away, and neither of them may hand
+        back anything at all while an update is answering the whole page from
+        the disk.
+        """
+        oem = self._cb_oem.get_active()
+        pw_off = self._chk_rootless.get_active()
+        upd = self._is_update()
+        for row in getattr(self, "_update_rows", []):
+            row.set_sensitive(not upd)
+        if not upd:
+            for row in getattr(self, "_oem_rows", []):
+                row.set_sensitive(not oem)
+            for row in getattr(self, "_pw_rows", []):
+                row.set_sensitive(not oem and not pw_off)
+        note = getattr(self, "_update_note", None)
+        if note is not None:
+            # set_no_show_all as well as hide(): a later show_all() on the page
+            # would otherwise put the note back on a fresh install.
+            note.set_no_show_all(not upd)
+            if upd:
+                note.show()
+            else:
+                note.hide()
 
     def _activate_next(self, *_):
         # Enter in a field advances the wizard, but only when Next is actually
@@ -1319,6 +1957,13 @@ class Installer(nbapp.AppWindow):
         outer, col = self._page_scaffold(
             "Summary",
             "Review the plan. Nothing is written until it is confirmed.")
+        # Both sentences on this page are written in the future tense about a
+        # disk that has not been touched. After a run that stopped part-way the
+        # disk HAS been touched, and coming back here (the failure page's own
+        # advice) met "Nothing is written until it is confirmed" over a disk
+        # that had already been erased. _refresh_summary re-words both from
+        # _disk_dirty.
+        self._summary_sub = col.page_sub
         # The irreversible warning goes ABOVE the review card, not under it. The
         # card is seven rows tall, so on a 768px panel anything below it starts
         # past the fold — and the two things that must never be missed are the
@@ -1391,11 +2036,145 @@ class Installer(nbapp.AppWindow):
             # last chance to catch it.
             acct = _t("None. The machine starts straight into the desktop.")
         else:
-            acct = _t("asked for every time this computer starts")
+            # Capitalised like every other value in this card: it was the one
+            # lowercase fragment in a column of sentences.
+            acct = _t("Asked for every time this computer starts")
 
-        rows = [
-            ("Disk", dtxt),
-        ]
+        if self._is_update():
+            rows = self._summary_rows_update(dtxt)
+        else:
+            rows = self._summary_rows_install(dtxt, layout, kbd, loc, acct)
+        for i, (k, v) in enumerate(rows):
+            val = Gtk.Label(xalign=1)
+            # The last screen before an irreversible erase. The computer name
+            # and the person's own name are typed on the page before this one,
+            # and "Home", "Work" and "Notes" are all ordinary computer names —
+            # a review card that renames them is the one place a person cannot
+            # afford to doubt what they are agreeing to.
+            if k in ("Name", "Computer name", "Full name", "Device name"):
+                nbi18n.set_verbatim(val, v)
+            else:
+                val.set_text(v)
+            val.get_style_context().add_class("inst-value")
+            val.set_line_wrap(True)
+            val.set_max_width_chars(48)
+            self._field_row(card, k, val, first=(i == 0))
+        card.show_all()
+
+        clash = self._clash_line()
+        if clash:
+            self._summary_warn.set_text(clash)
+            self._summary_warn.set_no_show_all(False)
+            self._summary_warn.show()
+        else:
+            self._summary_warn.set_text("")
+            self._summary_warn.set_no_show_all(True)
+            self._summary_warn.hide()
+        if self._is_update():
+            info = self.cfg.get("existing") or {}
+            # The same names in their exact technical form, for anybody
+            # recovering a machine that will not start — but in the words the
+            # rest of this wizard uses for them ("start-up partition", the way
+            # the disk layout row and the progress phases both name it), since
+            # the paths and the identifier are the part that has to be exact.
+            # TRANSLATE THE PATTERN, THEN SUBSTITUTE. Handing the finished
+            # sentence to _t() cannot work here: nbi18n can only recognise an
+            # already-substituted string by reverse-matching it against the
+            # catalog, and it gives that up past 300 characters -- this one is
+            # 342 once the disk names are in it. So the line stayed English in
+            # all seventeen languages while the catalog entry for it sat there
+            # unused. Every other string in this file already reads
+            # _t("...") % (...); this one was the exception, and the exception
+            # is the bug.
+            tech = _t("Details: the contents of the root partition %s are "
+                      "replaced, keeping /%s; the loader and the kernel on the "
+                      "start-up partition %s are overwritten. The way the disk "
+                      "is divided, the root partition's fixed identifier %s and "
+                      "any spare memory space on it are left exactly as they "
+                      "are.") % (
+                info.get("root") or _t("the root partition"),
+                ", /".join(PRESERVED_DIRS),
+                info.get("esp") or _t("the start-up partition"),
+                ROOT_PARTUUID)
+        else:
+            tech = ("Details: a %d MiB FAT32 EFI system partition, "
+                    "%san ext4 root filesystem labelled \"%s\" with PARTUUID %s, "
+                    "and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI."
+                    % (ESP_SIZE_MIB,
+                       ("a %d MiB swap partition, " % int(self.cfg["swap_mib"]))
+                       if self.cfg["swap"] else "",
+                       ROOT_LABEL, ROOT_PARTUUID))
+        self._summary_tech.set_text(tech)
+
+        ready, reason = self._install_ready()
+        self.next_btn.set_sensitive(ready)
+        self._refresh_footer_tooltips(ready)
+        # Keep the footer hint in step with the button whichever way we got
+        # here (_validate also sets it, to the same text).
+        if hasattr(self, "_foot_hint"):
+            self._foot_hint.set_text(reason)
+        if self._summary_sub is not None:
+            # Keeps the subtitle's own job — what this page is for — and
+            # corrects only the half that stopped being true. The banner below
+            # names the disk and the consequence; saying both twice would be
+            # two sentences where one is needed. Set on every pass rather than
+            # only when it goes wrong: the update path can arrive here with the
+            # machine in three different states, and a subtitle that is only
+            # ever written once keeps describing the first of them.
+            if self._is_update() and self._update_state in ("broken",
+                                                            "finish"):
+                self._summary_sub.set_text(
+                    _t("Review the plan. The update that stopped left this "
+                       "machine part-way through, and running it again "
+                       "finishes the job."))
+            elif self._disk_dirty:
+                self._summary_sub.set_text(
+                    _t("Review the plan. The disk has already been erased by "
+                       "the run that stopped."))
+            else:
+                self._summary_sub.set_text(
+                    _t("Review the plan. Nothing is written until it is "
+                       "confirmed."))
+        if ready:
+            # The contents live in the "What is on it now" row directly below
+            # this banner, where they are scannable beside everything else
+            # being reviewed; saying them twice, two centimetres apart, only
+            # makes the warning longer to read. The final confirmation repeats
+            # them, because there the card is gone.
+            if self._is_update():
+                self._summary_danger.set_text(
+                    _t("The system on %s is replaced and every file on it is "
+                       "kept. The machine will not start up until the update "
+                       "has finished, so leave it switched on.") % disk)
+            elif self._disk_dirty:
+                self._summary_danger.set_text(
+                    _t("%s has already been erased. Installing again starts "
+                       "over on it.") % disk)
+            else:
+                self._summary_danger.set_text(
+                    "Everything on %s will be erased. This cannot be undone."
+                    % disk)
+            self._install_block.set_text("")
+            self._install_block.set_no_show_all(True)
+            self._install_block.hide()
+        else:
+            self._summary_danger.set_text(
+                _t("This computer cannot be updated right now.")
+                if self._is_update()
+                else _t("This computer cannot be installed to right now."))
+            self._install_block.set_text(reason)
+            self._install_block.set_no_show_all(False)
+            self._install_block.show()
+        # Paper and ink for the update, signage red for the erase. Same rule as
+        # the disk step's banner: red means "this destroys something", and a
+        # run that keeps every file the user owns does not. A refusal is never
+        # calm either way — it is the panel saying this cannot go ahead.
+        self._set_calm(self._summary_danger, ready and self._is_update())
+
+    def _summary_rows_install(self, dtxt, layout, kbd, loc, acct):
+        """The review card for a fresh install: the disk, what is on it now,
+        and every answer the Options step collected."""
+        rows = [("Disk", dtxt)]
         # What is being destroyed belongs in the review, directly under the
         # disk it names — this is the row that catches a wrong choice while
         # backing out is still free.
@@ -1419,57 +2198,41 @@ class Installer(nbapp.AppWindow):
              _t("Chosen on first start-up") if self.cfg.get("oem") else loc),
             ("Clock", _t("UTC. Set local time in Settings afterwards.")),
         ]
-        for i, (k, v) in enumerate(rows):
-            val = Gtk.Label(label=v, xalign=1)
-            val.get_style_context().add_class("inst-value")
-            val.set_line_wrap(True)
-            val.set_max_width_chars(48)
-            self._field_row(card, k, val, first=(i == 0))
-        card.show_all()
+        return rows
 
-        clash = self._clash_line()
-        if clash:
-            self._summary_warn.set_text(clash)
-            self._summary_warn.set_no_show_all(False)
-            self._summary_warn.show()
-        else:
-            self._summary_warn.set_text("")
-            self._summary_warn.set_no_show_all(True)
-            self._summary_warn.hide()
-        tech = ("Details: a %d MiB FAT32 EFI system partition, "
-                "%san ext4 root filesystem labelled \"%s\" with PARTUUID %s, "
-                "and the GRUB loader written to /EFI/BOOT/BOOTX64.EFI."
-                % (ESP_SIZE_MIB,
-                   ("a %d MiB swap partition, " % int(self.cfg["swap_mib"]))
-                   if self.cfg["swap"] else "",
-                   ROOT_LABEL, ROOT_PARTUUID))
-        self._summary_tech.set_text(tech)
+    def _summary_rows_update(self, dtxt):
+        """The review card for an update: what is on the disk, what is kept,
+        and what is replaced.
 
-        ready, reason = self._install_ready()
-        self.next_btn.set_sensitive(ready)
-        self._refresh_footer_tooltips(ready)
-        # Keep the footer hint in step with the button whichever way we got
-        # here (_validate also sets it, to the same text).
-        if hasattr(self, "_foot_hint"):
-            self._foot_hint.set_text(reason)
-        if ready:
-            # The contents live in the "What is on it now" row directly below
-            # this banner, where they are scannable beside everything else
-            # being reviewed; saying them twice, two centimetres apart, only
-            # makes the warning longer to read. The final confirmation repeats
-            # them, because there the card is gone.
-            self._summary_danger.set_text(
-                "Everything on %s will be erased. This cannot be undone."
-                % disk)
-            self._install_block.set_text("")
-            self._install_block.set_no_show_all(True)
-            self._install_block.hide()
-        else:
-            self._summary_danger.set_text(
-                _t("This computer cannot be installed to right now."))
-            self._install_block.set_text(reason)
-            self._install_block.set_no_show_all(False)
-            self._install_block.show()
+        Kept before replaced, deliberately. "Will my files survive this" is the
+        only question anybody has on this screen, and a card that answers it in
+        its fourth row has made somebody read three rows to find out."""
+        info = self.cfg.get("existing") or {}
+        build = info.get("build") or ""
+        rows = [("Disk", dtxt),
+                ("System on this disk",
+                 (_t("%s, build %s") % (OS_PRETTY, build)) if build
+                 else OS_PRETTY)]
+        if info.get("unfinished"):
+            # An earlier update stopped part-way. Say so HERE rather than let
+            # the state of the machine be a surprise: running this one finishes
+            # the job, and that is the only reason the disk still offers it.
+            rows.append(("Last update",
+                         _t("An earlier update did not finish. This one "
+                            "completes it.")))
+        kept = _t("Kept from the system on this disk")
+        rows += [
+            ("Kept", _t("The home folder, the settings, the files and any "
+                        "maps on this disk")),
+            ("Replaced", _t("The system, the kernel and the start-up files")),
+            ("Name", kept),
+            ("Computer name", kept),
+            ("Administrator password", kept),
+            ("Keyboard", kept),
+            ("Text and characters", kept),
+            ("Clock", _t("UTC. Set local time in Settings afterwards.")),
+        ]
+        return rows
 
     def _install_ready(self):
         if not self.medium_ok:
@@ -1480,8 +2243,11 @@ class Installer(nbapp.AppWindow):
             return False, ("This copy of %s is missing the tools that prepare "
                            "a disk, so it cannot install itself." % OS_NAME)
         # Checked HERE, not when the password is finally written: by then the
-        # disk has been erased and the whole system extracted onto it.
-        if not self.cfg.get("root_passwordless") and not self.can_hash:
+        # disk has been erased and the whole system extracted onto it. Not
+        # asked of an update at all, which sets no password: the one already on
+        # the disk is carried across verbatim (see _restore_root_shadow).
+        if (not self._is_update() and not self.cfg.get("root_passwordless")
+                and not self.can_hash):
             return False, (_t("This installer cannot store a password, so it "
                               "cannot finish an install that asks for one. On "
                               "the Options step, either switch on starting "
@@ -1489,6 +2255,30 @@ class Installer(nbapp.AppWindow):
                               "installer.") % OS_NAME)
         if not self.cfg.get("disk"):
             return False, "Go back to “Choose the disk” and pick one first."
+        if self._is_update():
+            # None of the gates below apply: an update never partitions, never
+            # formats and never sets a password, so the figure that says how
+            # big a disk must be to be prepared from nothing says nothing about
+            # it. What it needs instead is room to unpack the new system BESIDE
+            # the old one, which is the whole reason a failed update can leave
+            # the machine startable -- so that is the one thing checked, here,
+            # where backing out is still free.
+            info = self.cfg.get("existing") or {}
+            need = self._update_free_bytes()
+            free = int(info.get("free") or 0)
+            # Never on a machine whose last update stopped part-way: its
+            # leftover working directories are counted as used space now and
+            # are deleted before the unpack starts, so the figure read off the
+            # disk would refuse the one run that repairs it.
+            if need and free and not info.get("unfinished") and free < need:
+                return False, (_t("There is not enough room on %s to unpack "
+                                  "the new system beside the old one: %s is "
+                                  "free and %s is needed. Delete some files "
+                                  "and press Look again, or erase the disk "
+                                  "and install fresh.")
+                               % (self.cfg.get("disk") or "",
+                                  human_bytes(free), human_bytes(need)))
+            return True, ""
         # Last gate before the erase. The disk step already refuses a disk
         # that is too small, but the swap size is chosen AFTER it, so a disk
         # that fitted can stop fitting; this is the check that is true at the
@@ -1516,6 +2306,14 @@ class Installer(nbapp.AppWindow):
             "Installing",
             "Writing %s to the disk. Leave the installer in place and keep the "
             "computer switched on." % OS_PRETTY)
+        # This page has two states and one set of words. Keep both labels (and
+        # what they say while the run is alive) so _install_failed can stop the
+        # screen telling somebody to keep the computer on for a run that has
+        # already stopped, and _reset_progress can put them back for a retry.
+        self._prog_title = col.page_title
+        self._prog_sub = col.page_sub
+        self._prog_title_run = col.page_title.get_text()
+        self._prog_sub_run = col.page_sub.get_text() if col.page_sub else ""
         self._prog_status = Gtk.Label(xalign=0)
         self._prog_status.get_style_context().add_class("inst-progstatus")
         self._prog_status.set_margin_top(6)
@@ -1555,6 +2353,9 @@ class Installer(nbapp.AppWindow):
         self._log_view.set_wrap_mode(Gtk.WrapMode.CHAR)
         self._log_buf = self._log_view.get_buffer()
         self._log_scroll.add(self._log_view)
+        _ladj = self._log_scroll.get_vadjustment()
+        if _ladj is not None:
+            _ladj.connect("changed", self._on_log_extent)
         col.pack_start(self._log_scroll, True, True, 0)
 
         self._fail_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1569,6 +2370,8 @@ class Installer(nbapp.AppWindow):
         if btn.get_active():
             self._log_scroll.set_no_show_all(False)
             self._log_scroll.show_all()
+            # Opened by hand mid-run, it opens where the newest line is too.
+            self._scroll_log_to_end()
         else:
             self._log_scroll.set_no_show_all(True)
             self._log_scroll.hide()
@@ -1576,6 +2379,23 @@ class Installer(nbapp.AppWindow):
     def _reset_progress(self):
         self._pulse_on = False
         self._cancel_source("_pulse_source")
+        # The two runs this page can show say different things about the disk,
+        # and the difference is the whole point of the update path: one erases
+        # the disk, the other keeps everything on it that is the user's. The
+        # page is built with the install wording and captures it, so the update
+        # wording is set here, on the way in, and put back on the way in to a
+        # fresh install.
+        if self._is_update():
+            self._prog_title.set_text(_t("Updating"))
+            if self._prog_sub is not None:
+                self._prog_sub.set_text(
+                    _t("Replacing the system on the disk. The files on it are "
+                       "not touched. Leave the installer in place and keep "
+                       "the computer switched on."))
+        else:
+            self._prog_title.set_text(self._prog_title_run)
+            if self._prog_sub is not None:
+                self._prog_sub.set_text(self._prog_sub_run)
         self._log_buf.set_text("")
         self._prog_bar.set_fraction(0.0)
         self._prog_bar.set_text("0%")
@@ -1586,6 +2406,10 @@ class Installer(nbapp.AppWindow):
     # ------------------------------------------------------------------ 6 done
     def _page_done(self):
         outer, col = self._page_scaffold("Installation complete")
+        # Kept because this page has two endings: an install and an update are
+        # not the same event, and a heading that says the wrong one is the
+        # first thing somebody reads after handing this program their disk.
+        self._done_title = col.page_title
         # The disk is named once the run finishes (see _install_done): the one
         # thing someone wants confirmed after erasing a disk is WHICH disk it
         # went to, and this page is built before there is an answer.
@@ -1614,6 +2438,7 @@ class Installer(nbapp.AppWindow):
         shut = Gtk.Button(label=_t("Shut Down"))
         shut.get_style_context().add_class("inst-primary")
         shut.connect("clicked", lambda *_: self._confirm_shutdown())
+        self._done_shut = shut
         btnrow.pack_start(shut, False, False, 0)
         restart = Gtk.Button(label=_t("Restart"))
         restart.get_style_context().add_class("inst-btn")
@@ -1623,12 +2448,17 @@ class Installer(nbapp.AppWindow):
         return outer
 
     def _confirm_shutdown(self):
+        # The button says Shut Down, so the dialog it opens says Shut Down too
+        # — and so does the rest of the OS (the panel's power item and the
+        # Settings power page both use exactly this word). Three words for one
+        # action ("Shut Down" -> "Switch off now?" -> "Switch off") read as
+        # three different things happening.
         self._open_confirm(
-            "Switch off now?",
-            "The computer will switch off. Remove the installer USB stick or "
-            "disc while it is off, then press the power button. It will start "
-            "up into %s from the disk just installed to." % OS_PRETTY,
-            "Switch off",
+            _t("Shut down now?"),
+            _t("The computer will shut down. Remove the installer USB stick "
+               "or disc while it is off, then press the power button. It will "
+               "start up into %s from the disk just installed to.") % OS_PRETTY,
+            _t("Shut Down"),
             lambda: self._do_power("poweroff"))
 
     def _confirm_restart(self):
@@ -1766,28 +2596,76 @@ class Installer(nbapp.AppWindow):
                 self._e_pw.grab_focus_without_selecting()
             except Exception:
                 self._e_pw.grab_focus()
+        elif key == "progress" and hasattr(self, "_log_toggle"):
+            self._log_toggle.grab_focus()
+        elif key == "done" and hasattr(self, "_done_shut"):
+            self._done_shut.grab_focus()
 
         # rail state
-        for j, (row, num, lbl) in enumerate(self._rail_rows):
-            ctx = row.get_style_context()
-            for c in ("active", "done"):
-                ctx.remove_class(c)
-            if j < i:
-                ctx.add_class("done")
-                # pin the tick to DejaVu Sans — the shipped Nimbus Sans has no
-                # U+2713 and would show a tofu box for a completed step
-                num.set_markup('<span face="DejaVu Sans">✓</span>')
-            elif j == i:
-                ctx.add_class("active")
-                num.set_text(str(j + 1))
-            else:
-                num.set_text(str(j + 1))
+        # Restating the rail is DISPLAY, never navigation. Gtk.ToggleButton's
+        # set_active emits "clicked", so lighting the step being entered also
+        # fires the rail handler for the step being UNLIT — with the previous
+        # index, which is <= _max_reached and so passes every guard in
+        # _on_rail_click and navigates straight back. Next then bounced
+        # welcome -> target -> welcome and recursed until the stack blew.
+        # Block each row's own handler while the rail is restated.
+        for entry in self._rail_rows:
+            hid = getattr(entry[0], "_rail_hid", None)
+            if hid is not None:
+                entry[0].handler_block(hid)
+        try:
+            # A step is reached by finishing the one before it, and the rail
+            # has to SAY that rather than going quiet: sensitivity is derived
+            # from the reason below, so a row that declines the click cannot
+            # exist without one. (j < i already implies j <= _max_reached,
+            # since _max_reached is never less than the current step.)
+            started = self._working or i >= self._steps_index("progress")
+            for j, (step_btn, row, num, lbl) in enumerate(self._rail_rows):
+                step_btn.set_active(j == i)
+                if j == i:
+                    reason = _t("This is the current step.")
+                elif started:
+                    reason = _t("The installation has started. Steps cannot "
+                                "be reopened.")
+                elif j > i:
+                    reason = _t("This step opens when the step before it is "
+                                "finished.")
+                else:
+                    reason = ""
+                step_btn.set_sensitive(not reason)
+                step_btn.set_tooltip_text(reason or _t("Back to this step"))
+                ctx = row.get_style_context()
+                for c in ("active", "done"):
+                    ctx.remove_class(c)
+                if j < i:
+                    ctx.add_class("done")
+                    # pin the tick to DejaVu Sans — the shipped Nimbus Sans has
+                    # no U+2713 and would show a tofu box for a completed step
+                    num.set_markup('<span face="DejaVu Sans">✓</span>')
+                elif j == i:
+                    ctx.add_class("active")
+                    num.set_text(str(j + 1))
+                else:
+                    num.set_text(str(j + 1))
+        finally:
+            for entry in self._rail_rows:
+                hid = getattr(entry[0], "_rail_hid", None)
+                if hid is not None:
+                    entry[0].handler_unblock(hid)
 
         # footer visibility per step. The forward button is always the footer's
         # right-hand button; on the Summary step it becomes the destructive
         # primary and says exactly what it will do.
         ctx = self.next_btn.get_style_context()
-        if key == "summary":
+        if key == "summary" and self._is_update():
+            # Ink, not red: .inst-primary is what turns this button red on the
+            # Summary (see the CSS note on .inst-next.inst-primary), and red in
+            # this wizard means "this destroys something" and only that. An
+            # update destroys nothing of the user's, and a second red would
+            # take the meaning off the first.
+            self.next_btn.set_label(_t("Update the system"))
+            ctx.remove_class("inst-primary")
+        elif key == "summary":
             self.next_btn.set_label(_t("Erase disk and install"))
             ctx.add_class("inst-primary")
         else:
@@ -1808,9 +2686,12 @@ class Installer(nbapp.AppWindow):
         key = self.STEPS[self._step][0]
         self.back_btn.set_tooltip_text(
             _t("Back") if self._step > 0 else _t("This is the first step."))
-        if next_ready:
+        if next_ready and key == "summary":
             self.next_btn.set_tooltip_text(
-                _t("Erase disk and install") if key == "summary" else _t("Next"))
+                _t("Update the system") if self._is_update()
+                else _t("Erase disk and install"))
+        elif next_ready:
+            self.next_btn.set_tooltip_text(_t("Next"))
         elif key == "welcome":
             self.next_btn.set_tooltip_text(_t("The system to install is not available."))
         elif key == "target":
@@ -1818,7 +2699,9 @@ class Installer(nbapp.AppWindow):
         elif key == "options":
             self.next_btn.set_tooltip_text(_t("Some installation details need attention."))
         elif key == "summary":
-            self.next_btn.set_tooltip_text(_t("The installation requirements are not met."))
+            self.next_btn.set_tooltip_text(
+                _t("The update requirements are not met.") if self._is_update()
+                else _t("The installation requirements are not met."))
         else:
             self.next_btn.set_tooltip_text(_t("Installation is in progress."))
 
@@ -1852,11 +2735,17 @@ class Installer(nbapp.AppWindow):
             w = getattr(self, name, None)
             if w is not None:
                 w.set_sensitive(not oem)
+        self._refresh_row_states()
         self._validate()
 
     def _commit_step(self):
         key = self.STEPS[self._step][0]
-        if key == "options":
+        # Nothing is committed from a page that is not being asked. During an
+        # update the boxes are greyed but they still HOLD whatever was typed
+        # into them before the disk was chosen, and committing that would put a
+        # stale hostname and a stale spare-memory size into the config the
+        # Summary then describes.
+        if key == "options" and not self._is_update():
             self.cfg["oem"] = self._cb_oem.get_active()
             self.cfg["username"] = self._e_user.get_text().strip()
             self.cfg["hostname"] = self._e_host.get_text().strip()
@@ -1896,6 +2785,12 @@ class Installer(nbapp.AppWindow):
             self._foot_hint.set_text(hint)
 
     def _validate_options(self):
+        if self._is_update():
+            # The disk already carries every answer this page collects, and the
+            # update keeps all of them. There is nothing here to get wrong, and
+            # in particular nothing to size a partition against: an update
+            # never repartitions.
+            return True, ""
         if self._cb_oem.get_active():
             # Every answer on this page now belongs to the new owner, so there
             # is nothing here left to get wrong.
@@ -1904,7 +2799,11 @@ class Installer(nbapp.AppWindow):
         pw = self._e_pw.get_text()
         pw2 = self._e_pw2.get_text()
         if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
-            return False, "Enter a valid hostname (letters, digits and -)."
+            # Name the field on the screen. "hostname" is a word that appears
+            # nowhere in this wizard: the label above the box says Computer
+            # name, so that is what the message refusing it has to say.
+            return False, _t("Enter a valid computer name (letters, digits "
+                             "and hyphens).")
         # Only when the password is going to be USED. With the passwordless tick
         # on, nothing reads it, so demanding one would be a made-up obstacle.
         if not self._chk_rootless.get_active():
@@ -1937,6 +2836,25 @@ class Installer(nbapp.AppWindow):
         if not ready:
             return
         disk = self.cfg["disk"]
+        if self._is_update():
+            # Kept FIRST. Somebody who has clicked through four screens is no
+            # longer reading them; this is the one dialog they do read, so the
+            # sentence it opens with is the answer to the only question they
+            # have. The two halves are translated separately and then joined
+            # for the reason the erase dialog below gives.
+            body = (_t("The home folder, the settings and every file on %s "
+                       "are kept. The system on it, its kernel and its "
+                       "start-up files are replaced with this one.") % disk)
+            body += "\n\n" + _t("The machine will not start up until the "
+                                 "update has finished. Keep it switched on "
+                                 "and leave the installer in place.")
+            clash = self._clash_line()
+            if clash:
+                body += "\n\n" + clash
+            self._open_confirm(
+                _t("Update the system on %s?") % disk, body,
+                _t("Update"), self._start_install)
+            return
         # Translated explicitly, then joined: the automatic widget translation
         # keys on the WHOLE label, so appending the contents to an already
         # translated sentence would stop the pair matching any catalog entry
@@ -2068,10 +2986,40 @@ class Installer(nbapp.AppWindow):
         buf = self._log_buf
         buf.insert(buf.get_end_iter(),
                    text if text.endswith("\n") else text + "\n")
+        self._scroll_log_to_end()
+        return False
+
+    def _scroll_log_to_end(self):
+        """Put the report's LAST line in view — the one that says what failed.
+
+        Every line is appended while the report is folded away, where the view
+        has no allocation and its adjustment no extent, and the old code asked
+        for `adj.set_value(adj.get_upper())` there: `upper` is a value set_value
+        clamps away (the last page starts at upper - page_size), and against a
+        box of size zero it means nothing at all. Opening the report at the
+        moment of a failure therefore showed its FIRST line — the wipefs and
+        sgdisk chatter — with the command that actually stopped the install off
+        the bottom of a box the reader then had to scroll by hand.
+        """
+        if self._closed:
+            return
         adj = self._log_scroll.get_vadjustment()
         if adj is not None:
-            adj.set_value(adj.get_upper())
-        return False
+            self._on_log_extent(adj)
+
+    def _on_log_extent(self, adj):
+        """Stay at the end as the report's extent moves.
+
+        A TextView measures itself lazily, line by line, and the box only gets
+        a page size when the toggle finally shows it — so "scroll to the end"
+        cannot be a single call against an extent that is not final yet. This
+        rides the adjustment's own "changed" (extent, never the user's
+        scrolling, which is "value-changed"), so the newest line stays the one
+        on screen exactly as appending each line already intended.
+        """
+        if self._closed:
+            return
+        adj.set_value(max(0.0, adj.get_upper() - adj.get_page_size()))
 
     def _post_progress(self, frac, status=None):
         if not self._closed:
@@ -2125,7 +3073,14 @@ class Installer(nbapp.AppWindow):
 
     def _install_worker(self):
         try:
-            self._do_install()
+            # One answer decides which engine runs, and it is the same one
+            # every screen has been reading (see _is_update), so the words the
+            # user agreed to on the Summary cannot describe a different run
+            # from the one that starts here.
+            if self._is_update():
+                self._do_update()
+            else:
+                self._do_install()
         except InstallError as e:
             if not self._closed:
                 GLib.idle_add(self._install_failed, str(e))
@@ -2142,26 +3097,57 @@ class Installer(nbapp.AppWindow):
         if self._closed:
             return False
         self._working = False
-        # What WAS on that disk is now gone — the engine wipes it before it
-        # does anything else. Backing up to the Summary from here would
-        # otherwise show a "What is on it now: Windows" row, and repeat it in
-        # the confirmation, about a disk that no longer holds any of it.
-        self.cfg["disk_contents"] = ""
-        self._post_progress(self._prog_bar.get_fraction(), "Installation stopped")
+        update = self._is_update()
+        if not update:
+            # What WAS on that disk is now gone — the engine wipes it before it
+            # does anything else. Backing up to the Summary from here would
+            # otherwise show a "What is on it now: Windows" row, and repeat it
+            # in the confirmation, about a disk that no longer holds any of it.
+            #
+            # An update is the opposite case and must not do this: it erased
+            # nothing, the contents line is still true, and marking the disk
+            # dirty would have the Summary announce an erase that never
+            # happened.
+            self.cfg["disk_contents"] = ""
+            self._disk_dirty = True
+        # The page's own heading and subtitle are part of the state, not
+        # decoration: left alone they read "Installing" and "Leave the
+        # installer in place and keep the computer switched on" directly above
+        # "Installation stopped" and a red failure panel.
+        self._prog_title.set_text(_t("Update stopped") if update
+                                  else _t("Installation stopped"))
+        if self._prog_sub is not None:
+            self._prog_sub.set_text(
+                _t("Nothing more is being written to the disk. What went "
+                   "wrong is below."))
+        # The status line KEEPS the phase it stopped in ("Formatting
+        # partitions"), which is the one thing on the page the heading above
+        # does not already say. Re-post the fraction all the same: that is what
+        # ends the pulsing phase, so the bar stops moving with the work.
+        self._post_progress(self._prog_bar.get_fraction())
         self._fail_box.set_no_show_all(False)
         # Plain English first, the exact reason after it. Be straight about the
-        # state of the disk: preparing it is the FIRST thing the engine does, so
-        # by the time anything can fail the old contents are already gone —
-        # telling the user "nothing was written" would be a comforting lie.
-        self._fail_lbl.set_text(
-            "The installation stopped part-way through. The disk was already "
-            "being erased, so it will not start up as it is. Go back and try "
-            "again.\n\n"
-            "What went wrong: %s" % msg)
+        # state of the disk: preparing it is the FIRST thing the install engine
+        # does, so by the time anything can fail the old contents are already
+        # gone — telling the user "nothing was written" would be a comforting
+        # lie. The update engine can honestly say better than that, and how
+        # much better depends on how far it got (see _update_failure_state).
+        if update:
+            self._fail_lbl.set_text("%s\n\n%s"
+                                    % (self._update_failure_state(),
+                                       _t("What went wrong: %s") % msg))
+        else:
+            self._fail_lbl.set_text(
+                "The installation stopped part-way through. The disk was "
+                "already being erased, so it will not start up as it is. Go "
+                "back and try again.\n\n"
+                "What went wrong: %s" % msg)
         self._fail_box.show_all()
-        # Open the detailed report: this is the moment it earns its place.
+        # Open the detailed report: this is the moment it earns its place, and
+        # at its END, where the command that failed is (see _scroll_log_to_end).
         if not self._log_toggle.get_active():
             self._log_toggle.set_active(True)
+        self._scroll_log_to_end()
         self.back_btn.show()
         self.back_btn.set_sensitive(True)
         self._refresh_footer_tooltips(self.next_btn.get_sensitive())
@@ -2174,8 +3160,17 @@ class Installer(nbapp.AppWindow):
         self._post_progress(1.0, "Complete")
         # Say which disk it went onto. After erasing one, "it worked" is not
         # the reassurance people are looking for — "it is on THAT disk" is.
+        # After an update the reassurance wanted is a different one again, and
+        # it is the promise the whole path was built to keep.
         disk = self.cfg.get("disk")
-        if disk:
+        if self._is_update():
+            self._done_title.set_text(_t("Update complete"))
+            self._done_para.set_text(
+                _t("%s on %s has been replaced with this version. The files "
+                   "and settings on it are as they were. Remove the installer "
+                   "USB stick or disc, then start the machine again.")
+                % (OS_PRETTY, disk or _t("the disk")))
+        elif disk:
             self._done_para.set_text(
                 "%s is now installed on %s (%s), at %s. Remove the installer "
                 "USB stick or disc, then start the machine again. It will "
@@ -2327,6 +3322,57 @@ class Installer(nbapp.AppWindow):
         except OSError as e:
             raise InstallError("cannot create %s: %s" % (espmnt, e))
         self._sh([mount, esp, espmnt])
+        self._write_boot(espmnt)
+
+        # f. Configure the installed tree.
+        self._phase(0.90, "Configuring the system")
+        self._configure_target(TARGET_MNT)
+
+        # g. Map packs that rode in on the medium, onto the machine.
+        #
+        # BEST EFFORT, DELIBERATELY. This runs after the system is installed
+        # and configured, so nothing in it can cost anybody their install: no
+        # room, an unreadable medium or a short read is logged plainly and the
+        # installation still completes. That is also why the packs are NOT
+        # counted by _min_disk_bytes — an OPTIONAL 2.7 GB map must not raise
+        # the smallest disk Notebook OS can be installed onto.
+        self._copy_map_packs(TARGET_MNT)
+
+        # h. Finish: flush and unmount.
+        self._phase(0.97, "Finishing up")
+        if self.tools.get("sync"):
+            # A failed final writeback means the installed bytes are not known
+            # durable.  Never offer restart/power-off after swallowing it.
+            self._sh([self.tools["sync"]])
+        # These are the target filesystems just written, not stale preflight
+        # mounts.  Failure is part of installation completion and must remain
+        # on the error/retry path rather than being labelled Complete.
+        self._sh([umount, espmnt])
+        self._sh([umount, TARGET_MNT])
+        self._post_progress(1.0, "Complete")
+        self._post_log("")
+        self._post_log("Installation complete.")
+        if getattr(self, "_secureboot_used", False):
+            # The user-facing version of this lives on the Done step; the log
+            # keeps the precise form for anyone reading the transcript.
+            self._post_log("")
+            self._post_log("Secure Boot: this install is signed. On the FIRST boot with")
+            self._post_log("Secure Boot enabled, enroll the Notebook OS key once:")
+            self._post_log("  - when MokManager (blue screen) appears, choose")
+            self._post_log("    'Enroll key from disk' -> EFI/BOOT/MOK.cer -> Continue,")
+            self._post_log("    or 'Enroll hash' and confirm, then reboot.")
+            self._post_log("  If it boots straight to a GRUB error instead, launch")
+            self._post_log("  EFI/BOOT/mmx64.efi from your firmware's boot menu to enroll.")
+
+    def _write_boot(self, espmnt):
+        """Write the bootloader and the kernel onto a MOUNTED EFI system
+        partition.
+
+        Shared by both engines on purpose. An install and an update have to put
+        exactly the same files in exactly the same places — the firmware looks
+        in one place and the prebuilt GRUB boots one PARTUUID — and a second
+        copy of this would be a second place for the Secure Boot chain to
+        drift, discovered on a machine that will not start."""
         bootdir = os.path.join(espmnt, "EFI", "BOOT")
         try:
             os.makedirs(bootdir, exist_ok=True)
@@ -2354,30 +3400,421 @@ class Installer(nbapp.AppWindow):
         self._copy(KERNEL_SRC, os.path.join(espmnt, "bzImage"))
         self._secureboot_used = secureboot
 
-        # f. Configure the installed tree.
-        self._phase(0.90, "Configuring the system")
-        self._configure_target(TARGET_MNT)
+    # ------------------------------------------------------- update engine
+    def _do_update(self):
+        """Replace the system on a disk that already carries one, in place.
 
-        # g. Finish: flush and unmount.
-        self._phase(0.97, "Finishing up")
-        if self.tools.get("sync"):
-            self._sh([self.tools["sync"]], allow_fail=True)
-        self._sh([umount, espmnt], allow_fail=True)
-        self._sh([umount, TARGET_MNT], allow_fail=True)
+        THE ORDER IS THE SAFETY. Nothing here partitions, formats or wipes
+        anything — no call in this method reaches for any of the tools that
+        do, which is the difference the Summary is promising and which
+        installer_update_selftest reads off the compiled body rather than off
+        this paragraph. Everything that can refuse refuses first, with the
+        installed system untouched. The new system is then unpacked into UPDATE_STAGE_DIR
+        BESIDE the old one, so a failure anywhere in the long part of the run
+        (no room, an unreadable medium, a truncated tar) leaves a machine that
+        still starts up exactly as it did. Only once the whole new tree is on
+        the disk are the old directories moved aside and the new ones moved in
+        — renames inside one filesystem, seconds rather than minutes — and every
+        one of those moves is recorded so it can be undone.
+
+        What is never touched at all: the partition table, the root PARTUUID,
+        any swap partition, and everything in PRESERVED_DIRS. /root is this
+        appliance's home directory (session.sh pins NB_HOME=/root), so keeping
+        it is what keeps every document, every app's store under
+        .config/notebook, and the Desktop/Documents/Pictures tree. locale.json
+        lives there too, which is why the keyboard and the interface language
+        survive an update without being copied anywhere at all.
+
+        The three files that do NOT live there — the hostname, the X keyboard
+        layout and above all the stored password — are read out of the old
+        /etc before it is replaced and written back on top of the new one (see
+        _read_carried), because /etc is part of the system this run replaces.
+        """
+        # FIRST, before anything at all can raise. Every refusal below this
+        # line is one the failure page has to be able to describe, and a state
+        # left unset would send it to the last and most alarming of the four
+        # sentences about a machine nothing had touched.
+        self._update_state = "safe"
+        self._swapped = []
+
+        info = self.cfg.get("existing") or {}
+        rootpart = info.get("root") or ""
+        esp = info.get("esp") or ""
+        if not rootpart or not esp:
+            raise InstallError("no installed system to update")
+        if not os.path.exists(ROOTFS_TAR):
+            raise InstallError("install payload missing: %s" % ROOTFS_TAR)
+
+        mount = self._tool("mount")
+        umount = self._tool("umount")
+        tar = self._tool("tar")
+        espmnt = os.path.join(TARGET_MNT, "boot", "efi")
+
+        # a. Mount the installed root. Read-write this time, and at the
+        #    engine's own mount point rather than the probe's.
+        self._phase(0.04, "Checking the system on the disk")
+        try:
+            os.makedirs(TARGET_MNT, exist_ok=True)
+        except OSError as e:
+            raise InstallError("cannot create %s: %s" % (TARGET_MNT, e))
+        self._unmount_target(self.cfg.get("disk") or rootpart, umount)
+        self._sh([mount, rootpart, TARGET_MNT])
+        try:
+            # b. Read the marker AGAIN. The disk list read it minutes ago, and
+            #    this is what stops an update running against a disk that was
+            #    unplugged, swapped or reformatted in between — on the one
+            #    path whose whole promise is about the files already there.
+            found = self._probe_install(TARGET_MNT)
+            if not found:
+                raise InstallError("%s no longer holds a %s system"
+                                   % (rootpart, OS_NAME))
+            cfg_root = (os.path.join(TARGET_MNT, found["config_sub"])
+                        if found["config_sub"] else TARGET_MNT)
+            if found.get("halfway"):
+                # An earlier update stopped after its swap had begun, so this
+                # machine does NOT start up as it stands and did not before
+                # this run began. Say so from the outset: clearing the
+                # leftovers below cannot make that worse, but a failure page
+                # telling its owner "nothing was changed and it still starts
+                # up" would be false about a machine that was already broken.
+                self._update_state = "broken"
+
+            # c. Lift out everything a previous install or update configured,
+            #    BEFORE anything is removed: those files are inside the tree
+            #    about to be replaced.
+            self._phase(0.10, "Reading the settings to keep")
+            carried = self._read_carried(cfg_root)
+
+            # d. Clear the working directories of a run that stopped. Safe by
+            #    construction: PRESERVED_DIRS are never moved into them, so
+            #    they can only ever hold system directories this run replaces
+            #    anyway — never a file of the user's.
+            self._clear_update_dirs(TARGET_MNT)
+
+            # e. Room for the new system beside the old one. Measured, and
+            #    refused here where the machine is still whole.
+            need = self._update_free_bytes()
+            try:
+                free = shutil.disk_usage(TARGET_MNT).free
+            except OSError as e:
+                raise InstallError("cannot measure the free space on %s: %s"
+                                   % (rootpart, e))
+            self._post_log("free on %s: %s; needed: %s"
+                           % (rootpart, human_bytes(free), human_bytes(need)))
+            if need and free < need:
+                raise InstallError(
+                    "not enough room on %s to unpack the new system beside "
+                    "the old one (%s free, %s needed)"
+                    % (rootpart, human_bytes(free), human_bytes(need)))
+
+            # f. Unpack. The long phase — and the one nothing depends on yet:
+            #    the machine on this disk starts up throughout it.
+            stage = os.path.join(TARGET_MNT, UPDATE_STAGE_DIR)
+            try:
+                os.makedirs(stage)
+            except OSError as e:
+                raise InstallError("cannot create %s: %s" % (stage, e))
+            self._phase_pulse("Unpacking the new system (this can take a few "
+                              "minutes)")
+            # -p preserves permissions/owners; no -v, for the reason the
+            # install engine gives (tens of thousands of lines onto the GTK
+            # idle queue).
+            self._sh([tar, "xpf", ROOTFS_TAR, "-C", stage])
+            if self.tools.get("sync"):
+                # Durable BEFORE the swap. The rename that follows is the one
+                # moment this machine cannot start, and it must not be entered
+                # with the new system still sitting in page cache.
+                self._sh([self.tools["sync"]])
+
+            # g. The swap.
+            self._phase(0.72, "Replacing the system")
+            self._swap_trees(TARGET_MNT, stage)
+            self._update_state = "finish"
+
+            # h. The machine's own identity and credentials, back on top of the
+            #    new /etc.
+            self._phase(0.82, "Putting the settings back")
+            self._apply_carried(TARGET_MNT, carried)
+            self._write_os_release(TARGET_MNT)
+
+            # i. The kernel and the bootloader, onto the ESP that is already
+            #    there. Reused, never reformatted: it is the place this
+            #    machine's firmware already looks.
+            self._phase(0.90, "Setting up start-up")
+            try:
+                os.makedirs(espmnt, exist_ok=True)
+            except OSError as e:
+                raise InstallError("cannot create %s: %s" % (espmnt, e))
+            self._sh([mount, esp, espmnt])
+            self._write_boot(espmnt)
+
+            # No map packs. /data is preserved, so the packs on this machine
+            # are still on it — and re-copying gigabytes it already has would
+            # add minutes to every update for nothing.
+
+            # j. The old system is deleted only once the new one is complete
+            #    and configured.
+            self._phase(0.96, "Finishing up")
+            self._clear_update_dirs(TARGET_MNT)
+            if self.tools.get("sync"):
+                # A failed final writeback means the replaced bytes are not
+                # known durable. Never report Complete after swallowing it.
+                self._sh([self.tools["sync"]])
+            self._sh([umount, espmnt])
+            self._sh([umount, TARGET_MNT])
+        except Exception:
+            # Put the old system back if the swap had started, then let go of
+            # the disk so a second attempt can mount it. Both best-effort — the
+            # failure has already happened — but the ANSWER is not: it is what
+            # decides which of the four sentences in _update_failure_state the
+            # user reads about their own machine.
+            if self._update_state == "broken" and self._restore_trees(
+                    TARGET_MNT):
+                self._update_state = "restored"
+            self._sh([umount, espmnt], allow_fail=True)
+            self._sh([umount, TARGET_MNT], allow_fail=True)
+            raise
         self._post_progress(1.0, "Complete")
         self._post_log("")
-        self._post_log("Installation complete.")
-        if getattr(self, "_secureboot_used", False):
-            # The user-facing version of this lives on the Done step; the log
-            # keeps the precise form for anyone reading the transcript.
-            self._post_log("")
-            self._post_log("Secure Boot: this install is signed. On the FIRST boot with")
-            self._post_log("Secure Boot enabled, enroll the Notebook OS key once:")
-            self._post_log("  - when MokManager (blue screen) appears, choose")
-            self._post_log("    'Enroll key from disk' -> EFI/BOOT/MOK.cer -> Continue,")
-            self._post_log("    or 'Enroll hash' and confirm, then reboot.")
-            self._post_log("  If it boots straight to a GRUB error instead, launch")
-            self._post_log("  EFI/BOOT/mmx64.efi from your firmware's boot menu to enroll.")
+        self._post_log("Update complete. The files and settings on the disk "
+                       "were kept.")
+
+    def _swap_trees(self, target, stage):
+        """Move the old system aside and the new one into place, one top-level
+        name at a time.
+
+        Renames within a single filesystem: no copying and no I/O of
+        consequence, so the window in which this machine cannot start is
+        seconds rather than the minutes the unpack took. Nothing in
+        PRESERVED_DIRS is ever moved, which is both how the user's files
+        survive and why UPDATE_OLD_DIR is safe to delete afterwards.
+
+        A name is recorded BEFORE its new tree is moved in, never after, so
+        _restore_trees can undo the one state that looks contradictory: the old
+        tree moved aside and the new one not yet arrived. And _update_state
+        goes to "broken" at the first move rather than before the loop, so a
+        run that fails while merely preparing this can still say, truthfully,
+        that the machine was not touched.
+        """
+        old = os.path.join(target, UPDATE_OLD_DIR)
+        try:
+            os.makedirs(old, exist_ok=True)
+        except OSError as e:
+            raise InstallError("cannot create %s: %s" % (old, e))
+        names = [n for n in sorted(os.listdir(stage))
+                 if n not in PRESERVED_DIRS]
+        if not names:
+            # An empty staging tree means the tar produced nothing usable. It
+            # has to stop here: the loop below would move nothing, report
+            # success, and hand back the OLD system dressed as a new one.
+            raise InstallError("the new system unpacked to nothing")
+        for name in names:
+            cur = os.path.join(target, name)
+            had_old = os.path.lexists(cur)
+            try:
+                if had_old:
+                    os.rename(cur, os.path.join(old, name))
+                self._swapped.append((name, had_old))
+                self._update_state = "broken"
+                os.rename(os.path.join(stage, name), cur)
+            except OSError as e:
+                raise InstallError("cannot replace /%s: %s" % (name, e))
+        self._post_log("replaced: %s" % ", ".join("/" + n for n in names))
+
+    def _restore_trees(self, target):
+        """Undo a swap that stopped part-way. True when the machine on this
+        disk starts up again.
+
+        Best-effort by nature — it runs on the failure path, where something
+        has already gone wrong with this filesystem — but its ANSWER is not
+        best-effort at all: it decides whether the failure page tells somebody
+        their machine still starts or tells them it does not. Being wrong in
+        either direction is the defect this returns a value for, so every move
+        that fails is both logged and counted.
+        """
+        if not self._swapped:
+            # This run moved nothing, so it has put nothing back — and the
+            # caller only asks at all when the machine is known not to start,
+            # which here means it arrived that way (an earlier update stopped
+            # after its swap; see the `halfway` branch in _do_update). An
+            # empty list is "there was nothing I could undo", and answering
+            # True would have the failure page tell somebody their machine
+            # starts up when nothing has made it start up.
+            return False
+        stage = os.path.join(target, UPDATE_STAGE_DIR)
+        old = os.path.join(target, UPDATE_OLD_DIR)
+        try:
+            os.makedirs(stage, exist_ok=True)
+        except OSError as e:
+            self._post_log("cannot undo the replacement: %s" % e)
+            return False
+        ok = True
+        for name, had_old in reversed(self._swapped):
+            cur = os.path.join(target, name)
+            try:
+                if os.path.lexists(cur):
+                    os.rename(cur, os.path.join(stage, name))
+                if had_old:
+                    os.rename(os.path.join(old, name), cur)
+            except OSError as e:
+                ok = False
+                self._post_log("could not put /%s back: %s" % (name, e))
+        self._swapped = []
+        if ok:
+            self._post_log("the system that was on this disk has been put "
+                           "back; it starts up as it did before")
+        return ok
+
+    def _clear_update_dirs(self, target):
+        """Remove both working directories.
+
+        Never raises. They are scratch, and an update must not stop because
+        scratch could not be tidied — if the space they hold is genuinely
+        needed, the measured check in _do_update refuses with the figures a few
+        lines later, which is a message somebody can act on."""
+        for name in (UPDATE_STAGE_DIR, UPDATE_OLD_DIR):
+            path = os.path.join(target, name)
+            if not os.path.isdir(path):
+                continue
+            self._post_log("removing %s" % path)
+            shutil.rmtree(path, ignore_errors=True)
+
+    def _update_failure_state(self):
+        """What state the machine is ACTUALLY in after an update stopped.
+
+        This sentence is what the whole staged design exists to be able to
+        write. An update that fails while unpacking has changed nothing, and
+        saying "it will not start up" there would frighten somebody into
+        reinstalling — erasing the very files this path exists to keep. An
+        update that fails after the swap HAS left a half-replaced system, and
+        saying anything softer than that would be exactly the comforting lie
+        the install engine's own failure text refuses to tell.
+        """
+        if self._update_state == "safe":
+            return _t("Nothing on the disk was replaced. The system already "
+                      "on it is untouched and still starts up, and no files "
+                      "were moved. Go back and try again.")
+        if self._update_state == "restored":
+            return _t("The system that was on the disk has been put back, so "
+                      "the machine still starts up. No files were moved. Go "
+                      "back and try again.")
+        if self._update_state == "broken":
+            return _t("The system on the disk is half replaced, so the "
+                      "machine will not start up until the update is "
+                      "finished. The files on it are still there and were "
+                      "never moved. Keep this installer, go back and run the "
+                      "update again.")
+        # "finish": the new system is in place, but the run stopped before the
+        # settings were put back or the start-up files were written, so the
+        # kernel on the disk may not be the one this system expects.
+        return _t("The new system is on the disk but the update did not "
+                  "finish, so the machine may not start up. The files on it "
+                  "are still there and were never moved. Keep this installer, "
+                  "go back and run the update again.")
+
+    def _copy_map_packs(self, target):
+        """Copy any .nbm2 packs from the live medium into the installed
+        /data/maps, which is one of the directories de/maps.py scans.
+
+        Never raises — see the caller. It does report what happened, including
+        when it deliberately did nothing: "this machine has no maps" and "the
+        copy failed and said nothing" look identical afterwards, and only one
+        of them is something anybody can act on.
+        """
+        try:
+            names = sorted(n for n in os.listdir(MAPS_SRC)
+                           if n.endswith(".nbm2"))
+        except OSError:
+            return          # no packs on this medium — nothing happened, and
+        if not names:       # nothing was meant to happen, so say nothing
+            return
+
+        total = 0
+        for n in names:
+            try:
+                total += os.path.getsize(os.path.join(MAPS_SRC, n))
+            except OSError:
+                pass
+        dest = os.path.join(target, MAPS_DEST)
+        self._phase(0.92, "Copying maps")
+        try:
+            os.makedirs(dest, exist_ok=True)
+            free = shutil.disk_usage(dest).free
+        except OSError as e:
+            self._post_log("maps: skipped (%s)" % e)
+            return
+        # Leave the machine room to work in afterwards. A disk filled to its
+        # last byte by an optional map is a worse outcome than no map, and
+        # MIN_FREE_MIB is the same margin the disk step already gates on.
+        if free < total + MIN_FREE_MIB * 1024 * 1024:
+            self._post_log(
+                "maps: %d MB of maps need more room than this disk has free "
+                "(%d MB) — skipped. The system is installed and complete; copy "
+                "a pack into /data/maps later to add one."
+                % (total // (1 << 20), free // (1 << 20)))
+            return
+
+        copied = 0
+        for n in names:
+            src = os.path.join(MAPS_SRC, n)
+            dst = os.path.join(dest, n)
+            self._post_log("copy %s -> /%s/%s" % (src, MAPS_DEST, n))
+            try:
+                copied = self._copy_chunked(src, dst, copied, total)
+            except OSError as e:
+                # _copy_chunked publishes atomically, so any existing valid
+                # destination remains intact and its hidden temporary is the
+                # only file cleanup ever needs to remove.
+                self._post_log("maps: %s could not be copied (%s) — skipped"
+                               % (n, e))
+        self._post_log("maps: %d MB copied to /%s" % (copied // (1 << 20),
+                                                      MAPS_DEST))
+
+    def _copy_chunked(self, src, dst, done, total):
+        """Copy one file, moving the progress bar as it goes; returns the new
+        running byte total.
+
+        Not shutil.copy2: a whole continent is minutes of copying, and a bar
+        that does not move for minutes is indistinguishable from an installer
+        that has hung — at the very end of an install, which is the worst place
+        to make somebody wonder whether they can safely reboot."""
+        span = 0.97 - 0.92
+        dest_dir = os.path.dirname(dst) or "."
+        temp_path = None
+        with open(src, "rb") as rf:
+            fd, temp_path = tempfile.mkstemp(
+                prefix=".%s." % os.path.basename(dst), suffix=".tmp",
+                dir=dest_dir)
+            try:
+                with os.fdopen(fd, "wb") as wf:
+                    while True:
+                        chunk = rf.read(8 << 20)
+                        if not chunk:
+                            break
+                        wf.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            self._post_progress(
+                                0.92 + span * min(1.0, done / total))
+                    wf.flush()
+                    os.fsync(wf.fileno())
+                os.replace(temp_path, dst)
+                temp_path = None
+                try:
+                    dir_fd = os.open(dest_dir, os.O_RDONLY)
+                    try:
+                        os.fsync(dir_fd)
+                    finally:
+                        os.close(dir_fd)
+                except OSError:
+                    pass
+            finally:
+                if temp_path is not None:
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass
+        return done
 
     def _copy(self, src, dst):
         if not os.path.exists(src):
@@ -2467,6 +3904,152 @@ class Installer(nbapp.AppWindow):
         self._configure_locale(root)
         self._configure_login(root)
 
+    # ---- what an update carries across a replaced /etc ----
+    #
+    # These are the files a previous install or update WROTE into the system,
+    # as opposed to the ones that came out of the tarball: the machine's own
+    # name, its keyboard, its locale, its swap line and — the one that cannot
+    # be reconstructed from anything — the password its owner chose. They all
+    # live in /etc, which is part of the tree an update replaces, so they are
+    # read out first and written back on top of the new one.
+    #
+    # Deliberately NOT in this list: locale.json. It lives in
+    # /root/.config/notebook, which is in PRESERVED_DIRS and is therefore never
+    # moved at all. The keyboard and the interface language the DESKTOP reads
+    # survive an update by not being part of it, and adding them here would
+    # create a second copy of that answer for the two to disagree over.
+    def _read_carried(self, root):
+        """Read the installer-written configuration out of a system tree."""
+        keep = {}
+        keep["hostname"] = self._read_line(os.path.join(root, "etc",
+                                                        "hostname"))
+        keep["username"] = self._read_line(os.path.join(root, "etc",
+                                                        "notebookos-user"))
+        keep["keyboard"] = self._read_text(
+            os.path.join(root, "etc", "X11", "xorg.conf.d",
+                         "00-keyboard.conf"))
+        # The installer's own lines, lifted back out of files the image also
+        # ships its own version of. Copying either file whole would carry an
+        # OLD release's /etc/profile or /etc/fstab onto a new system and
+        # silently undo whatever the new one changed there.
+        keep["locale"] = self._lines_starting(
+            os.path.join(root, "etc", "profile"), "export LANG=", "export LC_")
+        keep["fstab"] = self._lines_starting(
+            os.path.join(root, "etc", "fstab"), "LABEL=%s" % SWAP_LABEL)
+        keep["console"] = bool(self._lines_starting(
+            os.path.join(root, "etc", "inittab"), "%s::" % self.CONSOLE_TTY))
+        keep["firstrun"] = os.path.exists(os.path.join(root, self.OEM_MARKER))
+        # THE ONE LINE THAT CANNOT BE RECONSTRUCTED. The whole root entry is
+        # carried verbatim, hash and ageing fields and all, because it is the
+        # only copy of the password its owner chose and this installer cannot
+        # ask for it: the machine being updated is not the one running. A
+        # freshly unpacked /etc/shadow has root LOCKED, so an update that
+        # failed to read this would hand back a machine that either asks for a
+        # password nobody set or asks for nothing at all — a silent change to
+        # how the machine is opened, either way. So it stops the run HERE,
+        # while the old system is still in place and still starts up.
+        keep["shadow"] = self._shadow_root_line(os.path.join(root, "etc",
+                                                             "shadow"))
+        if not keep["shadow"]:
+            raise InstallError("cannot read the stored password from "
+                               "%s/etc/shadow" % root)
+        return keep
+
+    def _apply_carried(self, root, keep):
+        """Write the machine's own identity and credentials back on top of a
+        newly unpacked /etc.
+
+        Same files and the same shapes _configure_target writes on a fresh
+        install, and through the same helpers, so an update cannot quietly hand
+        back a machine configured differently from the one it replaced."""
+        host = (keep.get("hostname") or "").strip()
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$", host):
+            # The same refusal _configure_target makes, for the same reason:
+            # busybox `hostname -F` on an empty or invalid file is an error at
+            # every boot, and an update must not carry one machine's damaged
+            # hostname onto the system replacing it.
+            host = self.DEFAULT_HOSTNAME
+        self._write_file(os.path.join(root, "etc", "hostname"), host + "\n")
+        if keep.get("username"):
+            self._write_file(os.path.join(root, "etc", "notebookos-user"),
+                             keep["username"] + "\n")
+        if keep.get("keyboard"):
+            self._write_file(
+                os.path.join(root, "etc", "X11", "xorg.conf.d",
+                             "00-keyboard.conf"), keep["keyboard"])
+        if keep.get("locale"):
+            self._append_file(
+                os.path.join(root, "etc", "profile"),
+                "\n# %s installer — system locale\n%s\n"
+                % (OS_NAME, keep["locale"]))
+        if keep.get("fstab"):
+            self._append_file(
+                os.path.join(root, "etc", "fstab"),
+                "# %s installer — swap partition\n%s\n"
+                % (OS_NAME, keep["fstab"]))
+        if keep.get("console"):
+            # The machine had a text console, so the replacement gets one too.
+            # Rewritten rather than copied: CONSOLE_TTY is where X is not (see
+            # its own note), and the new inittab is the one that has to be
+            # edited, not the old one that has been thrown away.
+            self._rewrite_getty(root)
+        self._restore_root_shadow(root, keep["shadow"])
+        if keep.get("firstrun"):
+            # This machine was set up for somebody else and they have not
+            # answered firstrun.py yet. Updating it must not answer for them.
+            self._write_file(os.path.join(root, self.OEM_MARKER),
+                             "Notebook OS: first-run setup is owed.\n"
+                             "de/firstrun.py removes this once it is done.\n")
+
+    def _lines_starting(self, path, *prefixes):
+        """Every line of a file that begins with one of `prefixes`, joined.
+
+        A crude filter on purpose: it is only ever asked for lines this
+        installer wrote itself, in the exact shape it wrote them, so anything
+        cleverer would be a parser for a format nobody else produces."""
+        out = [ln for ln in self._read_text(path).splitlines()
+               if ln.startswith(prefixes)]
+        return "\n".join(out)
+
+    def _shadow_root_line(self, path):
+        for ln in self._read_text(path).splitlines():
+            if ln.split(":", 1)[0] == "root":
+                return ln
+        return ""
+
+    def _restore_root_shadow(self, root, line):
+        """Put a carried root entry back into a new /etc/shadow, verbatim.
+
+        Not _set_root_password: that one takes a hash and rewrites the
+        last-changed date, which would be a lie about a password nobody has
+        just changed — and it cannot express a LOCKED account at all, which is
+        what a machine set up to start straight into the desktop has. Carrying
+        the whole line keeps a locked account locked, a hashed one hashed, and
+        every ageing field exactly as it was."""
+        path = os.path.join(root, "etc", "shadow")
+        try:
+            with open(path) as fh:
+                lines = fh.readlines()
+        except OSError as e:
+            raise InstallError("cannot read %s: %s" % (path, e))
+        out = []
+        found = False
+        for ln in lines:
+            if ln.split(":", 1)[0] == "root":
+                out.append(line.rstrip("\n") + "\n")
+                found = True
+            else:
+                out.append(ln)
+        if not found:
+            out.append(line.rstrip("\n") + "\n")
+        try:
+            with open(path, "w") as fh:
+                fh.writelines(out)
+            self._post_log("root: the password already on this machine is "
+                           "kept, exactly as it was")
+        except OSError as e:
+            raise InstallError("cannot update %s: %s" % (path, e))
+
     def _write_file(self, path, data, mode=None):
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -2488,12 +4071,28 @@ class Installer(nbapp.AppWindow):
             raise InstallError("cannot update %s: %s" % (path, e))
 
     def _write_os_release(self, root):
+        build_id = ""
+        try:
+            with open(OS_RELEASE_SOURCE, encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("BUILD_ID="):
+                        candidate = line.partition("=")[2].strip().strip('"')
+                        # The build stamps a UTC date.  Keep a conservative
+                        # os-release token here rather than copying arbitrary
+                        # source text into the installed system file.
+                        if re.fullmatch(r"[A-Za-z0-9._-]+", candidate):
+                            build_id = candidate
+                        break
+        except OSError:
+            pass
         data = (
             'NAME="%s"\n' % OS_NAME +
             "ID=%s\n" % OS_ID +
             'VERSION="%s"\n' % OS_VERSION +
             "VERSION_ID=%s\n" % OS_VERSION_ID +
             'PRETTY_NAME="%s"\n' % OS_PRETTY)
+        if build_id:
+            data += 'BUILD_ID="%s"\n' % build_id
         self._write_file(os.path.join(root, "etc", "os-release"), data)
 
     def _configure_fstab(self, root):
@@ -2763,7 +4362,7 @@ class Installer(nbapp.AppWindow):
         .inst-rail * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .inst-rail-brand { font-family: "Newsreader","Liberation Serif","Georgia",serif;
                      font-size: 20px; font-weight: 600; color: #1A1916; }
-        .inst-rail-sub { font-size: 12px; color: #9A9484; margin-bottom: 22px; }
+        .inst-rail-sub { font-size: 12px; color: #6E695E; margin-bottom: 22px; }
         .inst-step { padding: 9px 8px; margin: 2px 0; border-radius: 6px;
                      border-left: 3px solid transparent; }
         .inst-step-num { min-width: 24px; min-height: 24px;
@@ -2775,6 +4374,8 @@ class Installer(nbapp.AppWindow):
         .inst-step.active .inst-step-lbl { color: #1A1916; font-weight: 600; }
         .inst-step.done .inst-step-num { background: #1A1916; color: #FCFBF8; }
         .inst-step.done .inst-step-lbl { color: #6E695E; }
+        .inst-step-hit { padding: 0; border: none; background: transparent;
+                         background-image: none; box-shadow: none; }
 
         /* page */
         .inst-page { background: #FCFBF8; padding: 40px 52px 30px; }
@@ -2784,11 +4385,11 @@ class Installer(nbapp.AppWindow):
                    margin-bottom: 6px; }
         .inst-sub { font-size: 14px; color: #6E695E; margin-bottom: 8px; }
         .inst-para { font-size: 14px; color: #2A2620; }
-        .inst-note { font-size: 12px; color: #9A9484; }
+        .inst-note { font-size: 12px; color: #6E695E; }
         .inst-hint { font-size: 13px; color: #C8341E; }
         .inst-blocktxt { font-size: 12px; color: #C8341E; }
         .inst-group { font-size: 12px; font-weight: 700; letter-spacing: 0.08em;
-                      color: #9A9484; margin: 22px 2px 8px; }
+                      color: #6E695E; margin: 22px 2px 8px; }
 
         /* cards / rows */
         .inst-card { background: #F4F2EC; border: 1px solid #D7D2C5;
@@ -2797,7 +4398,7 @@ class Installer(nbapp.AppWindow):
         .inst-item { padding: 15px 2px; min-height: 28px; }
         .inst-item.bordered { border-top: 1px solid #D7D2C5; }
         .inst-label { font-size: 14px; color: #1A1916; }
-        .inst-sublabel { font-size: 12px; color: #9A9484; }
+        .inst-sublabel { font-size: 12px; color: #6E695E; }
         .inst-value { font-size: 14px; color: #6E695E; }
 
         /* danger / red accent */
@@ -2861,7 +4462,7 @@ class Installer(nbapp.AppWindow):
         .inst-footer { background: #F1EEE6; border-top: 1px solid #C9C4B6;
                        padding: 14px 30px; }
         .inst-footer * { font-family: "Nimbus Sans","Helvetica",sans-serif; }
-        .inst-foot-status { font-size: 12px; color: #9A9484; }
+        .inst-foot-status { font-size: 12px; color: #6E695E; }
 
         /* form controls */
         .inst-page entry { background: #FCFBF8; color: #1A1916;
@@ -2881,6 +4482,39 @@ class Installer(nbapp.AppWindow):
            reds on one screen is not the design language. */
         .inst-disk-name { font-size: 14px; color: #1A1916; }
         .inst-disk-sub { font-size: 12px; color: #6E695E; }
+
+        /* UNAVAILABLE. Every rule above that hard-sets ink or paper on a
+           control needs a :disabled twin, because this provider sits at
+           APPLICATION+1 and therefore beats the theme's own insensitive
+           styling whatever the theme's specificity. Without them a greyed-out
+           control came out pixel-identical to a live one — the whole identity
+           card under "Set this up for someone else", the password rows under
+           the passwordless tick, and a disk row too small to install onto —
+           so clicking them simply felt dead. Muted ink on card paper, the
+           same pair .inst-btn:disabled already uses. */
+        .inst-page entry:disabled { background: #F4F2EC;
+                    border-color: #D7D2C5; }
+        .inst-page combobox button.combo:disabled { background: #F4F2EC;
+                    border-color: #D7D2C5; }
+        .inst-page spinbutton:disabled { background: #F4F2EC;
+                    border-color: #D7D2C5; }
+        /* The ink has to be named on the node that DRAWS the text. Papertone's
+           own `* { color: @ink }` matches a label, a cellview and a spinner's
+           step buttons directly, and a direct match beats an inherited value
+           however high this provider's priority is — the OS-wide button-label
+           trap. A colour set on the control alone left every one of these
+           reading as live. */
+        .inst-page entry:disabled,
+        .inst-page combobox button.combo:disabled,
+        .inst-page combobox button.combo:disabled label,
+        .inst-page combobox button.combo:disabled cellview,
+        .inst-page spinbutton:disabled,
+        .inst-page spinbutton:disabled text,
+        .inst-page spinbutton:disabled button,
+        .inst-label:disabled, .inst-sublabel:disabled, .inst-value:disabled,
+        .inst-check:disabled, .inst-check:disabled label,
+        .inst-disk:disabled, .inst-disk:disabled label,
+        .inst-disk-name:disabled, .inst-disk-sub:disabled { color: #B3AD9E; }
 
         /* progress */
         .inst-progstatus { font-size: 14px; color: #1A1916; font-weight: 600; }

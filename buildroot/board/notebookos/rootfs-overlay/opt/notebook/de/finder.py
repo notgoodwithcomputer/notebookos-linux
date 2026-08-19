@@ -27,10 +27,62 @@ import nbapp  # for nudge_paint (swrast first-paint flush)
 import nbstate  # navigation generations + stable-identity restoration
 import nbmotion       # the frame-clock driver + policy for the navigation slide
 import nbtransitions  # direction vocabulary shared with the rest of the OS
+# Nothing launches without a signature the release key made over the bytes on
+# disk (docs/APP-TRUST.md, nbtrust). Fail CLOSED, including when the module
+# itself is missing: an import error here must refuse, never wave things
+# through, or the lockout is one broken file away from being off.
+try:
+    import nbtrust
+except Exception:
+    nbtrust = None
+
+
+def set_user_text(widget, text):
+    """Put a name off the FILESYSTEM on a widget exactly as it is spelled.
+
+    A folder called "Work" or "Music" is the user's word, and nbi18n looks up
+    every Label and Button it is shown: the breadcrumb, the title strip and the
+    Devices rail all drew the translation of a folder whose real name never
+    changed. display_name() decides which names are OURS (the six provisioned
+    folders and .app bundles); everything that reaches a widget after it is the
+    user's, and goes on verbatim."""
+    nbi18n.set_verbatim(widget, str(text or ""))
+
+
+def set_user_tooltip(widget, text):
+    """Hover text naming a file or folder. set_tooltip_text is patched by
+    nbi18n (and nbapp copies it into the accessible name, so a screen reader
+    spoke the translation too); set_tooltip_markup is not patched and renders
+    the same once escaped."""
+    value = str(text or "")
+    if value:
+        widget.set_tooltip_markup(GLib.markup_escape_text(value))
+        # set_tooltip_text is also where nbapp fills in a missing ACCESSIBLE
+        # NAME (an icon-only button has none), and the markup form is not that
+        # setter — so the name is filled in here instead. Skipping this step
+        # would have traded a translated tooltip for an anonymous control.
+        try:
+            acc = widget.get_accessible()
+            if acc is not None and not (acc.get_name() or "").strip():
+                acc.set_name(value)
+        except Exception:                                         # noqa: BLE001
+            pass
+    else:
+        widget.set_tooltip_text(None)
+
+
+def _read_origin_record(path):
+    """Read the exact path written by Trash, including edge whitespace."""
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except OSError:
+        return ""
 try:
     import nbmotion  # launch-card motion; None means instant (headless/stripped)
 except Exception:  # noqa: BLE001
     nbmotion = None
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 # Whether the GPU stack is accelerated (a compositor is running). session.sh
@@ -131,18 +183,53 @@ def _renameat2_noreplace(src, dst):
 #
 # This is a SHIP-TIME decision and is deliberately separate from the user's own
 # "Remove from Applications" list: this one is ours, is not restorable from the
-# UI, and is checked into the tree so the reason travels with the code. An app
-# listed here still has its module on disk and still has its entry in
-# APP_MODULES, so a document that opens with it still opens with it — it simply
-# is not offered as something to launch.
+# UI, and is checked into the tree so the reason travels with the code.
 #
-# The bar for being here: the app promises a capability it cannot deliver, and
-# the honest fix is longer than the time available. Shipping a control that
-# does nothing is worse than shipping no control, so hide it, write down why,
-# and take it off this list when it is real.
+# It is also the ONE list of what a stable image withholds. Two mechanisms
+# carry it out, because apps arrive by two routes, but neither keeps a list of
+# its own:
+#   * an app baked into the rootfs overlay ships and is filtered out of every
+#     launch surface — Applications, file associations, the Packages window;
+#   * an app bundled at build time from another repo (Govorimo, via
+#     tools/sync-govorimo.sh) is not bundled at all. That script reads THIS
+#     dict, so the decision is still made in exactly one place.
+#
+# A hidden app keeps its module on disk and its APP_MODULES entry, so unhiding
+# it is deleting a line here. It is NOT, however, still reachable by the back
+# door: a document whose type it claims reports having no app until it is
+# unhidden (_default_app_for withholds it), which hidden_apps_selftest pins.
+#
+# Two things put an app on this list. Either it promises a capability it cannot
+# deliver and the honest fix is longer than the time available — shipping a
+# control that does nothing is worse than shipping no control — or it is still
+# being built and has not been held to the bar the rest of the image is held
+# to. Say which, and take it off this list when it is real.
 #
 # Format: "Display Name": "why, in one sentence, and what would remove it"
 HIDDEN_APPS = {
+    "Animation": "the studio is still under daily audit, and its film export "
+                 "falls back to mpeg4 because the image carries no H.264 "
+                 "encoder; unhide when the encoder question is settled and the "
+                 "lane closes.",
+    "Comics": "still inside the adversarial audit cycle and not yet held to "
+              "the bar the rest of the image is held to; unhide when its audit "
+              "round closes clean.",
+    "Composer": "still inside the adversarial audit cycle and not yet held to "
+                "the bar the rest of the image is held to; unhide when its "
+                "audit round closes clean.",
+    "GBA SDK": "it compiles and runs native C on the machine, which is the one "
+               "hole in the app-trust rules every other app is held to (see "
+               "docs/APP-TRUST.md); unhide when that path runs under the same "
+               "rules as everything else.",
+    "Govorimo": "the LoRa client has never spoken to a radio — no E22 stick "
+                "has been on this hardware — so the single thing it exists to "
+                "do is unproven; unhide after the M4 hardware bench.",
+    "Maps": "it draws no large water — OSM stores lakes, bays and rivers as "
+            "relations and the encoder skips them, so San Francisco Bay and "
+            "Lake Michigan render as land — and a cold view still costs "
+            "~1.3s because a view parses ~9 cells of 0.1° to draw one "
+            "screenful; unhide when the pack carries per-cell extents (to "
+            "drop the margin ring) and water areas.",
 }
 
 # display name (without .app) -> python module in the DE directory
@@ -159,7 +246,7 @@ APP_MODULES = {
     "Packages": "packages", "2048": "g2048",
     "GBA Emulator": "gbaemu", "GBA SDK": "gbasdk", "Language": "language",
     "Maps": "maps", "Workout": "workout",
-    "Terminal": "terminal", "Settings": "settings",
+    "Settings": "settings",
     "System Monitor": "sysmon", "Install Notebook OS": "installer",
     "USB Writer": "usbwriter", "Disc Burner": "burner",
 }
@@ -225,8 +312,11 @@ FILE_OPENERS = {"writer", "ebook", "media", "music", "screenplay", "gbaemu",
 def _hidden_modules():
     """Modules withheld from every launch surface while their app is hidden.
     Derived, not listed twice: HIDDEN_APPS names apps, launch routes speak in
-    modules, and this is the one translation between them."""
-    return {APP_MODULES[n] for n in HIDDEN_APPS if n in APP_MODULES}
+    modules, and this is the one translation between them. Membership goes
+    through _is_hidden so an app the user installed later is not caught by a
+    name this build happened to withhold."""
+    return {APP_MODULES[n] for n in HIDDEN_APPS
+            if n in APP_MODULES and _is_hidden(n)}
 
 
 # human "Kind" descriptor per app (matches the design's KIND column)
@@ -251,7 +341,6 @@ APP_KIND = {
     "2048": "Game", "GBA Emulator": "Game", "GBA SDK": "Development",
     "Language": "Education", "Maps": "Reference",
     "Workout": "Health",
-    "Terminal": "Utility",
     "Settings": "System", "System Monitor": "System",
     "Install Notebook OS": "System", "USB Writer": "System",
     # "Media" rather than "System": USB Writer makes install media, which is a
@@ -259,6 +348,18 @@ APP_KIND = {
     # DVD. The Kind says what it is for, not which shelf the code sits on.
     "Disc Burner": "Media",
 }
+
+# Immutable image registry. Dynamic package entries may change or disappear in
+# a long-lived Finder process; this snapshot distinguishes those updates from
+# a package trying to borrow a built-in display name.
+_BUILTIN_APP_MODULES = dict(APP_MODULES)
+_BUILTIN_APP_KIND = dict(APP_KIND)
+
+# Apps that came from installed_apps.json — added to this machine AFTER the
+# image shipped. Tracked apart from APP_MODULES because they are exempt from
+# HIDDEN_APPS; see _is_hidden for why.
+INSTALLED_APPS = set()
+
 
 # Data-driven registry for apps installed from a signed package (tools/nbpkg.py)
 # rather than baked into the image. Additive and defensive: a malformed or
@@ -272,15 +373,68 @@ def _merge_installed_apps():
             reg = _json.load(_f)
     except Exception:
         return
+    # A registry that is valid JSON of the WRONG SHAPE (a list, a string) got
+    # past the load and then died on .items() — inside the Finder's import, so
+    # the desktop came up with no file manager at all. Shape is checked, not
+    # assumed, here and for every row.
+    if not isinstance(reg, dict):
+        return
+    previous = set(INSTALLED_APPS)
+    fresh = set()
     for display, info in reg.items():
+        if not isinstance(info, dict):
+            continue
         mod = info.get("module")
         if not isinstance(display, str) or not isinstance(mod, str):
             continue
-        APP_MODULES.setdefault(display, mod)
-        APP_KIND.setdefault(display, info.get("kind", "Utility"))
+        builtin = _BUILTIN_APP_MODULES.get(display)
+        if builtin is not None and builtin != mod:
+            # Never let unsigned discovery metadata exempt a hidden built-in
+            # while leaving its old module mapping in place. A package that
+            # collides by display name would otherwise show "Composer" and
+            # launch the withheld image composer instead of its own module.
+            continue
+        APP_MODULES[display] = mod
+        APP_KIND[display] = info.get("kind", "Utility")
+        fresh.add(display)
+    # A healthy registry read is authoritative for dynamic entries. Remove an
+    # uninstalled package and restore any built-in mapping that a same-module
+    # package temporarily annotated; never leave stale apps until restart.
+    for display in previous - fresh:
+        if display in _BUILTIN_APP_MODULES:
+            APP_MODULES[display] = _BUILTIN_APP_MODULES[display]
+            APP_KIND[display] = _BUILTIN_APP_KIND[display]
+        else:
+            APP_MODULES.pop(display, None)
+            APP_KIND.pop(display, None)
+    # Replaced wholesale on a good read, so uninstalling an app takes it back
+    # out. An unreadable registry returns above WITHOUT touching this, because
+    # a transient read problem must not silently reclassify installed apps.
+    INSTALLED_APPS.clear()
+    INSTALLED_APPS.update(fresh)
 
 
 _merge_installed_apps()
+
+
+def _is_hidden(display):
+    """Whether the IMAGE withholds this app (see HIDDEN_APPS).
+
+    An app the user has since installed from a signed package is THEIRS, and
+    is never withheld — whatever this build chose not to ship. Without this
+    exemption, installing an app whose name we withheld would run the whole
+    install, report success, and put nothing anywhere a person could find it:
+    the dead control the hide exists to avoid, arrived at from the other side.
+    """
+    if display not in HIDDEN_APPS:
+        return False
+    # installed_apps.json is deliberately unsigned discovery metadata. It may
+    # introduce a package that was not bundled, but it cannot authorize access
+    # to an unstable built-in merely by repeating that image-signed module's
+    # display name. Bundled hides remain hidden until the image policy changes.
+    if display in _BUILTIN_APP_MODULES:
+        return True
+    return display not in INSTALLED_APPS
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 # The Places sidebar is the standard set of Linux user folders (Nautilus
@@ -708,21 +862,37 @@ class Crumbs(Gtk.Box):
         self._fold_page = page
         if page <= 1 or not self._pills:
             return
+        # A two-pill trail (the root + the folder you are in) must NEVER fold.
+        # Folding hides only the root, and the "…" pill that replaces it is
+        # nearly as wide as "Home" — so no width is won, and the ellipsis reads
+        # as a stray ".." between the Actions button and the current folder.
+        # This bit on the DEFAULT Finder size (775px wide on a 1280x800
+        # desktop), where "Home › Applications" — the first screen every user
+        # sees — folded to "… › Applications". The current folder is the last
+        # pill and the scroller already keeps it in view if even both pills
+        # overflow, so there is nothing to gain by folding here.
+        if len(self._pills) <= 2:
+            return
         spacing = self.get_spacing()
         pills = list(self._pills)
 
-        def pill_width(label):
-            probe = Gtk.Button(label=label)
+        def pill_width(label, root=False):
+            probe = Gtk.Button()
+            if root:
+                probe.set_label(label)
+            else:
+                set_user_text(probe, label)  # measure the pill as DRAWN
             probe.set_relief(Gtk.ReliefStyle.NONE)
             probe.get_style_context().add_class("crumb")
             probe.show()
             return probe.get_preferred_width()[1] + spacing
 
-        widths = [pill_width(lbl) for lbl, _t_ in pills]
+        widths = [pill_width(lbl, root=(i == 0))
+                  for i, (lbl, _t_) in enumerate(pills)]
         total = sum(widths) - spacing
         keep_from = 0
         if total > page:
-            budget = page - pill_width("…")
+            budget = page - pill_width("…", root=True)
             # Fold from the FRONT until the tail fits; the current folder's
             # pill (the last) is never folded — the bar exists to show it.
             while keep_from < len(pills) - 1 and total > budget:
@@ -739,7 +909,9 @@ class Crumbs(Gtk.Box):
             more.set_relief(Gtk.ReliefStyle.NONE)
             more.get_style_context().add_class("crumb")
             hidden = pills[:keep_from]
-            more.set_tooltip_text("  ›  ".join(lbl for lbl, _t_ in hidden))
+            hidden_path = "  ›  ".join(lbl for lbl, _t_ in hidden)
+            set_user_tooltip(more, hidden_path)
+            more.get_accessible().set_name(_t("Open") + ": " + hidden_path)
             more._hidden_target = hidden[-1][1]
             more.connect("clicked", self._open_deepest_hidden)
             self.pack_start(more, False, False, 0)
@@ -747,7 +919,11 @@ class Crumbs(Gtk.Box):
         last = len(pills) - 1
         for i in range(keep_from, len(pills)):
             label, target = pills[i]
-            btn = Gtk.Button(label=label)
+            btn = Gtk.Button()
+            if i == 0:
+                btn.set_label(label)     # "Home"/"Computer" is our own word
+            else:
+                set_user_text(btn, label)
             btn.set_relief(Gtk.ReliefStyle.NONE)
             ctx = btn.get_style_context()
             ctx.add_class("crumb")
@@ -793,7 +969,11 @@ class Crumbs(Gtk.Box):
         self._pills = list(pills)
         opening = []
         for i, (label, target) in enumerate(pills):
-            btn = Gtk.Button(label=label)
+            btn = Gtk.Button()
+            if i == 0:
+                btn.set_label(label)     # "Home"/"Computer" is our own word
+            else:
+                set_user_text(btn, label)
             btn.set_relief(Gtk.ReliefStyle.NONE)
             ctx = btn.get_style_context()
             ctx.add_class("crumb")
@@ -948,7 +1128,6 @@ class Finder(Gtk.Window):
         self._raw_entries = []                 # cached disk listing (unfiltered)
         self._free = "—"                        # cached free-space status string
         self._sb_rows = []                     # (rel, button) for sidebar places
-        self._clipboard = None                 # (abspath, is_cut) for copy/paste
         self._inflight = set()                 # dests claimed by a running copy
         self._show_hidden = False               # View: show dotfiles
         self._view = "list"                     # "list" | "grid" view mode
@@ -1019,6 +1198,15 @@ class Finder(Gtk.Window):
                                    bool, GObject.TYPE_INT64, GObject.TYPE_DOUBLE,
                                    str, nbicons.SURFACE_GTYPE)
         self.tree = Gtk.TreeView(model=self.store)
+        # MORE THAN ONE FILE AT A TIME. Both views defaulted to SINGLE, so a
+        # person moving a folder's worth of photos had to copy, navigate, paste
+        # and navigate back once per file. Rubber-band selection in the grid and
+        # shift/ctrl-click in the list are what everyone already knows; every
+        # file operation below reads the whole selection through
+        # _selected_paths(), so Copy, Cut, Trash and Duplicate all act on all of
+        # it rather than on whichever row happened to be first.
+        self.tree.get_selection().set_mode(Gtk.SelectionMode.MULTIPLE)
+        self.tree.set_rubber_banding(True)
         self.tree.set_headers_visible(True)
         self.tree.get_style_context().add_class("filelist")
         self._add_columns()
@@ -1034,6 +1222,7 @@ class Finder(Gtk.Window):
         # Grid view: an icon grid over the SAME model, so search/sort/load all
         # keep it in step. Hidden until the toolbar's grid toggle selects it.
         self.iconview = Gtk.IconView(model=self.store)
+        self.iconview.set_selection_mode(Gtk.SelectionMode.MULTIPLE)
         # bind renderers via CellLayout (not set_pixbuf_column) because the
         # store's icon columns hold cairo SURFACES, which set_pixbuf_column
         # rejects; binding the renderer's `surface` property by hand accepts
@@ -1175,6 +1364,20 @@ class Finder(Gtk.Window):
         GLib.timeout_add(1200, self._nudge)
         GLib.timeout_add(2000, self._ensure_mapped)
         GLib.timeout_add(6000, self._ensure_mapped)
+        # ...AND TAKE THE KEYBOARD. Measured on target: at boot the X input
+        # focus sits on this process's 1x1 GTK GROUP-LEADER window, not on
+        # this toplevel -- _NET_ACTIVE_WINDOW and xdotool getwindowfocus both
+        # named 0x..003 (1x1 at -1,-1) while the Finder was on screen. Every
+        # keystroke therefore went nowhere: clicking the search field and
+        # typing an app's name did nothing, which is the ONLY way to find one
+        # app among twenty-nine. Clicking the window did not fix it either --
+        # matchbox does not move focus for a click on a DIALOG it did not
+        # activate -- so the window asks for the focus itself, with
+        # XSetInputFocus (what `xdotool windowfocus <toplevel>` does, which is
+        # exactly what made typing land in the manual reproduction).
+        GLib.timeout_add(900, self._claim_focus)
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("button-press-event", self._claim_focus)
         # Hide the Finder while a launched app owns the screen (the flag file is
         # written by launch_app AND the panel/shell), reappearing when it exits.
         # This transition is rare and event-driven, so watch the flag with an
@@ -1183,6 +1386,7 @@ class Finder(Gtk.Window):
         # reports CREATED/DELETED even for a path that doesn't exist yet.
         self._cancel_app_flag_monitor()
         self._stop_source("_app_poll_id")
+        self._init_app_flag_seen()
         try:
             _flag = Gio.File.new_for_path(nbapp.APP_FLAG)
             self._app_flag_monitor = _flag.monitor_file(
@@ -1199,6 +1403,28 @@ class Finder(Gtk.Window):
         GLib.timeout_add(500, self._reconcile_app_flag_once)
         self._prefs_ready = True   # user-driven changes may now persist to disk
 
+    def _init_app_flag_seen(self):
+        """Record whether an app already held the screen as this window opened.
+
+        That is the question _sync_app_flag actually needs answered, and it can
+        only be answered HERE — at open. Leaving it None until the first sync
+        conflated two opposite situations: a flag that was ALREADY up (leave the
+        window be; the person opened it over that app deliberately) and one that
+        went up AFTERWARDS (step aside).
+
+        A window's first look at the flag is its startup reconcile half a second
+        in, or the monitor event, whichever lands first. Launch an app inside
+        that half second and the first look WAS the flag going up — read as
+        "already set when I opened", and refused. Every later look then saw no
+        transition, so the window never hid at all and sat over the app for the
+        rest of its life. Half a second is nothing on a machine that paints
+        every pixel on the CPU.
+        """
+        try:
+            self._app_flag_seen = os.path.exists(nbapp.APP_FLAG)
+        except Exception:
+            self._app_flag_seen = None
+
     def _sync_app_flag(self):
         # Reconcile visibility with the app-active flag: hide while a launched
         # app owns the screen, reappear when it exits. The flag is a HINT with
@@ -1207,10 +1433,24 @@ class Finder(Gtk.Window):
         # bare file mapped the Finder over a still-open app when a finished
         # game's exit dropped the flag (filmed on target: the SDK was mid-
         # build when the Finder presented itself over it).
+        #
+        # Hiding is driven by the TRANSITION, not by the file's mere presence:
+        # this window steps aside when an app TAKES the screen while it is up.
+        # A flag that was already set when this window opened belongs to an app
+        # that was already running, and the person opened the window over it on
+        # purpose — every Finder window is its own process (the menu bar's New
+        # Finder Window runs finder.py again), so obeying the bare file made a
+        # brand-new window vanish about half a second after it appeared, at the
+        # startup reconcile below. _app_flag_seen is that memory: None until
+        # this window has observed the flag once, and no window hides on its
+        # first look.
         try:
             active = os.path.exists(nbapp.APP_FLAG)
+            seen = getattr(self, "_app_flag_seen", None)
+            self._app_flag_seen = active
             if active and self.get_visible():
-                self.hide()
+                if seen is False:
+                    self.hide()
             elif not active and not self.get_visible():
                 if self._other_apps_running():
                     # An app still holds the screen: the flag was dropped in
@@ -1743,7 +1983,20 @@ class Finder(Gtk.Window):
         # right cluster: search, plus context-sensitive Trash actions. The
         # window takes no keyboard focus (matchbox), so these are pointer-only.
         search = Gtk.SearchEntry(); search.set_placeholder_text(_t("Search"))
-        search.set_size_request(150, -1)
+        # 130, and a natural width of ten characters, because THE BREADCRUMB
+        # HAS TO FIT FIRST. Measured on the default Finder (775px wide on a
+        # 1280x800 desktop): "Home > Applications" needs 162px, the search
+        # entry's natural width was 172, and the crumb — the one child that
+        # expands — absorbed the shortfall at 123. Its scroller then anchored
+        # right to keep the current folder visible and cut the root pill
+        # mid-letter, so the first screen every user sees read
+        # "Hidden | Actions | e | Applications": the illegible sliver
+        # 52672195 removed, back by another route. Folding wins nothing here
+        # (a "…" pill is nearly as wide as "Home" — see _fold_leading), so
+        # the space has to come from somewhere: a search field is a control
+        # that can shrink, a path is content that cannot.
+        search.set_width_chars(10)
+        search.set_size_request(130, -1)
         # Our own magnifier, not the icon theme's — see nbicons.style_search_entry.
         nbicons.style_search_entry(search)
         self._search_h = search.connect("search-changed", self._on_search)
@@ -1784,21 +2037,36 @@ class Finder(Gtk.Window):
         # red for row/place selection + alerts, and never uses black chrome).
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         box.get_style_context().add_class("viewswitch")
-        self.view_list_btn = Gtk.Button()
+        self.view_list_btn = Gtk.RadioButton.new(None)
+        self.view_list_btn.set_mode(False)
         self.view_list_btn.get_style_context().add_class("viewbtn")
         self.view_list_btn.set_tooltip_text(_t("List view"))
         li = nbicons.image("viewlist", 16, "#1A1916")
         self.view_list_btn._img = li
         self.view_list_btn.add(li)
         self.view_list_btn.get_style_context().add_class("active")  # default
-        self.view_list_btn.connect("clicked", lambda *_: self._set_view("list"))
-        self.view_grid_btn = Gtk.Button()
+        self.view_list_btn.set_active(True)
+        self.view_grid_btn = Gtk.RadioButton.new_from_widget(self.view_list_btn)
+        self.view_grid_btn.set_mode(False)
         self.view_grid_btn.get_style_context().add_class("viewbtn")
         self.view_grid_btn.set_tooltip_text(_t("Grid view"))
         ge = nbicons.image("viewgrid", 16, "#3A362E")
         self.view_grid_btn._img = ge
         self.view_grid_btn.add(ge)
-        self.view_grid_btn.connect("clicked", lambda *_: self._set_view("grid"))
+        # A radio group is NOT immune to the set_active re-entrancy trap: when
+        # one member activates, GTK deactivates its sibling by calling
+        # set_active(FALSE) on it, and THAT emits "clicked" too — and it runs
+        # the SIBLING's handler first. So a "clicked" handler that restates the
+        # row from inside itself ping-pongs — clicking Grid deactivated List,
+        # List's handler chose "list", which reactivated List, which
+        # deactivated Grid, ... until the stack blew and the window died. Two
+        # defences, both needed: react to "toggled" only when the button became
+        # ACTIVE (a deactivation is never a choice), and restate the row with
+        # nbapp.choose_segment, which blocks every handler while it does so.
+        for btn, mode in ((self.view_list_btn, "list"),
+                          (self.view_grid_btn, "grid")):
+            btn.connect("toggled",
+                        lambda b, m=mode: b.get_active() and self._set_view(m))
         box.pack_start(self.view_list_btn, False, False, 0)
         box.pack_start(self.view_grid_btn, False, False, 0)
         return box
@@ -1807,11 +2075,12 @@ class Finder(Gtk.Window):
         if mode not in ("list", "grid"):
             mode = "list"
         self._view = mode
-        for btn, name, on in (
-                (self.view_list_btn, "viewlist", mode == "list"),
-                (self.view_grid_btn, "viewgrid", mode == "grid")):
-            ctx = btn.get_style_context()
-            (ctx.add_class if on else ctx.remove_class)("active")
+        # Restate the radio pair with every handler blocked (see the "toggled"
+        # hookup in the toolbar builder for the ping-pong this prevents).
+        nbapp.choose_segment((("list", self.view_list_btn),
+                              ("grid", self.view_grid_btn)), mode, "active")
+        for btn, name, on in ((self.view_list_btn, "viewlist", mode == "list"),
+                              (self.view_grid_btn, "viewgrid", mode == "grid")):
             nbicons.set_image(btn._img, name, 16, "#1A1916" if on else "#3A362E")
         # A deliberate view toggle animates; the initial layout and show_all
         # remaps do not (that would flash the view on every app round-trip).
@@ -1923,7 +2192,8 @@ class Finder(Gtk.Window):
             # just-copied file can be lost from the write cache.
             if isinstance(rel, str) and rel.startswith("/media/"):
                 hb = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-                hb.pack_start(self._sb_row(label, icon, rel), True, True, 0)
+                hb.pack_start(self._sb_row(label, icon, rel, verbatim=True),
+                              True, True, 0)
                 ej = Gtk.Button()
                 ej.set_relief(Gtk.ReliefStyle.NONE)
                 ej.get_style_context().add_class("sbeject")
@@ -1936,7 +2206,7 @@ class Finder(Gtk.Window):
                 hb.pack_start(ej, False, False, 6)
                 self._sb_pack(hb, rel in arriving, opening)
             else:
-                self._sb_pack(self._sb_row(label, icon, rel),
+                self._sb_pack(self._sb_row(label, icon, rel, verbatim=True),
                               rel in arriving, opening)
         self._sb.pack_start(self._sb_header("Places"), False, False, 0)
         for label, icon, rel in PLACES:
@@ -2062,7 +2332,7 @@ class Finder(Gtk.Window):
         l.get_style_context().add_class("sbheader")
         return l
 
-    def _sb_row(self, label, icon, rel):
+    def _sb_row(self, label, icon, rel, verbatim=False):
         row = Gtk.Button()
         row.set_relief(Gtk.ReliefStyle.NONE)
         row.get_style_context().add_class("sbrow")
@@ -2070,7 +2340,12 @@ class Finder(Gtk.Window):
             row.get_style_context().add_class("selected")
         box = Gtk.Box(spacing=12)
         box.pack_start(nbicons.image(icon, 18, "#3A362E"), False, False, 0)
-        box.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+        _sb_lbl = Gtk.Label(xalign=0)
+        if verbatim:
+            set_user_text(_sb_lbl, label)   # a volume the user named
+        else:
+            _sb_lbl.set_text(label)         # a place the OS provides
+        box.pack_start(_sb_lbl, False, False, 0)
         row.add(box)
         if rel is not None:
             self._sb_rows.append((rel, row))
@@ -2332,7 +2607,10 @@ class Finder(Gtk.Window):
         self.rel = rel
         if rel == "Applications":
             # Packages owns uninstall/restore; every Applications rebuild reads
-            # the shared store before filtering the on-disk app entries.
+            # both shared stores before filtering the on-disk app entries. The
+            # registry is written by a separate Packages process, so the
+            # import-time merge is not enough for a long-lived Finder.
+            _merge_installed_apps()
             self._load_removed_apps()
         full = self.abspath(rel)
         if rel.startswith("/"):
@@ -2350,7 +2628,9 @@ class Finder(Gtk.Window):
             trail = [(display_name(p), "/".join(parts[:i + 1]))
                      for i, p in enumerate(parts)]
             self.crumb.set_trail("Home", trail, self.load)
-        self.title.set_text(name.upper())
+        # .upper() is not protection: _lookup re-cases before it looks up,
+        # so ~/Work drew "TRAVAIL" over a folder still called Work.
+        set_user_text(self.title, name.upper())
         entries = []
         try:
             for nm in sorted(os.listdir(full)):
@@ -2365,7 +2645,7 @@ class Finder(Gtk.Window):
                 # HIDDEN_APPS). Unlike the user's list this is not restorable
                 # from the UI — it is a statement that the app is not ready.
                 if (rel == "Applications" and nm.endswith(".app")
-                        and nm[:-4] in HIDDEN_APPS):
+                        and _is_hidden(nm[:-4])):
                     continue
                 # NB: do NOT apply self._filter here — cache the FULL listing so
                 # live search can re-filter it in memory (see _populate_store),
@@ -2538,6 +2818,7 @@ class Finder(Gtk.Window):
         self._stop_source("_typeahead_id")
         self._stop_source("_dev_poll_id")
         self._stop_source("_app_poll_id")
+        self._stop_source("_status_restore_id")
         self._cancel_app_flag_monitor()
         dirgen = getattr(self, "_dirgen", None)
         if dirgen is not None:
@@ -2872,14 +3153,29 @@ class Finder(Gtk.Window):
         return d
 
     def _trash_selected(self):
+        """Move everything selected to the Trash, one item at a time.
+
+        Sequential for the reason Paste is: throwing away something on a USB
+        stick is a real copy with a progress card and a Cancel, and several of
+        those at once would put several cards on screen over one disk. Each
+        item's own failure is reported and the rest still go."""
         if self.rel == "Applications":
             self._flash_status(_t("Applications are managed in Packages."))
             return
-        model, it = self._selected_iter()
-        if it is None:
+        paths = self._selected_paths()
+        if not paths:
             self._flash_status(_t("Select an item to move to Trash"))
             return
-        src = self.abspath(model.get_value(it, 4))
+        queue = list(paths)
+
+        def step():
+            if queue:
+                self._trash_one(queue.pop(0), step)
+        step()
+
+    def _trash_one(self, src, after):
+        """Trash ONE item, then call `after()` however it ends -- see
+        _paste_one for why every exit path has to."""
         # lexists on both sides: a dangling symlink is a real directory entry.
         # exists() answers about the link's TARGET, so a link whose target had
         # gone was declared "no longer exists" and could not be thrown away —
@@ -2889,7 +3185,7 @@ class Finder(Gtk.Window):
         if not os.path.lexists(src):
             self.load(self.rel, record=False, keep_filter=True)
             self._flash_status(_t("That item no longer exists"))
-            return
+            return after()
         base = os.path.basename(src)
         dst = os.path.join(self._trash_dir(), base)
         n = 1
@@ -2906,7 +3202,7 @@ class Finder(Gtk.Window):
         origin_file = self._record_origin(os.path.basename(dst), src)
         if not origin_file:
             self._flash_status(_t("Could not move '%s' to Trash") % base)
-            return
+            return after()
         # The Trash lives under $NB_HOME, so throwing away something on a USB
         # stick or a second disk is a real copy followed by a delete — the
         # kernel answers a rename across filesystems with EXDEV. Without this
@@ -2917,7 +3213,7 @@ class Finder(Gtk.Window):
         # progress card, Cancel, identity-checked removal — so this hands the
         # work to it rather than growing a second implementation beside it.
         if not self._same_filesystem(src, os.path.dirname(dst)):
-            self._trash_across(src, dst, base, origin_file)
+            self._trash_across(src, dst, base, origin_file, after)
             return
         try:
             self._rename_noreplace(src, dst)
@@ -2927,12 +3223,13 @@ class Finder(Gtk.Window):
             except OSError:
                 pass
             self._flash_status(_t("Could not move '%s' to Trash") % base)
-            return
+            return after()
         self._set_undo_move(_t("Move to Trash"), dst, src, origin_file)
         self.load(self.rel, record=False, keep_filter=True)
         self._flash_undoable(_t("Moved “%s” to the Trash") % display_name(base))
+        after()
 
-    def _trash_across(self, src, dst, base, origin_file):
+    def _trash_across(self, src, dst, base, origin_file, after=lambda: None):
         """Move to Trash when the Trash is on a different filesystem.
 
         Same shape as Paste's cross-disk cut, and the same reasoning: the
@@ -2958,6 +3255,7 @@ class Finder(Gtk.Window):
                 except OSError:
                     pass
                 self.load(self.rel, record=False, keep_filter=True)
+                after()
                 return
             gone = False
             if identity is not None and self._path_identity(src) == identity:
@@ -2977,6 +3275,7 @@ class Finder(Gtk.Window):
                 self._flash_status(
                     _t("Copied “%s” to the Trash, but the original could not "
                        "be removed.") % display_name(base))
+            after()
 
         self._copy(src, dst, done)
 
@@ -3179,12 +3478,7 @@ class Finder(Gtk.Window):
             self._flash_status(_t("That item no longer exists"))
             return
         origin_file = os.path.join(self._origins_dir(), name)
-        dest = ""
-        try:
-            with open(origin_file) as fh:
-                dest = fh.read().strip()
-        except OSError:
-            dest = ""
+        dest = _read_origin_record(origin_file)
         if not dest:
             dest = os.path.join(HOME, name)        # fallback: restore to Home
         parent = os.path.dirname(dest)
@@ -3422,20 +3716,46 @@ class Finder(Gtk.Window):
         return run
 
     # ---- file operations (copy / cut / paste / new folder) ----
-    def _selected_iter(self):
-        # read the selection from whichever view is active, so Copy/Cut/Trash
-        # work identically in list and grid mode. (List is the default, so the
-        # headless selftests — which drive w.tree — are unaffected.)
+    def _selected_rows(self):
+        """Every selected row, as Gtk.TreePath, from whichever view is active.
+
+        In document order, because that is the order the person sees and the
+        order a multi-item paste should land in -- get_selected_rows() already
+        answers in model order, and the grid's get_selected_items() does not,
+        so it is sorted here rather than left to chance."""
         if getattr(self, "_view", "list") == "grid":
-            items = self.iconview.get_selected_items()
-            return self.store, (self.store.get_iter(items[0]) if items else None)
-        return self.tree.get_selection().get_selected()
+            return sorted(self.iconview.get_selected_items(),
+                          key=lambda tp: tp.get_indices())
+        return self.tree.get_selection().get_selected_rows()[1]
+
+    def _selected_iter(self):
+        # The FIRST selected row, for the operations that can only mean one
+        # thing -- rename, Get Info, opening. NOT get_selected(): that returns
+        # nothing at all once the selection mode is MULTIPLE, which would have
+        # silently disabled rename and Get Info the moment multi-select was
+        # switched on. (List is the default, so the headless selftests -- which
+        # drive w.tree -- are unaffected.)
+        rows = self._selected_rows()
+        if not rows:
+            return self.store, None
+        return self.store, self.store.get_iter(rows[0])
 
     def _selected_path(self):
         model, it = self._selected_iter()
         if it is None:
             return None
         return self.abspath(model.get_value(it, 4))
+
+    def _selected_paths(self):
+        """Every selected item's absolute path, in the order they are shown."""
+        out = []
+        for tp in self._selected_rows():
+            try:
+                out.append(self.abspath(
+                    self.store.get_value(self.store.get_iter(tp), 4)))
+            except (ValueError, TypeError):
+                continue          # the row went away under us; skip it
+        return out
 
     def _taken(self, path):
         """Is this name already spoken for — by any directory entry, or by a copy that is
@@ -3590,7 +3910,7 @@ class Finder(Gtk.Window):
                 return False
             frac = min(1.0, state["done"] / float(state["total"]))
             bar.set_fraction(frac)
-            namelbl.set_text(state["file"])
+            set_user_text(namelbl, state["file"])
             return True
 
         tick_id = GLib.timeout_add(150, tick)
@@ -3729,14 +4049,22 @@ class Finder(Gtk.Window):
         if self.get_mapped():
             self._begin_rename()
 
+    def _clip_words(self, paths):
+        """How to name what is on the clipboard: one item by name, several by
+        count. "Copied 7 items" is what a person can check against what they
+        highlighted; a list of seven names in a status bar is not."""
+        if len(paths) == 1:
+            return "'%s'" % os.path.basename(paths[0])
+        return _t("%d items") % len(paths)
+
     def _copy_selected(self):
         # Copy leaves the item where it is, so without a word of feedback the
         # novice can't tell it worked. Confirm it, and the Paste button lights up.
-        p = self._selected_path()
-        if p:
-            self._clipboard = (p, False)
+        paths = self._selected_paths()
+        if paths:
+            self._clipboard = (paths, False)
             self._update_paste()
-            self._flash_status(_t("Copied '%s'") % os.path.basename(p))
+            self._flash_status(_t("Copied %s") % self._clip_words(paths))
         else:
             self._flash_status(_t("Select an item to copy"))
 
@@ -3744,29 +4072,87 @@ class Finder(Gtk.Window):
         if self.rel == "Applications":
             self._flash_status(_t("Applications are managed in Packages."))
             return
-        p = self._selected_path()
-        if p:
-            self._clipboard = (p, True)
+        paths = self._selected_paths()
+        if paths:
+            self._clipboard = (paths, True)
             self._update_paste()
-            self._flash_status(_t("Cut '%s'. Open a folder, then Paste.")
-                               % os.path.basename(p))
+            self._flash_status(_t("Cut %s. Open a folder, then Paste.")
+                               % self._clip_words(paths))
         else:
             self._flash_status(_t("Select an item to cut"))
 
     def _paste(self):
+        """Paste everything on the clipboard, ONE ITEM AT A TIME.
+
+        Sequential rather than all-at-once on purpose. A paste can be a rename
+        (instant) or a full copy across a USB stick (minutes, with a progress
+        card and a Cancel), and firing several of the slow kind at once would
+        put several progress cards on screen competing for the same disk and
+        make Cancel ambiguous. Each item finishes -- or fails, and says so --
+        before the next begins, so the status line and the undo stack stay
+        about one thing at a time.
+
+        The clipboard is cleared HERE, not inside the worker: a cut is one-shot
+        for the whole selection, and clearing it per item would leave a
+        half-emptied clipboard behind if one file of seven could not be moved."""
         if self.rel == "Applications":
             self._flash_status(_t("Applications are managed in Packages."))
             return
-        if not self._clipboard:
+        clip = self._clipboard
+        if not clip:
             return
-        src, is_cut = self._clipboard
-        # lexists: the item on the clipboard is the entry the user selected. A
-        # symlink whose target is gone is still that entry, and Paste copies
-        # the link itself, so exists() refused a paste it could have made.
-        if not os.path.lexists(src):
-            self._clipboard = None
-            self._flash_status(_t("That item no longer exists"))
-            return
+        paths, is_cut = clip
+        queue = list(paths)
+        refused = []
+
+        def finish():
+            """What a CUT leaves on the clipboard when the dust settles.
+
+            Not simply "nothing". A cut whose paste was REFUSED -- the name was
+            taken, the disk said no -- has not moved anything, and the user's
+            "move this" is still unfulfilled, so the item stays on the
+            clipboard to be pasted somewhere that will have it. Clearing it
+            would make them walk back and cut it again, and the old single-item
+            code was right to keep it. What is new is that with several items
+            the answer is per item: the four that moved leave the clipboard,
+            the one that could not stays on it."""
+            if not is_cut:
+                return
+            self._clipboard = (refused, True) if refused else None
+            self._update_paste()
+
+        def step(ok=True):
+            if not queue:
+                finish()
+                return
+            src = queue.pop(0)
+            # Between the copy and the paste the item may have been moved,
+            # renamed or deleted -- by another window, or by the person. Say so
+            # for that one item and carry on with the rest rather than
+            # abandoning a six-file paste over the one that went away.
+            if not os.path.lexists(src):
+                self._flash_status(
+                    _t("'%s' no longer exists") % os.path.basename(src))
+                step()
+                return
+
+            def done(landed=True):
+                if not landed:
+                    refused.append(src)
+                step()
+            self._paste_one(src, is_cut, done)
+        step()
+
+    def _paste_one(self, src, is_cut, after):
+        """Paste ONE item, then call `after(landed)` however it ends.
+
+        `landed` is False when nothing was written -- which is what tells a cut
+        to keep this item on the clipboard rather than lose it.
+
+        Every exit path calls it -- the refusals, the errors and both of the
+        asynchronous copy completions -- because the driver above cannot start
+        the next item until this one is genuinely finished, and an exit that
+        forgot to call back would silently truncate the paste."""
         dest_dir = self.abspath(self.rel)
         base = os.path.basename(src)
         dst = os.path.join(dest_dir, base)
@@ -3776,46 +4162,42 @@ class Finder(Gtk.Window):
             dst = self._unique_path(dest_dir, base, suffix=" copy")
         if self._recursive_target(src, dst):
             self._flash_status(_t("A folder cannot be copied inside itself"))
-            return
+            return after(False)
         if is_cut and self._same_filesystem(src, dest_dir):
             # same disk: a move is a rename, so it is instant however big it is
             try:
                 self._rename_noreplace(src, dst)
             except FileExistsError:
                 # The name was free when it was chosen and is not free now.
-                # Nothing was moved: keep the cut on the clipboard so the user
-                # can paste it somewhere else, and say what actually happened
-                # rather than "Moved here" over an item that never moved.
+                # Nothing was moved: say what actually happened rather than
+                # "Moved here" over an item that never moved, then carry on
+                # with the rest of the paste.
                 self._update_paste()
                 self.load(self.rel, record=False, keep_filter=True)
                 self._flash_status(
                     _t("An item named '%s' already exists")
                     % os.path.basename(dst))
-                return
+                return after(False)
             except (OSError, shutil.Error) as exc:
                 if getattr(exc, "errno", None) != errno.EXDEV:
                     self._update_paste()
                     self._flash_status(_t("Could not paste here"))
-                    return
+                    return after(False)
                 # Not one filesystem after all (_same_filesystem answers
                 # "unknown" as "same"): fall through to the copy-then-delete
                 # path below, which is what a cross-disk move really is.
             else:
-                self._clipboard = None      # cut is one-shot
-                self._update_paste()
                 self._set_undo_move(_t("Move"), dst, src)
                 self.load(self.rel, record=False, keep_filter=True)
                 self._flash_undoable(
                     _t("Moved “%s” here") % display_name(base))
-                return
+                return after()
         if is_cut:
             # A move to ANOTHER disk — a USB stick, nearly always — is really a
             # full copy followed by a delete, so it costs exactly what a copy
             # costs and gets the same progress card and the same Cancel. It
             # offers no undo: putting it back would be another long copy, and
             # the original is only removed once the new one is safely written.
-            self._clipboard = None
-            self._update_paste()
             # Remember WHICH entry was cut, not just where it sat. This copy
             # runs for as long as a USB stick takes, and in that time the
             # original can be deleted and a different document, folder, or
@@ -3828,6 +4210,7 @@ class Finder(Gtk.Window):
             def moved(ok):
                 if not ok:
                     self.load(self.rel, record=False, keep_filter=True)
+                    after(False)
                     return
                 gone = False
                 stale = origin is None or self._path_identity(src) != origin
@@ -3851,6 +4234,7 @@ class Finder(Gtk.Window):
                     self._flash_status(
                         _t("Copied “%s” here, but the original could not be "
                            "removed.") % display_name(base))
+                after()
             self._copy(src, dst, moved)
             return
         self._update_paste()
@@ -3861,6 +4245,7 @@ class Finder(Gtk.Window):
             self.load(self.rel, record=False, keep_filter=True)
             if ok:
                 self._flash_undoable(_t("Copied “%s” here") % display_name(base))
+            after()
         self._copy(src, dst, done)
 
     @staticmethod
@@ -3984,6 +4369,61 @@ class Finder(Gtk.Window):
             return
         commit(True)
 
+    # ---- the clipboard ----------------------------------------------------
+    # THE CLIPBOARD IS NOT PART OF THIS WINDOW. Every Finder window is its own
+    # PROCESS -- shell.py runs finder.py again for each one -- so a clipboard
+    # held in an attribute was copied in one window and unavailable in the next,
+    # which is exactly the shape a person hits the moment they open a second
+    # window to copy something INTO. It lives in one small file instead, beside
+    # the rest of this app's state, and the property below keeps every existing
+    # read and write site (`self._clipboard`) working unchanged.
+    #
+    # It is deliberately NOT the X selection: X owns its clipboard from the
+    # process that set it, so a copy would evaporate the moment the window that
+    # made it closed -- and closing the source window before pasting is normal.
+    # A file outlives the window, which is what a person expects of "I copied
+    # that".
+    @staticmethod
+    def _clipboard_path():
+        return os.path.join(HOME, ".config", "notebook", "clipboard.json")
+
+    @property
+    def _clipboard(self):
+        """(paths, is_cut) or None. `paths` is always a LIST."""
+        try:
+            import json
+            with open(self._clipboard_path()) as fh:
+                data = json.load(fh)
+            paths = [str(x) for x in data["paths"]]
+            if not paths:
+                return None
+            return (paths, bool(data.get("cut", False)))
+        except Exception:                                         # noqa: BLE001
+            # Unreadable or absent is simply "nothing copied". A clipboard is
+            # not user data -- there is nothing here worth a damage report.
+            return None
+
+    @_clipboard.setter
+    def _clipboard(self, value):
+        import json
+        path = self._clipboard_path()
+        try:
+            if not value:
+                if os.path.exists(path):
+                    os.unlink(path)
+                return
+            paths, is_cut = value
+            if isinstance(paths, str):          # tolerate the old single form
+                paths = [paths]
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump({"paths": list(paths), "cut": bool(is_cut)}, fh)
+            os.replace(tmp, path)
+        except OSError:
+            pass          # a clipboard that cannot be written is not a failure
+                          # worth stopping the user's copy over
+
     def _update_paste(self):
         # There is no toolbar Paste button any more (paste_btn is None); the
         # context/Edit menus build their own sensitivity from self._clipboard
@@ -4095,7 +4535,7 @@ class Finder(Gtk.Window):
             grid = _owner is getattr(self, "iconview", None)
             cell.set_property(
                 "markup",
-                "%s%s<span foreground=\"#8A857A\" size=\"small\">%s</span>"
+                "%s%s<span foreground=\"#6E695E\" size=\"small\">%s</span>"
                 % (GLib.markup_escape_text(name), "\n" if grid else "   ",
                    GLib.markup_escape_text(where)))
         else:
@@ -4440,8 +4880,25 @@ class Finder(Gtk.Window):
                 self._begin_rename()
                 return True
             return False
-        if isinstance(self.get_focus(), (Gtk.Editable, Gtk.TextView)):
-            return False               # typing in a field: leave every key alone
+        focus = self.get_focus()
+        if isinstance(focus, (Gtk.Editable, Gtk.TextView)):
+            # Typing in a field: leave every key alone -- EXCEPT when the field
+            # has no text selected and the key is a file operation. Ctrl+C in a
+            # search box with nothing highlighted copies nothing at all, so the
+            # keystroke was simply swallowed: a person who typed a name into
+            # Search, clicked the file it found and pressed Ctrl+C got silence,
+            # because clicking a row does not always take focus off the entry.
+            # With no selection there is no text meaning to compete with, so
+            # the file meaning is the only one the keystroke can have.
+            has_text_selection = True
+            try:
+                has_text_selection = bool(focus.get_selection_bounds())
+            except (AttributeError, TypeError):
+                has_text_selection = True
+            if has_text_selection or not ctrl or keyval not in (
+                    Gdk.KEY_c, Gdk.KEY_C, Gdk.KEY_x, Gdk.KEY_X,
+                    Gdk.KEY_v, Gdk.KEY_V):
+                return False
         if ctrl and keyval in (Gdk.KEY_c, Gdk.KEY_C):
             self._copy_selected(); return True
         if ctrl and keyval in (Gdk.KEY_x, Gdk.KEY_X):
@@ -4710,7 +5167,8 @@ class Finder(Gtk.Window):
             False, False, 0)
         htext = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         htext.set_valign(Gtk.Align.CENTER)
-        nm = Gtk.Label(label=name, xalign=0)
+        nm = Gtk.Label(xalign=0)
+        set_user_text(nm, name)
         nm.get_style_context().add_class("finderinfoname")
         nm.set_line_wrap(True); nm.set_max_width_chars(26)
         # max_width_chars only bites when the label is allowed to be narrower
@@ -4940,6 +5398,23 @@ class Finder(Gtk.Window):
         # double-click, the panel, and document double-click.
         script = os.path.join(DE_DIR, mod + ".py")
         if os.path.exists(script):
+            ok, why = (nbtrust.check_path(script) if nbtrust
+                       else (False, "the trust module is missing"))
+            if not ok:
+                # Say it plainly and stop. A person handed an app the machine
+                # will not run does not need the vocabulary of code signing;
+                # the reason goes to the log, not to them.
+                print("nbtrust: refused %s (%s)" % (script, why))
+                # Longer than the 2400ms default: the house status flash is
+                # sized for "no app opens this file type", and a refusal to run
+                # an app is rarer and more consequential than that. Measured on
+                # target — at 2.4s the message was gone before a screenshot
+                # taken a few seconds later could catch it, which is also how
+                # long a person takes to look down at the status bar.
+                self._flash_status(
+                    _t("This app can't be opened on this computer."),
+                    restore_ms=6000)
+                return
             argv = ["python3", script]
             if file_arg:
                 argv.append(file_arg)
@@ -4988,7 +5463,7 @@ class Finder(Gtk.Window):
         pid = self._launch_pid
         if pid is None:
             return False
-        if os.path.exists(self._launch_beacon):
+        if nbapp.app_map_beacon_live(pid):
             self._launch_pid = None
             self._step_aside()
             return False
@@ -5100,11 +5575,33 @@ class Finder(Gtk.Window):
         # count. Non-silent feedback for actions with no visible result of their
         # own (e.g. double-clicking a file type no installed app can open).
         self.status.set_text(msg)
-        GLib.timeout_add(restore_ms, self._restore_status)
+        old = getattr(self, "_status_restore_id", 0)
+        if old:
+            try:
+                GLib.source_remove(old)
+            except Exception:
+                pass
+        generation = getattr(self, "_status_generation", 0) + 1
+        self._status_generation = generation
+        self._status_restore_id = GLib.timeout_add(
+            restore_ms, self._restore_status, generation)
 
-    def _restore_status(self):
+    def _restore_status(self, generation=None):
         if getattr(self, "_closed", False):
             return False
+        if generation is not None:
+            if generation != getattr(self, "_status_generation", 0):
+                return False
+            self._status_restore_id = 0
+        else:
+            self._status_generation = getattr(self, "_status_generation", 0) + 1
+            old = getattr(self, "_status_restore_id", 0)
+            self._status_restore_id = 0
+            if old:
+                try:
+                    GLib.source_remove(old)
+                except Exception:
+                    pass
         self.status.set_text(self._status_text(len(self.store)))
         return False
 
@@ -5117,6 +5614,20 @@ class Finder(Gtk.Window):
         # python3 processes running a DE app script, excluding ourselves, the
         # widget column, other Finder windows, and the app that just exited.
         me = os.getpid()
+        # An app is a module the Applications folder can LAUNCH, so ask the
+        # launch registry itself — the same APP_MODULES the Finder opens them
+        # from, extended by _merge_installed_apps with anything installed from
+        # a package. Naming the INFRASTRUCTURE instead is what broke: that list
+        # read "finder, widgets, shell, xflushd" and treated every other de/*.py
+        # as a user app, while session.sh runs four more daemons for the whole
+        # session (desktopbg, nbmediakeys, xclipd, xtabletd). One of those is
+        # always alive, so this returned True forever — the reappear path healed
+        # the app-active flag on every reconcile and never dropped it, the
+        # Finder could not come back after hiding, and any Finder window opened
+        # afterwards was hidden the instant it mapped, which reads to a person
+        # as a window that closes as it opens. A positive test cannot rot that
+        # way: a new daemon is not in the registry, a new app is.
+        apps = set(APP_MODULES.values())
         try:
             pids = [p for p in os.listdir("/proc") if p.isdigit()]
         except OSError:
@@ -5134,11 +5645,7 @@ class Finder(Gtk.Window):
                            if a.endswith(b".py")), None)
             if not script or os.path.dirname(script) != DE_DIR:
                 continue
-            # Exclude the always-running desktop infrastructure (see session.sh:
-            # finder + widgets + shell + xflushd run for the whole session); any
-            # OTHER de/*.py is a real user app still holding the screen.
-            if os.path.basename(script)[:-3] not in (
-                    "finder", "widgets", "shell", "xflushd"):
+            if os.path.basename(script)[:-3] in apps:
                 return True
         return False
 
@@ -5154,6 +5661,11 @@ class Finder(Gtk.Window):
             os.remove(nbapp.APP_FLAG)
         except Exception:
             pass
+        if getattr(self, "rel", None) == "Applications":
+            # Packages may just have installed/removed an app in its separate
+            # process. Rebuild now so the returned Finder can launch exactly
+            # what the registry says without requiring a Finder restart.
+            self.load("Applications", record=False, keep_filter=True)
         self.show_all()
         self.present()
         # the re-shown Finder is blank on swrast until a scanout flush (same
@@ -5161,6 +5673,24 @@ class Finder(Gtk.Window):
         GLib.timeout_add(200, self._nudge)
         GLib.timeout_add(600, self._nudge)
         GLib.timeout_add(1500, self._ensure_mapped)
+
+    def _claim_focus(self, *_a):
+        """Put the keyboard on THIS window (see the note where this is armed).
+
+        Only while the Finder is the surface a person is looking at: it hides
+        itself whenever a launched app owns the screen, and a hidden window
+        must never pull the keyboard off the app in front of it. Returns False
+        so it works both as a GLib timeout (one shot) and as an event handler
+        (does not stop the click)."""
+        try:
+            if getattr(self, "_closed", False) or not self.get_visible():
+                return False
+            gw = self.get_window()
+            if gw is not None and gw.is_viewable():
+                gw.focus(Gdk.CURRENT_TIME)
+        except Exception:                                         # noqa: BLE001
+            pass
+        return False
 
     def _nudge(self):
         if getattr(self, "_closed", False):
@@ -5217,7 +5747,7 @@ FINDER_CSS = b"""
                  background: #EAE3D2; color: #2A2620; }
 .finder .sidebar { background: #EFEBE0; border-right: 1px solid #D7D2C5;
                    padding: 12px 10px; }
-.finder .sbheader { font-size: 11px; color: #8A857A; font-weight: 600;
+.finder .sbheader { font-size: 11px; color: #6E695E; font-weight: 600;
                     letter-spacing: 0.08em; padding: 12px 8px 6px; }
 .finder .sbrow { padding: 7px 12px; background: transparent; border: none;
                  border-radius: 6px; box-shadow: none; margin: 1px 0;
@@ -5267,7 +5797,7 @@ FINDER_CSS = b"""
                       border-left: 1px solid #C9C4B6; }
 .finder .resizegrip:hover { background: #EAE3D2; }
 /* empty-folder / no-search-result message, centered over the empty view */
-.finder .emptystate { color: #9A9484; font-size: 15px; font-weight: 500; }
+.finder .emptystate { color: #6E695E; font-size: 15px; font-weight: 500; }
 /* inline rename: the Name cell's entry, active-red to signal it is live */
 .finder .filelist entry, .finder .filegrid entry {
                  background: #FCFBF8; color: #1A1916; caret-color: #C8341E;
@@ -5282,10 +5812,10 @@ FINDER_CSS = b"""
 .finderinfobox { padding: 22px 24px 18px; }
 .finderinfohead { margin-bottom: 14px; }
 .finderinfoname { font-size: 17px; font-weight: 700; color: #1A1916; }
-.finderinfokind { font-size: 12px; color: #8A857A; }
+.finderinfokind { font-size: 12px; color: #6E695E; }
 .finderinfosep { background: #D7D2C5; min-height: 1px; margin-bottom: 14px; }
 .finderinfogrid { margin-bottom: 18px; }
-.finderinfokey { font-size: 12px; color: #8A857A; font-weight: 600; }
+.finderinfokey { font-size: 12px; color: #6E695E; font-weight: 600; }
 .finderinfoval { font-size: 13px; color: #2A2620; }
 /* A button's own `color` does NOT reach its label: Papertone's `* { color: ink }`
    matches the label node directly, and a direct match beats an inherited value,
@@ -5342,6 +5872,18 @@ def install_css():
     Gtk.StyleContext.add_provider_for_screen(
         Gdk.Screen.get_default(), prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     _FINDER_CSS_DONE = True
+    # ...and the shared input rules. the Finder does not build an nbapp.AppWindow, so
+    # it never reached nbapp.install_css -- which is where the OS-wide GDK
+    # dispatcher is armed. Two rules were therefore missing on exactly the
+    # surfaces a person meets first: focus rings stayed on for the mouse, and
+    # (measured on target) clicking this window did not give it the keyboard,
+    # so the Finder's search box could not be typed into at all.
+    try:
+        import nbapp as _nbapp
+        _nbapp.track_input_modality()
+    except Exception:                                             # noqa: BLE001
+        pass
+
 
 
 if __name__ == "__main__":

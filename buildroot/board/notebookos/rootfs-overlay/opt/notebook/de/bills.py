@@ -29,10 +29,16 @@ and nothing has to be edited each month. Occurrence dates are computed by
 calendar arithmetic with the day CLAMPED into the month (a bill due on the 31st
 falls on the 28th in February), never by adding 30 days.
 
+`dom` is that day of the month AS A RULE, kept beside the anchor because the
+anchor cannot always hold it: a bill given the 31st whose next occurrence falls
+in September is anchored on the 30th, since there is no 31 September. Without
+the rule written down, the 31 the person picked is gone and every later month
+comes due on the 30th as well.
+
 Data lives in $NB_HOME/.config/notebook/bills.json:
 
     {"bills": [{"id": .., "payee": .., "account": .., "amount": 8420,
-                "due": "2026-08-15", "every": 1, "method": "mail",
+                "due": "2026-08-15", "dom": 15, "every": 1, "method": "mail",
                 "address": .., "phone": .., "note": .., "lead": 5,
                 "paid": [{"on": "2026-07-12", "for": "2026-07-15",
                           "amount": 8420, "method": "mail",
@@ -50,6 +56,7 @@ never disagree about what is due.
 import os
 import re
 import time
+import math
 
 import gi
 
@@ -61,11 +68,49 @@ from gi.repository import Gdk, Gtk, GLib, Pango  # noqa: E402
 import nbapp  # noqa: E402
 import nbicons  # noqa: E402
 import nbprint  # noqa: E402
+import nbi18n
 from nbi18n import _t  # noqa: E402
 
 HOME = os.environ.get("NB_HOME", os.path.expanduser("~"))
 CFG_DIR = os.path.join(HOME, ".config", "notebook")
 STORE = os.path.join(CFG_DIR, "bills.json")
+MAX_STORE_BYTES = 8 * 1024 * 1024
+
+
+def _set_user_text(label, text, fallback=""):
+    """Put words the USER typed on a label without the catalog rewriting them.
+
+    A payee is a name a person writes down — "Phone", "Water", "Home", "Music"
+    — and so are the account line, the posting address, the note and the
+    reference on a payment. nbi18n looks up every label, so on a French install
+    the rail read "Téléphone" while bills.json went on saying "Phone": the bill
+    on screen was not the bill in the file, and the payee the search box could
+    find was not the payee the eye could see."""
+    value = str(text or "")
+    if value:
+        nbi18n.set_verbatim(label, value)
+        return
+    empty = _t(fallback) if fallback else ""
+    try:
+        label.set_text(empty)
+    except AttributeError:
+        label.set_label(empty)
+
+
+class BillsStoreTooLarge(ValueError):
+    pass
+
+
+def _read_store_json(path=None, limit=MAX_STORE_BYTES):
+    """Read the shared bill store without trusting its size."""
+    import json
+    if path is None:
+        path = STORE
+    with open(path, "rb") as fh:
+        data = fh.read(limit + 1)
+    if len(data) > limit:
+        raise BillsStoreTooLarge("bill store is too large")
+    return json.loads(data)
 PDF_NAME = "Bills.pdf"
 DOCS_DIR = os.path.join(HOME, "Documents")
 
@@ -115,7 +160,7 @@ REPEAT_LABEL = {1: "Every month", 2: "Every 2 months", 3: "Every 3 months",
 # a close).
 MAX_TEXT = 400
 MAX_LEAD = 60
-MAX_CENTS = 10 ** 11          # a hundred million in currency units
+MAX_CENTS = 10 ** 11          # a thousand million in currency units
 
 # A walk over occurrences has to stop even when the store says `every: 1` and
 # an anchor from the year 1200. Two thousand steps is a hundred and sixty years
@@ -169,7 +214,7 @@ def _month_len(year, month):
     return 30 if month in (4, 6, 9, 11) else 31
 
 
-def add_months(day, n):
+def add_months(day, n, dom=0):
     """`day` moved on by n whole months, with the day of the month CLAMPED.
 
     A bill due on the 31st is due on the 28th of February and on the 31st again
@@ -177,11 +222,18 @@ def add_months(day, n):
     applied to the ANCHOR every time rather than carried forward. Adding 30 days
     instead walks a monthly bill backwards through the year and lands it on a
     different date every month, and adding one month at a time from the previous
-    result pins a 31st bill to the 28th for good after one February."""
+    result pins a 31st bill to the 28th for good after one February.
+
+    `dom` is the rule when the anchor cannot carry it — a bill given the 31st
+    whose anchor fell in a 30-day month. It only ever raises the day: a stored
+    rule that contradicts its anchor must not move the bill EARLIER than the
+    date the app has been showing for it."""
     p = _parts(day)
     if p is None:
         return None
     y, m, d = p
+    if dom:
+        d = max(d, min(31, int(dom)))
     total = (y * 12 + (m - 1)) + int(n)
     y2, m2 = total // 12, total % 12 + 1
     if not 1 <= y2 <= 9999:
@@ -268,12 +320,29 @@ def money(cents):
 
 
 def parse_money(text):
-    """A typed amount as whole cents, or None when there is no number in it.
+    """A typed amount as whole cents, or None when this app will not keep it.
 
     Accepts what a person types off a paper bill: "84.20", "$84.20", "84",
     "1,204.50". Rounds half away from zero on the cent, in integer arithmetic —
     float(text) * 100 rounds 8.4 to 839 cents often enough to matter, and this
-    is money."""
+    is money.
+
+    A figure over MAX_CENTS is REFUSED here rather than capped. Capping it
+    saved a different amount from the one that was typed and said "Bill added"
+    over the top of it: seventeen digits were confirmed as $1,000,000,000.00.
+    Money is never silently reinterpreted — the sheets ask again instead. Use
+    _money_cents when the question is what the digits say."""
+    cents = _money_cents(text)
+    if cents is None or abs(cents) > MAX_CENTS:
+        return None
+    return cents
+
+
+def _money_cents(text):
+    """The cents a typed amount spells out, unbounded, or None when there is no
+    number in it. parse_money is this with the app's cap applied; the sheets
+    read both, so a figure that is too big can be told from one that is not a
+    figure at all."""
     s = str(text).strip()
     neg = False
     if s.startswith(("-", "−")):
@@ -299,7 +368,6 @@ def parse_money(text):
         return None
     if len(frac) > 2 and frac[2].isdigit() and int(frac[2]) >= 5:
         cents += 1
-    cents = min(cents, MAX_CENTS)
     return -cents if neg else cents
 
 
@@ -341,6 +409,12 @@ def _cents(value):
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, float):
+        # Python's JSON reader accepts the non-standard NaN/Infinity tokens.
+        # int(round(...)) raises for both, which made one damaged amount stop
+        # the whole bill list (and the desktop tile) from loading.  A variable
+        # amount is the honest fallback when the stored figure is not finite.
+        if not math.isfinite(value):
+            return None
         return max(-MAX_CENTS, min(MAX_CENTS, int(round(value * 100))))
     try:
         return max(-MAX_CENTS, min(MAX_CENTS, int(value)))
@@ -355,11 +429,13 @@ def _payment(raw):
     on = on if _parts(on) else today_key()
     due = raw.get("for")
     method = raw.get("method")
-    return {"on": on,
-            "for": due if _parts(due) else None,
-            "amount": _cents(raw.get("amount")),
-            "method": method if method in METHODS else "",
-            "ref": _text(raw.get("ref"), 80)}
+    out = dict(raw)
+    out.update({"on": on,
+                "for": due if _parts(due) else None,
+                "amount": _cents(raw.get("amount")),
+                "method": method if method in METHODS else "",
+                "ref": _text(raw.get("ref"), 80)})
+    return out
 
 
 def normalise(raw, index=0, seen=None):
@@ -397,6 +473,14 @@ def normalise(raw, index=0, seen=None):
         "paid": [p for p in (_payment(x) for x in _records(raw.get("paid")))
                  if p is not None],
     }
+    # THE DAY OF THE MONTH, AS A RULE (see add_months). A rule that does not
+    # agree with the anchor — a hand edit, a store written before the field
+    # existed — is dropped in favour of the anchor's own day, so the first
+    # occurrence a bill yields is always the anchor itself.
+    _ay, _am, _ad = _parts(rec["due"])
+    _dom = _clamp_int(raw.get("dom"), 1, 31, 0)
+    rec["dom"] = _dom if _dom and min(_dom, _month_len(_ay, _am)) == _ad \
+        else _ad
     # CARRY THROUGH WHAT THIS VERSION DOES NOT KNOW ABOUT. Normalising by
     # building a fresh dict silently DELETED every other field on the record,
     # and the loss reached the file: measured, a bill carrying `category`,
@@ -411,7 +495,7 @@ def normalise(raw, index=0, seen=None):
     return rec
 
 
-def read_bills(path=STORE):
+def read_bills(path=None):
     """Every bill in the store, normalised. Never raises: a missing, damaged or
     hand-edited file yields what can be read out of it, which for an unreadable
     one is nothing.
@@ -420,9 +504,7 @@ def read_bills(path=STORE):
     the same way — the tile showing a different amount from the app is the kind
     of disagreement that makes a person stop believing either of them."""
     try:
-        import json
-        with open(path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
+        raw = _read_store_json(path)
     except (OSError, ValueError):
         return []
     seen = set()
@@ -442,16 +524,20 @@ def occurrences(bill, limit=_MAX_STEPS):
 
     A one-off yields exactly one. A repeating bill yields its anchor plus n
     months for n = 0, 1, 2 …, each with the day of the month clamped into the
-    month it lands in (see add_months)."""
+    month it lands in (see add_months). The day of the month is the bill's
+    `dom` rule, which is the anchor's own day for every bill whose anchor can
+    hold it."""
     anchor = bill.get("due")
-    if _parts(anchor) is None:
+    p = _parts(anchor)
+    if p is None:
         return
     every = bill.get("every") or 0
     if every <= 0:
         yield anchor
         return
+    dom = _clamp_int(bill.get("dom"), 1, 31, 0) or p[2]
     for n in range(limit):
-        day = add_months(anchor, n * every)
+        day = add_months(anchor, n * every, dom)
         if day is None:
             return
         yield day
@@ -578,6 +664,8 @@ class Bills(nbapp.AppWindow):
 
     def __init__(self):
         super().__init__()
+        self._quarantine_pending = False
+        self._save_error = ""
         self.bills = self._load()
         self.sel = self.bills[0]["id"] if self.bills else ""
         # The View menu offers three orders and applied them correctly, and NONE
@@ -587,9 +675,15 @@ class Bills(nbapp.AppWindow):
         # into an order `_ordered` has no branch for.
         stored = (getattr(self, "_extra", None) or {}).get("sort")
         self.sort = stored if stored in self.SORTS else "due"
-        self._save_error = ""
         self._deleted = None
         self._flash_id = 0
+        self._flash_timer = 0
+        self._closed = False
+        self.connect("destroy", self._on_destroy)
+        self._shown_day = today_key()
+        self._day_rollover_id = GLib.timeout_add_seconds(
+            30, self._check_day_rollover)
+        self._overlay_settle = 0
         self._overlay_layer = None
         self._overlay_holder = None
         self._overlay_card = None
@@ -608,9 +702,13 @@ class Bills(nbapp.AppWindow):
         user's bills. nbapp's single .bak cannot cover it — see
         nbapp.quarantine_unrecognized."""
         try:
-            import json
-            with open(STORE, "r", encoding="utf-8") as fh:
-                raw = json.load(fh)
+            raw = _read_store_json()
+        except BillsStoreTooLarge:
+            nbapp.quarantine_unrecognized(STORE)
+            self._quarantine_pending = os.path.exists(STORE)
+            if self._quarantine_pending:
+                self._save_error = _t("Not saved")
+            return []
         except (OSError, ValueError):
             return []              # missing / unreadable: an empty bill list
         seen = set()
@@ -626,10 +724,18 @@ class Bills(nbapp.AppWindow):
         if not out and not (isinstance(raw, dict)
                             and raw.get("bills") in ([], {})):
             nbapp.quarantine_unrecognized(STORE)
+            self._quarantine_pending = os.path.exists(STORE)
+            if self._quarantine_pending:
+                self._save_error = _t("Not saved")
         return out
 
     def _save(self):
         try:
+            if getattr(self, "_quarantine_pending", False):
+                nbapp.quarantine_unrecognized(STORE)
+                if os.path.exists(STORE):
+                    raise OSError("could not preserve the unrecognized bill store")
+                self._quarantine_pending = False
             os.makedirs(CFG_DIR, exist_ok=True)
             # Keys this version does not know about are the store's, not
             # ours: a newer build, a future feature or a hand-edit puts them
@@ -643,6 +749,7 @@ class Bills(nbapp.AppWindow):
             payload["sort"] = getattr(self, "sort", "due")
             nbapp.atomic_write_json(STORE, payload, indent=1)
             self._save_error = ""
+            return True
         except OSError as exc:
             # A read-only or full disk must not stop the app working, and must
             # not be silent either: without this, a failed write looks exactly
@@ -651,6 +758,7 @@ class Bills(nbapp.AppWindow):
             # the status strip is rewritten on every refresh, so a one-shot
             # message would be wiped a moment later.
             self._save_error = nbapp.save_failure_reason(exc, STORE)
+            return False
 
     # -- model helpers -------------------------------------------------------
 
@@ -687,7 +795,7 @@ class Bills(nbapp.AppWindow):
         .bl-side *, .bl-main * {
                      font-family: "Nimbus Sans","Helvetica",sans-serif; }
         .bl-eyebrow { font-size: 11px; letter-spacing: 0.14em;
-                      font-weight: 700; color: #9A9484; }
+                      font-weight: 700; color: #6E695E; }
         .bl-sidehead { padding: 20px 16px 10px 16px; }
         .bl-new { min-width: 30px; min-height: 30px; padding: 0 6px;
                   border-radius: 8px; background: transparent; border: none;
@@ -711,18 +819,24 @@ class Bills(nbapp.AppWindow):
         .bl-rowname { font-size: 15px; color: #1A1916; }
         .bl-row.sel .bl-rowname { font-weight: 700; }
         .bl-rowamt { font-size: 14px; color: #1A1916; }
-        .bl-rowstate { font-size: 12px; color: #8A857A; }
+        .bl-rowstate { font-size: 12px; color: #6E695E; }
         .bl-rowstate.hot { color: #C8341E; font-weight: 700; }
-        .bl-listempty { font-size: 13px; color: #8A857A; padding: 22px 16px; }
+        /* The SELECTED row's ground is @select, where @muted is 4.27:1 and the
+           signage-red is 4.14:1 -- both under AA, on the one row the pointer
+           had chosen. @ink-3 and the accent's own pressed shade clear it
+           without changing what either colour MEANS. */
+        .bl-row.sel .bl-rowstate { color: #3A362E; }
+        .bl-row.sel .bl-rowstate.hot { color: #B12D19; }
+        .bl-listempty { font-size: 13px; color: #6E695E; padding: 22px 16px; }
         /* The same absence stated inside the detail column, where the rail's
            16px indent would push it out of line with the section above it. */
-        .bl-noneyet { font-size: 13px; color: #8A857A; padding: 2px 0 10px 0; }
+        .bl-noneyet { font-size: 13px; color: #6E695E; padding: 2px 0 10px 0; }
 
         .bl-sidefoot { border-top: 1px solid #C9C4B6; padding: 14px 16px; }
         .bl-footnum { font-size: 20px; color: #1A1916; }
         .bl-footnum.hot { color: #C8341E; }
         .bl-footlabel { font-size: 11px; letter-spacing: 0.12em;
-                        font-weight: 700; color: #9A9484; }
+                        font-weight: 700; color: #6E695E; }
 
         .bl-main { background: #FCFBF8; }
         .bl-payee { font-size: 30px; font-weight: 700; color: #1A1916; }
@@ -753,6 +867,13 @@ class Bills(nbapp.AppWindow):
                       color: #FCFBF8; }
         .bl-primary label { color: #FCFBF8; font-weight: 700; }
         .bl-primary:hover { background: #3A362E; border-color: #3A362E; }
+        /* A DISABLED SLAB HAS TO LOOK DISABLED. This rule set only background
+           and colour, and GTK's insensitive state changes neither: on a
+           settled bill "Record Payment" was drawn as the live ink button and
+           did nothing when it was clicked. The grey is nbprint's, so a
+           disabled primary is one colour across the OS. */
+        .bl-primary:disabled { background: #C9C4B6; border-color: #C9C4B6; }
+        .bl-primary:disabled label { color: #FCFBF8; }
         .bl-quiet { background: #FCFBF8; border: 1px solid #C9C4B6;
                     border-radius: 8px; padding: 9px 18px; font-size: 14px;
                     box-shadow: none; color: #3A362E; }
@@ -765,19 +886,19 @@ class Bills(nbapp.AppWindow):
         .bl-addr { background: #F8F7F2; border: 1px solid #C9C4B6;
                    border-radius: 12px; padding: 20px 22px; }
         .bl-addrline { font-size: 17px; color: #1A1916; }
-        .bl-addrempty { font-size: 14px; color: #9A9484; }
+        .bl-addrempty { font-size: 14px; color: #6E695E; }
         .bl-phone { font-size: 24px; font-weight: 700; color: #1A1916; }
 
         .bl-factlabel { font-size: 11px; letter-spacing: 0.12em;
-                        font-weight: 700; color: #9A9484; }
+                        font-weight: 700; color: #6E695E; }
         .bl-factval { font-size: 16px; color: #1A1916; }
         .bl-factval.hot { color: #C8341E; font-weight: 700; }
-        .bl-factval.quiet { color: #9A9484; }
+        .bl-factval.quiet { color: #6E695E; }
 
         .bl-payhead { border-bottom: 1px solid #C9C4B6; padding-bottom: 6px; }
         .bl-payrow { padding: 9px 0; border-bottom: 1px solid #EFEBE0; }
         .bl-paycell { font-size: 14px; color: #2A2620; }
-        .bl-paycell.quiet { color: #8A857A; }
+        .bl-paycell.quiet { color: #6E695E; }
         .bl-empty-title { font-size: 17px; color: #1A1916; }
         .bl-empty-body { font-size: 14px; color: #6E695E; }
         .bl-status { padding: 7px 16px; font-size: 12px; color: #6E695E;
@@ -932,10 +1053,21 @@ class Bills(nbapp.AppWindow):
         self._refresh_footer()
         self._refresh_status()
 
+    def _check_day_rollover(self):
+        """Refresh deadline labels, ordering and totals after midnight."""
+        if self._closed:
+            return False
+        day = today_key()
+        if day != self._shown_day:
+            self._shown_day = day
+            self._refresh()
+        return True
+
     def _fill_list(self):
         for child in self._list.get_children():
             self._list.remove(child)
         pairs = self._ordered()
+        self._bill_rows = {}
         if not pairs:
             empty = Gtk.Label(label=_t("No bills"), xalign=0)
             empty.get_style_context().add_class("bl-listempty")
@@ -962,7 +1094,8 @@ class Bills(nbapp.AppWindow):
         if bill["id"] == self.sel:
             ctx.add_class("sel")
 
-        name = Gtk.Label(label=bill["payee"], xalign=0)
+        name = Gtk.Label(xalign=0)
+        _set_user_text(name, bill["payee"])
         name.get_style_context().add_class("bl-rowname")
         # An ellipsizing label still reports its WHOLE string as its natural
         # width, and this rail is a fixed 252px: one long payee stretched the
@@ -989,20 +1122,28 @@ class Bills(nbapp.AppWindow):
         # A real Gtk.Button, not an EventBox: it takes the keyboard as well as
         # the pointer, carries the focus ring the rest of the OS uses, and tells
         # assistive technology this row is a control rather than decoration.
-        hit = Gtk.Button()
+        hit = Gtk.ToggleButton()
         hit.set_relief(Gtk.ReliefStyle.NONE)
         hit.get_style_context().add_class("bl-rowhit")
         hit.add(row)
         hit.set_tooltip_text("%s  %s" % (bill["payee"], info["state"]))
         nbapp.name_control(hit, bill["payee"])
+        hit.set_active(bill["id"] == self.sel)
         hit.connect("clicked", self._on_row_clicked, bill["id"])
+        self._bill_rows[bill["id"]] = hit
         return hit
 
     def _on_row_clicked(self, _w, bid):
         if bid == self.sel:
+            _w.set_active(True)
             return
+        restore_focus = _w.has_focus()
         self.sel = bid
         self._refresh()
+        if restore_focus:
+            replacement = getattr(self, "_bill_rows", {}).get(bid)
+            if replacement is not None:
+                replacement.grab_focus()
 
     def _refresh_footer(self):
         total = month_total(self.bills)
@@ -1041,12 +1182,37 @@ class Bills(nbapp.AppWindow):
         self._flash_id += 1
         token = self._flash_id
         self.status.set_text(message)
+        if self._flash_timer:
+            try:
+                GLib.source_remove(self._flash_timer)
+            except Exception:
+                pass
+            self._flash_timer = 0
 
         def _back():
-            if token == self._flash_id:
+            self._flash_timer = 0
+            if not self._closed and token == self._flash_id:
                 self._refresh_status()
             return False
-        GLib.timeout_add_seconds(4, _back)
+        self._flash_timer = GLib.timeout_add_seconds(4, _back)
+
+    def _on_destroy(self, *_):
+        self._closed = True
+        rollover_id = getattr(self, "_day_rollover_id", 0)
+        self._day_rollover_id = 0
+        if rollover_id:
+            try:
+                GLib.source_remove(rollover_id)
+            except Exception:
+                pass
+        source_id = self._flash_timer
+        self._flash_timer = 0
+        if source_id:
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass
+        return False
 
     # -- the detail pane -----------------------------------------------------
 
@@ -1104,7 +1270,8 @@ class Bills(nbapp.AppWindow):
     def _head_block(self, bill, info):
         head = Gtk.Box(spacing=24)
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
-        payee = Gtk.Label(label=bill["payee"], xalign=0)
+        payee = Gtk.Label(xalign=0)
+        _set_user_text(payee, bill["payee"])
         payee.get_style_context().add_class("bl-payee")
         payee.set_ellipsize(Pango.EllipsizeMode.END)
         payee.set_max_width_chars(1)
@@ -1167,6 +1334,7 @@ class Bills(nbapp.AppWindow):
         pay = Gtk.Button(label=_t("Record Payment"))
         pay.set_relief(Gtk.ReliefStyle.NONE)
         pay.get_style_context().add_class("bl-primary")
+        pay.set_sensitive(info["due"] is not None)
         pay.connect("clicked", lambda *_: self._open_payment())
         buttons.pack_start(pay, False, False, 0)
         edit = Gtk.Button(label=_t("Edit"))
@@ -1232,8 +1400,9 @@ class Bills(nbapp.AppWindow):
 
         facts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
         facts.set_valign(Gtk.Align.START)
-        for label, value, tone in self._facts(bill, info):
-            facts.pack_start(self._fact(label, value, tone), False, False, 0)
+        for label, value, tone, own in self._facts(bill, info):
+            facts.pack_start(self._fact(label, value, tone, own),
+                             False, False, 0)
         cols.pack_start(facts, True, True, 0)
         box.pack_start(cols, False, False, 0)
         return box
@@ -1248,14 +1417,16 @@ class Bills(nbapp.AppWindow):
                 panel.pack_start(self._addr_empty(_t("No address")),
                                  False, False, 0)
             for line in lines:
-                lbl = Gtk.Label(label=line, xalign=0)
+                lbl = Gtk.Label(xalign=0)
+                _set_user_text(lbl, line)
                 lbl.get_style_context().add_class("bl-addrline")
                 lbl.set_ellipsize(Pango.EllipsizeMode.END)
                 lbl.set_max_width_chars(1)
                 panel.pack_start(lbl, False, False, 0)
         elif bill["method"] == "phone":
             if bill["phone"]:
-                num = Gtk.Label(label=bill["phone"], xalign=0)
+                num = Gtk.Label(xalign=0)
+                _set_user_text(num, bill["phone"])
                 num.get_style_context().add_class("bl-phone")
                 num.set_ellipsize(Pango.EllipsizeMode.END)
                 num.set_max_width_chars(1)
@@ -1266,7 +1437,8 @@ class Bills(nbapp.AppWindow):
         else:
             if bill["note"]:
                 for line in bill["note"].splitlines() or [""]:
-                    lbl = Gtk.Label(label=line, xalign=0)
+                    lbl = Gtk.Label(xalign=0)
+                    _set_user_text(lbl, line)
                     lbl.get_style_context().add_class("bl-addrline")
                     lbl.set_line_wrap(True)
                     lbl.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
@@ -1287,40 +1459,53 @@ class Bills(nbapp.AppWindow):
         """(label, value, tone) for the column beside the panel. `tone` is
         "hot" for the postal deadline once it has arrived, "quiet" for a field
         the bill has not been given."""
+        # The fourth item says whose words the VALUE is. A field the user
+        # filled in is never translated; a placeholder we wrote always is.
         out = []
         out.append((_t("ACCOUNT NUMBER"), bill["account"] or _t("Not set"),
-                    "" if bill["account"] else "quiet"))
+                    "" if bill["account"] else "quiet",
+                    bool(bill["account"])))
         # Labelled as the form labels the field that fills it. It said
         # "BEFORE THE NUMBER ANSWERS" here and "Notes" in the sheet, which
         # leaves a person hunting for the field that wrote the line they can
         # see.
         if bill["method"] == "phone" and bill["note"]:
-            out.append((_t("NOTES"), bill["note"], ""))
+            out.append((_t("NOTES"), bill["note"], "", True))
         if bill["method"] == "mail":
             if info["post_by"]:
                 hot = info["post_days"] is not None and info["post_days"] <= 0
                 out.append((_t("POST BY"), fmt_date(info["post_by"]),
-                            "hot" if hot else ""))
-                out.append((_t("DAYS IN THE POST"), "%d" % bill["lead"], ""))
-            else:
-                out.append((_t("DAYS IN THE POST"), _t("None"), "quiet"))
+                            "hot" if hot else "", False))
+            # THE LEAD IS THE BILL'S OWN SETTING, and it is stated whether or
+            # not there is a deadline to work back from. Printed inside the
+            # POST BY branch, a settled bill said "DAYS IN THE POST None" while
+            # its own Edit sheet said 5 — post_by is None whenever nothing is
+            # outstanding, which says nothing about the days allowed.
+            lead = bill["lead"] or 0
+            out.append((_t("DAYS IN THE POST"),
+                        "%d" % lead if lead else _t("None"),
+                        "" if lead else "quiet", False))
         if bill["method"] == "mail" and bill["phone"]:
-            out.append((_t("PHONE"), bill["phone"], ""))
+            out.append((_t("PHONE"), bill["phone"], "", True))
         out.append((_t("REPEATS"),
                     _t(REPEAT_LABEL.get(bill["every"], "Every month"))
                     if bill["every"] in REPEAT_LABEL
-                    else _t("Every %d months") % bill["every"], ""))
+                    else _t("Every %d months") % bill["every"], "", False))
         return out
 
     @staticmethod
-    def _fact(label, value, tone=""):
+    def _fact(label, value, tone="", own=False):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         lbl = Gtk.Label(label=label, xalign=0)
         lbl.get_style_context().add_class("bl-factlabel")
         lbl.set_ellipsize(Pango.EllipsizeMode.END)
         lbl.set_max_width_chars(1)
         box.pack_start(lbl, False, False, 0)
-        val = Gtk.Label(label=value, xalign=0)
+        val = Gtk.Label(xalign=0)
+        if own:
+            _set_user_text(val, value)
+        else:
+            val.set_text(value)
         vctx = val.get_style_context()
         vctx.add_class("bl-factval")
         if tone:
@@ -1354,16 +1539,20 @@ class Bills(nbapp.AppWindow):
                 money(p["amount"]) if p["amount"] is not None else "",
                 _t(METHOD_LABEL[p["method"]]) if p["method"] in METHOD_LABEL
                 else "",
-                p["ref"] or "")), False, False, 0)
+                p["ref"] or ""), own=(3,)), False, False, 0)
         return box
 
-    def _pay_row(self, cells, head=False):
+    def _pay_row(self, cells, head=False, own=()):
         row = Gtk.Box(spacing=26)
         ctx = row.get_style_context()
         ctx.add_class("bl-payhead" if head else "bl-payrow")
         widths = (150, 110, 110, -1)
         for i, text in enumerate(cells):
-            lbl = Gtk.Label(label=text, xalign=1 if i == 1 else 0)
+            lbl = Gtk.Label(xalign=1 if i == 1 else 0)
+            if i in own:
+                _set_user_text(lbl, text)     # the reference the user wrote
+            else:
+                lbl.set_text(text)
             lctx = lbl.get_style_context()
             if head:
                 lctx.add_class("bl-factlabel")
@@ -1466,7 +1655,23 @@ class Bills(nbapp.AppWindow):
             pass
         return layer
 
-    def _centre_overlay(self):
+    def _settle_overlay(self, layer):
+        """MEASURE AGAIN ONCE THE LAYOUT HAS SETTLED.
+
+        A widget only knows its final height after it has been realised and its
+        resize has been worked through: an entry holding CJK text measures two
+        pixels taller once its fallback face is resolved, and a message written
+        into the sheet grows its line after the card has been measured. A card
+        even one pixel taller than the scroller it was given grows a scrollbar
+        down a sheet that fits and loses 20px of its width to it — measured on
+        every Edit sheet for a bill whose payee or account is written in
+        Japanese, and on the bill sheet the moment it had anything to say."""
+        self._overlay_settle = 0
+        if not self._closed and self._overlay_layer is layer:
+            self._centre_overlay(settle=False)
+        return False
+
+    def _centre_overlay(self, settle=True):
         """Measure the card as it is NOW and put it in the middle.
 
         Called again whenever the card's contents change size — switching the
@@ -1487,6 +1692,8 @@ class Bills(nbapp.AppWindow):
         ch = min(req.height, max(240, h - 48))
         fit.set_size_request(cw, ch)
         layer.move(holder, max(0, (w - cw) // 2), max(0, (h - ch) // 2))
+        if settle and not self._overlay_settle:
+            self._overlay_settle = GLib.idle_add(self._settle_overlay, layer)
 
     def _close_overlay(self):
         """Take the top overlay down. True when there was one, so Esc can be
@@ -1498,6 +1705,12 @@ class Bills(nbapp.AppWindow):
         self._overlay_holder = None
         self._overlay_card = None
         self._overlay_fit = None
+        settle, self._overlay_settle = self._overlay_settle, 0
+        if settle:
+            try:
+                GLib.source_remove(settle)
+            except Exception:                                   # noqa: BLE001
+                pass
         try:
             self._overlay.remove(layer)
             layer.destroy()
@@ -1506,14 +1719,18 @@ class Bills(nbapp.AppWindow):
         return True
 
     @staticmethod
-    def _card(title, note=""):
+    def _card(title, note="", note_is_users=False):
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         card.get_style_context().add_class("bl-card")
         head = Gtk.Label(label=title, xalign=0)
         head.get_style_context().add_class("bl-cardtitle")
         card.pack_start(head, False, False, 0)
         if note:
-            msg = Gtk.Label(label=note, xalign=0)
+            msg = Gtk.Label(xalign=0)
+            if note_is_users:
+                _set_user_text(msg, note)
+            else:
+                msg.set_text(note)
             msg.get_style_context().add_class("bl-cardmsg")
             msg.set_line_wrap(True)
             msg.set_max_width_chars(46)
@@ -1534,20 +1751,28 @@ class Bills(nbapp.AppWindow):
         row.pack_start(widget, True, True, 0)
         return row
 
-    def _date_row(self, label, day):
+    def _date_row(self, label, day, dom=0):
         """A day/month/year picker. Three controls, not a typed "YYYY-MM-DD":
         a date entered as text is a date that can be entered wrongly, and the
-        one field a bill cannot afford to have wrong is when it is due."""
+        one field a bill cannot afford to have wrong is when it is due.
+
+        `dom` is the bill's day-of-the-month rule, which is what the day
+        control shows: a bill given the 31st is anchored on the 30th when its
+        next occurrence falls in a 30-day month, and a sheet that reopened on
+        30 would have quietly turned it into a 30th bill on the next save."""
         p = _parts(day) or _parts(today_key())
         box = Gtk.Box(spacing=8)
         d = Gtk.SpinButton.new_with_range(1, 31, 1)
-        d.set_value(p[2])
+        d.get_accessible().set_name(_t("Day"))
+        d.set_value(max(p[2], min(31, int(dom or 0))))
         d.set_size_request(64, -1)
         m = Gtk.ComboBoxText()
+        m.get_accessible().set_name(_t("Month"))
         for name in MONTHS:
             m.append_text(_t(name))
         m.set_active(p[1] - 1)
         y = Gtk.SpinButton.new_with_range(1970, 2999, 1)
+        y.get_accessible().set_name(_t("Year"))
         y.set_value(p[0])
         y.set_numeric(True)
         y.set_size_request(88, -1)
@@ -1594,7 +1819,8 @@ class Bills(nbapp.AppWindow):
         card.pack_start(self._field(_t("Amount"), amount), False, False, 0)
 
         row, date_parts = self._date_row(
-            _t("Next due"), bill["due"] if editing else today_key())
+            _t("Next due"), bill["due"] if editing else today_key(),
+            bill.get("dom", 0) if editing else 0)
         card.pack_start(row, False, False, 0)
 
         repeat = Gtk.ComboBoxText()
@@ -1666,11 +1892,49 @@ class Bills(nbapp.AppWindow):
         for w in (addr_row, lead_row, phone_row, note_row):
             stack.pack_start(w, False, False, 0)
 
+        # The sheet's one message line: what it has to say about what has been
+        # typed. Wide enough for the date note below to sit on a single line —
+        # this sheet is 677px tall of the 692 a 740px panel leaves, so a second
+        # line of message is a second line the panel does not have.
         err = Gtk.Label(xalign=0)
         err.get_style_context().add_class("bl-ferr")
         err.set_line_wrap(True)
-        err.set_max_width_chars(48)
+        err.set_max_width_chars(62)
         card.pack_start(err, False, False, 0)
+
+        def _say(message, wrong=True):
+            """Put `message` on that line, in ink for a note and in red for
+            something that has to be corrected before the bill can be saved."""
+            ctx = err.get_style_context()
+            (ctx.add_class if wrong else ctx.remove_class)("bl-ferr")
+            (ctx.remove_class if wrong else ctx.add_class)("bl-cardmsg")
+            err.set_text(message)
+            # A message is the only thing on this sheet that changes height
+            # after the card has been measured; _centre_overlay settles the
+            # scroller round it (see _settle_overlay).
+            self._centre_overlay()
+
+        def _day_note(*_a):
+            """WHAT A DAY THE MONTH DOES NOT HAVE MEANS, said rather than done
+            quietly. The picked day is kept as the bill's rule (see
+            add_months), so a 31st bill still falls on the 31st in October;
+            this says which day the next one lands on. Saying nothing was the
+            defect: the sheet rewrote a picked 31 September to the 30th, stored
+            THAT as the anchor, and confirmed "Bill added" — the 31 was gone
+            and every month after it came due on the 30th as well."""
+            lands = self._date_of(date_parts)
+            if _parts(lands)[2] != int(date_parts[0].get_value()):
+                _say("%s %s" % (_t("There is no such day in that month."),
+                                _t("Due %s") % fmt_date(lands, year=True)),
+                     wrong=False)
+            elif not err.get_style_context().has_class("bl-ferr"):
+                # Only ever clears its own note: a red line is about something
+                # that still has to be corrected.
+                _say("", wrong=False)
+
+        date_parts[0].connect("value-changed", _day_note)
+        date_parts[1].connect("changed", _day_note)
+        date_parts[2].connect("value-changed", _day_note)
 
         def _pick(mid):
             method["id"] = mid
@@ -1717,13 +1981,21 @@ class Bills(nbapp.AppWindow):
             # saved a bill with no payee on it however much had been typed.
             name = payee.get_text().strip()
             if not name:
-                err.set_text(_t("A bill needs a payee."))
+                _say(_t("A bill needs a payee."))
                 payee.grab_focus()
                 return
             raw = amount.get_text().strip()
             cents = parse_money(raw) if raw else None
             if raw and cents is None:
-                err.set_text(_t("The amount is not a number."))
+                # TWO DIFFERENT REFUSALS. A figure with no number in it and a
+                # number bigger than this app keeps are not the same mistake,
+                # and answering "not a number" to somebody who typed seventeen
+                # digits says nothing about what is wrong with it. (The app
+                # used to keep neither honestly: it saved the cap, $1,000,000,
+                # 000.00, and said "Bill added" over the top of it.)
+                _say(_t("The amount is too large.")
+                     if _money_cents(raw) is not None
+                     else _t("The amount is not a number."))
                 amount.grab_focus()
                 return
             buf = address.get_buffer()
@@ -1735,6 +2007,10 @@ class Bills(nbapp.AppWindow):
                 "account": account.get_text().strip(),
                 "amount": cents,
                 "due": self._date_of(date_parts),
+                # The picked day is the RULE; `due` is where the first one
+                # lands, which is the 30th when the 31st was picked in a
+                # 30-day month.
+                "dom": int(date_parts[0].get_value()),
                 "every": every,
                 "method": method["id"],
                 "address": addr.strip(),
@@ -1742,7 +2018,6 @@ class Bills(nbapp.AppWindow):
                 "note": note.get_text().strip(),
                 "lead": int(lead.get_value()),
             }
-            self._close_overlay()
             if editing:
                 # The payment history is the app's record of what was actually
                 # done and is never touched by an edit to the bill's details.
@@ -1759,9 +2034,14 @@ class Bills(nbapp.AppWindow):
                 for key, value in target.items():
                     if key not in record:
                         record[key] = value
-                self.bills[self.bills.index(target)] = record
+                target_i = self.bills.index(target)
+                self.bills[target_i] = record
                 self.sel = record["id"]
-                self._save()
+                if not self._save():
+                    self.bills[target_i] = target
+                    self.sel = target["id"]
+                    return
+                self._close_overlay()
                 self._refresh()
                 self._flash(_t("Bill saved"))
             else:
@@ -1770,7 +2050,11 @@ class Bills(nbapp.AppWindow):
                 record["paid"] = []
                 self.bills.append(record)
                 self.sel = record["id"]
-                self._save()
+                if not self._save():
+                    self.bills.pop()
+                    self.sel = ""
+                    return
+                self._close_overlay()
                 self._refresh()
                 self._flash(_t("Bill added"))
 
@@ -1779,7 +2063,7 @@ class Bills(nbapp.AppWindow):
         account.connect("activate", _commit)
         amount.connect("activate", _commit)
 
-        self._show_overlay(card, lambda: _pick(method["id"]))
+        self._show_overlay(card, lambda: (_pick(method["id"]), _day_note()))
         payee.grab_focus()
 
     # -- record a payment ----------------------------------------------------
@@ -1790,7 +2074,11 @@ class Bills(nbapp.AppWindow):
             return
         self._close_menu()
         info = due_info(bill)
-        card = self._card(_t("Record Payment"), bill["payee"])
+        if info["due"] is None:
+            self._flash(_t("This bill has nothing outstanding."))
+            return
+        card = self._card(_t("Record Payment"), bill["payee"],
+                          note_is_users=True)
         card.set_size_request(470, -1)
 
         amount = Gtk.Entry()
@@ -1841,10 +2129,16 @@ class Bills(nbapp.AppWindow):
         card.pack_start(actions, False, False, 0)
 
         def _commit(*_a):
+            if settles is None:
+                err.set_text(_t("This bill has nothing outstanding."))
+                return
             raw = amount.get_text().strip()
             cents = parse_money(raw) if raw else None
             if raw and cents is None:
-                err.set_text(_t("The amount is not a number."))
+                # The same two refusals as the bill sheet, worded the same way.
+                err.set_text(_t("The amount is too large.")
+                             if _money_cents(raw) is not None
+                             else _t("The amount is not a number."))
                 amount.grab_focus()
                 return
             payment = {"on": self._date_of(date_parts),
@@ -1852,12 +2146,14 @@ class Bills(nbapp.AppWindow):
                        "amount": cents,
                        "method": bill["method"],
                        "ref": ref.get_text().strip()[:80]}
-            self._close_overlay()
             target = self._bill(bill["id"])
             if target is None:
                 return
             target["paid"].append(payment)
-            self._save()
+            if not self._save():
+                target["paid"].pop()
+                return
+            self._close_overlay()
             self._refresh()
             self._flash(_t("Payment recorded"))
 
@@ -1876,11 +2172,17 @@ class Bills(nbapp.AppWindow):
         if bill is None:
             return
         i = self.bills.index(bill)
+        old_sel = self.sel
+        old_deleted = self._deleted
         self.bills.pop(i)
         self._deleted = (i, bill)
         self.sel = self.bills[min(i, len(self.bills) - 1)]["id"] \
             if self.bills else ""
-        self._save()
+        if not self._save():
+            self.bills.insert(i, bill)
+            self.sel = old_sel
+            self._deleted = old_deleted
+            return
         self._refresh()
         self._flash(_t("Bill deleted"))
 
@@ -1890,6 +2192,7 @@ class Bills(nbapp.AppWindow):
         if deleted is None:
             return
         i, bill = deleted
+        old_sel = self.sel
         # A reused id means the model has changed underneath this one-step
         # undo.  Never create two records that future payments cannot tell
         # apart.
@@ -1899,7 +2202,17 @@ class Bills(nbapp.AppWindow):
         self._deleted = None
         self.bills.insert(min(i, len(self.bills)), bill)
         self.sel = bill["id"]
-        self._save()
+        if not self._save():
+            self.bills.remove(bill)
+            self._deleted = deleted
+            self.sel = old_sel if any(b.get("id") == old_sel
+                                      for b in self.bills) else (
+                self.bills[0].get("id", "") if self.bills else "")
+            # Reconcile the visible row with the restored selection and expose
+            # the save error that _save recorded instead of silently leaving
+            # the old highlight over an empty internal selection.
+            self._refresh()
+            return
         self._refresh()
         self._flash(_t("Bill restored"))
 
@@ -1919,7 +2232,21 @@ class Bills(nbapp.AppWindow):
             amt = money(bill["amount"]) if bill["amount"] is not None \
                 else _t("Amount varies")
             text.emit("%s   %s" % (bill["payee"], amt), 13, bold=True)
-            line = [info["state"]]
+            # THE DUE DATE IN FULL, on paper, for every bill. `info["state"]`
+            # is written for a 252px rail and a desktop tile, so it says
+            # "Overdue", "Due in 2 days" or "Due 28 Feb" — a relative phrase or
+            # a date with no year. Printed, that is a page a person cannot pay
+            # a bill from: the phone and automatic bills carried no date at
+            # all. The state word is kept in front of it only where it names
+            # something the date cannot (ACTIVE_KINDS: already late, due today,
+            # too late to post).
+            line = []
+            if info["due"] is None:
+                line.append(info["state"])
+            else:
+                if needs_paying(info):
+                    line.append(info["state"])
+                line.append(_t("Due %s") % fmt_date(info["due"], year=True))
             if bill["account"]:
                 line.append(_t("Account %s") % bill["account"])
             line.append(_t(METHOD_LABEL[bill["method"]]))
@@ -1994,12 +2321,15 @@ class Bills(nbapp.AppWindow):
     def _write_export_pdf(self):
         """Render to Documents/Bills.pdf. Split out so the replace question can
         be answered before anything is written."""
+        dest = os.path.join(DOCS_DIR, PDF_NAME)
         try:
             os.makedirs(DOCS_DIR, exist_ok=True)
-            self._render_pdf(os.path.join(DOCS_DIR, PDF_NAME))
+            # Cairo writes incrementally. Publishing straight to Bills.pdf lets
+            # a full disk or render exception truncate the previous good report.
+            # Render beside it and rename only after the PDF closes cleanly.
+            nbapp.atomic_write_via(dest, self._render_pdf)
         except Exception as exc:                                # noqa: BLE001
-            self._flash(nbapp.save_failure_reason(
-                exc, os.path.join(DOCS_DIR, PDF_NAME)))
+            self._flash(nbapp.save_failure_reason(exc, dest))
             return
         self._flash(_t("Saved to Documents as %s") % PDF_NAME)
 
@@ -2013,8 +2343,14 @@ class Bills(nbapp.AppWindow):
     # -- menus ---------------------------------------------------------------
 
     def _set_sort(self, how):
+        previous = self.sort
+        if how == previous:
+            return
         self.sort = how
-        self._save()
+        if not self._save():
+            # Keep the visible order aligned with the durable preference. The
+            # held save error remains available to _refresh's status strip.
+            self.sort = previous
         self._refresh()
 
     def menu_items(self, name):
@@ -2031,9 +2367,10 @@ class Bills(nbapp.AppWindow):
                 ("Close    Esc", self.close),
             ]
         if name == "Bill":
+            can_pay = has and due_info(self._bill())["due"] is not None
             return [
                 ("Record Payment…",
-                 (lambda: self._open_payment()) if has else None),
+                 (lambda: self._open_payment()) if can_pay else None),
                 ("Edit Bill…",
                  (lambda: self._open_form(self._bill())) if has else None),
                 nbapp.SEP,
